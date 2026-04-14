@@ -4,6 +4,12 @@ A practical shell-based controller for modern Denon AVRs on a home LAN.
 
 It wraps the receiver's HTTPS config API and legacy transport controls into simple commands for status, source switching, volume, mute, Zone 2, snapshots, raw API access, and quick troubleshooting.
 
+## Development notes
+
+This project was developed with AI assistance and then reviewed, tested, and refined by the maintainer on real Denon AVR hardware.
+
+AI was used to help draft, refactor, and document parts of the code and test flow. Final behavior, validation, and publishing decisions were made by the maintainer.
+
 ## What it does
 
 - Discovers a compatible Denon AVR on your LAN
