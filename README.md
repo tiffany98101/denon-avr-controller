@@ -1,4 +1,4 @@
-# denon
+# Denon
 
 A practical shell-based controller for modern Denon AVRs on a home LAN.
 
