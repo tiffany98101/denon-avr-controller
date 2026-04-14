@@ -4,3 +4,5 @@
 test_snapshot_*/
 *.zip
 *.pdf
+
+denon_release_candidate_notes.md
