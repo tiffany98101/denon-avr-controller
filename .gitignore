@@ -1,0 +1,6 @@
+*.bak
+*.log
+*.tmp
+test_snapshot_*/
+*.zip
+*.pdf
