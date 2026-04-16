@@ -15,3 +15,6 @@ denon_release_candidate_notes.md
 *.renderer-backup-*
 *.research-backup-*
 dashboard_research_report.md
+
+docs/denon-demo.cast
+docs/denon-demo.gif
