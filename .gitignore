@@ -6,3 +6,12 @@ test_snapshot_*/
 *.pdf
 
 denon_release_candidate_notes.md
+
+# local backups and research artifacts
+*.bak
+*.dashboard-backup-*
+*.data-backup-*
+*.feature-backup-*
+*.renderer-backup-*
+*.research-backup-*
+dashboard_research_report.md
