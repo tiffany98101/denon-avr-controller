@@ -3032,9 +3032,11 @@ EOF
           sleep 1
         fi
         if [[ -n "$main_source" ]]; then
-          if ! _denon_set_source_index 1 "$main_source"; then
-            restore_failed=1
-            restore_failures+=("main source ${main_source}")
+          if [[ "$(_denon_current_source_idx 1)" != "$main_source" ]]; then
+            if ! _denon_set_source_index 1 "$main_source" && ! _denon_wait_for_source 1 "$main_source" 20; then
+              restore_failed=1
+              restore_failures+=("main source ${main_source}")
+            fi
           fi
         fi
         if [[ -n "$main_volume" ]]; then
@@ -3057,22 +3059,26 @@ EOF
           fi
           sleep 0.5
         fi
-        if [[ -n "$zone2_source" ]]; then
-          if ! _denon_set_source_index 2 "$zone2_source"; then
-            restore_failed=1
-            restore_failures+=("zone2 source ${zone2_source}")
+        if [[ "$zone2_power" == "1" ]]; then
+          if [[ -n "$zone2_source" ]]; then
+            if [[ "$(_denon_current_source_idx 2)" != "$zone2_source" ]]; then
+              if ! _denon_set_source_index 2 "$zone2_source" && ! _denon_wait_for_source 2 "$zone2_source" 20; then
+                restore_failed=1
+                restore_failures+=("zone2 source ${zone2_source}")
+              fi
+            fi
           fi
-        fi
-        if [[ -n "$zone2_volume" ]]; then
-          if ! _denon_set_config 12 "<Zone2><Volume>${zone2_volume}</Volume></Zone2>"; then
-            restore_failed=1
-            restore_failures+=("zone2 volume ${zone2_volume}")
+          if [[ -n "$zone2_volume" ]]; then
+            if ! _denon_set_config 12 "<Zone2><Volume>${zone2_volume}</Volume></Zone2>"; then
+              restore_failed=1
+              restore_failures+=("zone2 volume ${zone2_volume}")
+            fi
           fi
-        fi
-        if [[ -n "$zone2_mute" ]]; then
-          if ! _denon_set_config 12 "<Zone2><Mute>${zone2_mute}</Mute></Zone2>"; then
-            restore_failed=1
-            restore_failures+=("zone2 mute ${zone2_mute}")
+          if [[ -n "$zone2_mute" ]]; then
+            if ! _denon_set_config 12 "<Zone2><Mute>${zone2_mute}</Mute></Zone2>"; then
+              restore_failed=1
+              restore_failures+=("zone2 mute ${zone2_mute}")
+            fi
           fi
         fi
 
