@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # denon_release_candidate.sh — Denon AVR controller
+# Version: 1.0.0
 # Source this from ~/.zshrc or ~/.bashrc:
 #   source ~/denon_release_candidate.sh
 #
@@ -94,11 +95,16 @@ denon() {
     fi
 
     if [[ -f "$cache" ]]; then
-      local cached_ip
-      cached_ip=$(<"$cache")
-      if _denon_is_receiver "$cached_ip"; then
-        printf '%s' "$cached_ip"
-        return 0
+      local cached_ip cache_ttl cache_mtime cache_age
+      cache_ttl="${DENON_CACHE_TTL_SECONDS:-3600}"
+      cache_mtime=$(stat -c %Y "$cache" 2>/dev/null || date +%s)
+      cache_age=$(( $(date +%s) - cache_mtime ))
+      if (( cache_age <= cache_ttl )); then
+        cached_ip=$(<"$cache")
+        if _denon_is_receiver "$cached_ip"; then
+          printf '%s' "$cached_ip"
+          return 0
+        fi
       fi
     fi
 
@@ -189,6 +195,8 @@ Receiver status:
   denon raw set <type> '<xml>'
                              Send a raw set_config payload
   denon snapshot [dir]       Save core XML responses to a timestamped directory
+  denon diff <snap-a> <snap-b>
+                             Compare two snapshot directories
   denon doctor               Check dependencies, route, cache, and receiver reachability
   denon dashboard [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
@@ -217,11 +225,15 @@ Power and mute:
   denon off                  Turn main zone off
   denon mute                 Mute main zone
   denon unmute               Unmute main zone
+  denon toggle [mute|power]  Flip mute or power (default: mute)
 
 Volume:
   denon vol                  Show current main zone volume
   denon vol -35              Set absolute volume to -35 dB
   denon vol +2               Raise volume by 2 dB
+  denon vol --fade -40       Gradually fade to -40 dB over 10 seconds
+  denon vol --fade -40 --duration 30
+                             Fade to -40 dB over 30 seconds
   denon up [dB]              Raise volume, default 1 dB
   denon down [dB]            Lower volume, default 1 dB
 
@@ -285,6 +297,8 @@ Zone 2:
   denon zone2 unmute
   denon zone2 vol <raw>
   denon zone2 volume <raw>
+  denon zone2 up [dB]
+  denon zone2 down [dB]
   denon zone2 sleep [minutes|off]
 
 Discovery and setup:
@@ -300,6 +314,7 @@ Configuration:
   DENON_SOURCE_ALIASES
   DENON_CURL_CONNECT_TIMEOUT
   DENON_CURL_MAX_TIME
+  DENON_CACHE_TTL_SECONDS
   DENON_SSDP_TIMEOUT
   DENON_SSDP_MX
   DENON_HEOS_PID
@@ -312,6 +327,8 @@ Notes:
   Commands are case-insensitive.
   Source display names are local aliases; they do not rename sources inside the receiver.
   The script can be run directly or sourced from bash/zsh.
+  Pass --quiet or -q before or after any command to suppress stdout output.
+  Pass --silent before or after any command to suppress both stdout and stderr.
 EOF
   }
 
@@ -715,6 +732,57 @@ EOF
     printf 'Volume set to %s dB\n' "$db"
   }
 
+  _denon_fade_volume() {
+    local target="" duration=10 arg
+    while [[ $# -gt 0 ]]; do
+      arg="$1"
+      case "$arg" in
+        --duration|-d) duration="$2"; shift 2 ;;
+        *) [[ -z "$target" ]] && target="$1"; shift ;;
+      esac
+    done
+
+    if ! _denon_is_number "$target"; then
+      echo "Usage: denon vol --fade <targetdB> [--duration seconds]" >&2
+      return 1
+    fi
+    if ! _denon_is_number "$duration" || ! awk -v d="$duration" 'BEGIN { exit (d > 0) ? 0 : 1 }'; then
+      echo "Error: duration must be a positive number" >&2
+      return 1
+    fi
+
+    local raw current_db
+    raw=$(_denon_main_volume_raw)
+    if [[ -z "$raw" ]]; then
+      echo "Error: could not read current volume" >&2
+      return 1
+    fi
+    current_db=$(_denon_raw_to_db "$raw")
+
+    if awk -v c="$current_db" -v t="$target" 'BEGIN { exit (c == t) ? 0 : 1 }'; then
+      echo "Volume already at ${target} dB"
+      return 0
+    fi
+
+    local step_interval="0.5"
+    local num_steps
+    num_steps=$(awk -v d="$duration" -v i="$step_interval" \
+      'BEGIN { n=int(d/i+0.5); print (n<1 ? 1 : n) }')
+
+    local i step_db
+    for (( i = 1; i <= num_steps; i++ )); do
+      step_db=$(awk -v c="$current_db" -v t="$target" -v i="$i" -v n="$num_steps" \
+        'BEGIN { printf "%.1f", c + (t - c) * i / n }')
+      _denon_set_volume_db "$step_db" >/dev/null || return 1
+      if [[ -t 1 ]]; then
+        printf '\rFading to %s dB: %s dB  ' "$target" "$step_db"
+      fi
+      (( i < num_steps )) && sleep "$step_interval"
+    done
+    [[ -t 1 ]] && printf '\n'
+    echo "Volume faded to ${target} dB"
+  }
+
   _denon_change_volume() {
     local delta="$1"
     local raw current_db target_db
@@ -733,6 +801,29 @@ EOF
     current_db=$(_denon_raw_to_db "$raw")
     target_db=$(awk -v current="$current_db" -v delta="$delta" 'BEGIN { printf "%.1f", current + delta }')
     _denon_set_volume_db "$target_db"
+  }
+
+  _denon_zone2_change_volume() {
+    local delta="$1"
+    local vol_xml raw current_db target_db new_raw
+
+    if ! _denon_is_number "$delta"; then
+      echo "Error: volume step must be numeric, for example: denon zone2 up 2" >&2
+      return 1
+    fi
+
+    vol_xml=$(_denon_get_vol_xml) || return 1
+    raw=$(_denon_extract_zone2_volume_raw "$vol_xml")
+    if [[ -z "$raw" ]]; then
+      echo "Error: could not read Zone 2 volume" >&2
+      return 1
+    fi
+
+    current_db=$(_denon_raw_to_db "$raw")
+    target_db=$(awk -v current="$current_db" -v delta="$delta" 'BEGIN { printf "%.1f", current + delta }')
+    new_raw=$(awk -v db="$target_db" 'BEGIN { raw=int((db+80)*10+0.5); if(raw<0)raw=0; if(raw>980)raw=980; print raw }')
+    _denon_set_config 12 "<Zone2><Volume>${new_raw}</Volume></Zone2>" || return 1
+    _denon_zone_status_pretty 2
   }
 
   _denon_telnet() {
@@ -829,6 +920,39 @@ EOF
     _denon_telnet "QUICK${id}" && echo "Recalled Quick Select $id"
   }
 
+  _denon_toggle() {
+    local what="${1:-mute}"
+    case "$(_denon_lower "$what")" in
+      mute)
+        local xml mute
+        xml=$(_denon_get_vol_xml) || return 1
+        mute=$(_denon_extract_main_mute "$xml")
+        if [[ "$mute" == "1" ]]; then
+          _denon_set_config 12 '<MainZone><Mute>2</Mute></MainZone>' || return 1
+          echo "Unmuted"
+        else
+          _denon_set_config 12 '<MainZone><Mute>1</Mute></MainZone>' || return 1
+          echo "Muted"
+        fi
+        ;;
+      power)
+        local xml power
+        xml=$(_denon_get_power_xml) || return 1
+        power=$(_denon_extract_main_power "$xml")
+        if [[ "$power" == "1" ]]; then
+          _denon_set_config 4 '<MainZone><Power>3</Power></MainZone>' || return 1
+          echo "Power off"
+        else
+          _denon_set_config 4 '<MainZone><Power>1</Power></MainZone>' || return 1
+          echo "Power on"
+        fi
+        ;;
+      *)
+        echo "Usage: denon toggle [mute|power]" >&2
+        return 1
+        ;;
+    esac
+  }
   _denon_sound_mode() {
     local mode code
     mode=$(_denon_lower "$1")
@@ -857,11 +981,12 @@ EOF
     local name="$1"
     local value="$2"
     local prefix="$3"
-    local state response line
+    local state response line parsed
     if [[ -z "$value" ]]; then
       response=$(_denon_telnet_query "${prefix} ?")
       line=$(printf '%s\n' "$response" | tr '\r' '\n' | sed -n "/^${prefix}/{p; q;}")
-      echo "$name: ${line:-unknown}"
+      parsed=${line#"${prefix} "}
+      echo "$name: ${parsed:-unknown}"
       [[ -n "$line" ]]
       return
     fi
@@ -877,7 +1002,8 @@ EOF
     if [[ -z "$value" ]]; then
       response=$(_denon_telnet_query "PSCINEMA EQ. ?")
       line=$(printf '%s\n' "$response" | tr '\r' '\n' | sed -n '/^PSCINEMA EQ[.]/ {p; q;}')
-      echo "Cinema EQ: ${line:-unknown}"
+      local parsed="${line#PSCINEMA EQ.}"
+      echo "Cinema EQ: ${parsed:-unknown}"
       [[ -n "$line" ]]
       return
     fi
@@ -893,7 +1019,13 @@ EOF
     if [[ -z "$value" ]]; then
       response=$(_denon_telnet_query "PSDYNVOL ?")
       line=$(printf '%s\n' "$response" | tr '\r' '\n' | sed -n '/^PSDYNVOL/ {p; q;}')
-      echo "Dynamic Volume: ${line:-unknown}"
+      local raw_code="${line#PSDYNVOL }" friendly
+      case "$raw_code" in
+        OFF) friendly="off" ;; LIT) friendly="light" ;;
+        MED) friendly="medium" ;; HEV) friendly="heavy" ;;
+        *) friendly="${raw_code:-unknown}" ;;
+      esac
+      echo "Dynamic Volume: $friendly"
       [[ -n "$line" ]]
       return
     fi
@@ -912,7 +1044,13 @@ EOF
     if [[ -z "$value" ]]; then
       response=$(_denon_telnet_query "PSMULTEQ ?")
       line=$(printf '%s\n' "$response" | tr '\r' '\n' | sed -n '/^PSMULTEQ:/ {p; q;}')
-      echo "MultEQ: ${line:-unknown}"
+      local raw_code="${line#PSMULTEQ:}" friendly
+      case "$raw_code" in
+        AUDYSSEY) friendly="reference" ;; BYP.LR) friendly="bypass-lr" ;;
+        FLAT) friendly="flat" ;; MANUAL) friendly="manual" ;; OFF) friendly="off" ;;
+        *) friendly="${raw_code:-unknown}" ;;
+      esac
+      echo "MultEQ: $friendly"
       [[ -n "$line" ]]
       return
     fi
@@ -950,7 +1088,14 @@ EOF
     if [[ -z "$value" ]]; then
       response=$(_denon_telnet_query "${command} ?")
       line=$(printf '%s\n' "$response" | tr '\r' '\n' | sed -n "/^${command}/ {p; q;}")
-      echo "$label: ${line:-unknown}"
+      local raw_val="${line#"${command} "}"
+      local db_val
+      if [[ "$raw_val" =~ ^[0-9]+$ ]]; then
+        db_val=$(awk -v v="$raw_val" 'BEGIN { printf "%+.0f", v - 50 }')
+        echo "$label: ${db_val} dB"
+      else
+        echo "$label: ${raw_val:-unknown}"
+      fi
       [[ -n "$line" ]]
       return
     fi
@@ -1197,12 +1342,39 @@ EOF
   }
 
   _denon_sources() {
-    local zone="${1:-1}"
+    local zone=1 format=text arg
+    for arg in "$@"; do
+      case "$arg" in
+        --json) format=json ;;
+        [0-9]*) zone="$arg" ;;
+      esac
+    done
+
     local source_idx
     source_idx=$(_denon_current_source_idx "$zone")
     if [[ -z "$source_idx" ]]; then
       echo "Error: could not read source list for zone $zone from receiver" >&2
       return 1
+    fi
+
+    if [[ "$format" == "json" ]]; then
+      _denon_source_rows_with_aliases "$zone" |
+        awk -F '\t' -v current="$source_idx" -v zone="$zone" '
+          function jsesc(s,  out) {
+            out=s; gsub(/\\/, "\\\\", out); gsub(/"/, "\\\"", out)
+            gsub(/\n/, "\\n", out); gsub(/\r/, "", out)
+            return out
+          }
+          BEGIN { print "[" }
+          {
+            sep=(NR==1 ? "" : ",")
+            active=($1==current ? "true" : "false")
+            printf "%s  {\"zone\":%s,\"index\":\"%s\",\"receiverName\":\"%s\",\"displayName\":\"%s\",\"active\":%s}\n",
+              sep, zone, jsesc($1), jsesc($2), jsesc($3), active
+          }
+          END { print "]" }
+        '
+      return
     fi
 
     if [[ "$zone" == "1" ]]; then
@@ -1300,18 +1472,97 @@ EOF
     echo "Snapshot saved to $outdir"
   }
 
+  _denon_normalize_xml() {
+    sed 's/></>\n</g' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$'
+  }
+
+  _denon_snapshot_diff() {
+    local dir_a="$1" dir_b="$2"
+    [[ -n "$dir_a" && -n "$dir_b" ]] || {
+      echo "Usage: denon diff <snapshot-a> <snapshot-b>" >&2; return 1
+    }
+    [[ -d "$dir_a" ]] || { echo "Error: not a directory: $dir_a" >&2; return 1; }
+    [[ -d "$dir_b" ]] || { echo "Error: not a directory: $dir_b" >&2; return 1; }
+
+    echo "A: $dir_a"
+    echo "B: $dir_b"
+    local ts_a ts_b
+    ts_a=$(grep -m1 'generated_at' "$dir_a/metadata.txt" 2>/dev/null | cut -d= -f2-)
+    ts_b=$(grep -m1 'generated_at' "$dir_b/metadata.txt" 2>/dev/null | cut -d= -f2-)
+    [[ -n "$ts_a" ]] && echo "  A taken: $ts_a"
+    [[ -n "$ts_b" ]] && echo "  B taken: $ts_b"
+    echo
+
+    local any_diff=0 file label tmp_a tmp_b
+    for file in ip.txt type_3.xml type_4.xml type_7.xml type_12.xml; do
+      local path_a="$dir_a/$file" path_b="$dir_b/$file"
+      [[ -f "$path_a" || -f "$path_b" ]] || continue
+
+      case "$file" in
+        ip.txt)      label="Receiver IP" ;;
+        type_3.xml)  label="Identity / System  (type 3)" ;;
+        type_4.xml)  label="Power / Source      (type 4)" ;;
+        type_7.xml)  label="Streaming / Network (type 7)" ;;
+        type_12.xml) label="Volume / Mute       (type 12)" ;;
+        *)           label="$file" ;;
+      esac
+
+      if [[ ! -f "$path_a" ]]; then
+        echo "  $label: missing in A"
+        any_diff=1; continue
+      fi
+      if [[ ! -f "$path_b" ]]; then
+        echo "  $label: missing in B"
+        any_diff=1; continue
+      fi
+
+      tmp_a=$(mktemp)
+      tmp_b=$(mktemp)
+      if [[ "$file" == *.xml ]]; then
+        _denon_normalize_xml "$path_a" >"$tmp_a"
+        _denon_normalize_xml "$path_b" >"$tmp_b"
+      else
+        cp "$path_a" "$tmp_a"
+        cp "$path_b" "$tmp_b"
+      fi
+
+      if diff -q "$tmp_a" "$tmp_b" >/dev/null 2>&1; then
+        echo "  $label: no change"
+      else
+        any_diff=1
+        echo "  $label:"
+        diff --unified=0 "$tmp_a" "$tmp_b" 2>/dev/null \
+          | grep '^[+-]' | grep -v '^[+-][+-][+-]' \
+          | sed 's/^-/    A: /; s/^+/    B: /'
+      fi
+      rm -f "$tmp_a" "$tmp_b"
+    done
+
+    echo
+    if (( any_diff == 0 )); then
+      echo "No differences found."
+    fi
+  }
+
+  _denon_ms_now() {
+    date +%s%3N 2>/dev/null || echo 0
+  }
+
   _denon_probe_candidate() {
-    local label="$1" candidate="$2" xml model
+    local label="$1" candidate="$2" xml model t0 t1 ms
     [[ -n "$candidate" ]] || return 1
     printf '%-18s %s ... ' "$label" "$candidate"
+    t0=$(_denon_ms_now)
     xml=$(_denon_curl -G "https://$candidate:10443/ajax/globals/get_config" \
       --data-urlencode "type=3" 2>/dev/null)
+    t1=$(_denon_ms_now)
+    ms=$(( t1 - t0 ))
     if printf '%s' "$xml" | grep -q "Denon"; then
       model=$(printf '%s' "$xml" | sed -n 's:.*<FriendlyName>\([^<]*\)</FriendlyName>.*:\1:p')
-      echo "OK (${model:-Denon receiver})"
+      echo "OK (${model:-Denon receiver}) [${ms}ms]"
       return 0
     fi
-    echo "no Denon response"
+    echo "no Denon response [${ms}ms]"
     return 1
   }
 
@@ -1380,9 +1631,12 @@ EOF
     fi
 
     echo "Known local hosts:"
-    local known_hosts
+    local known_hosts t0 t1 ms
+    t0=$(_denon_ms_now)
     known_hosts=$(_denon_known_hosts | tr '\n' ' ')
-    echo "  ${known_hosts:-none}"
+    t1=$(_denon_ms_now)
+    ms=$(( t1 - t0 ))
+    echo "  ${known_hosts:-none} [${ms}ms]"
     echo
 
     echo "Receiver probes:"
@@ -2675,7 +2929,641 @@ EOF
     _denon_dashboard_render
   }
 
+  # ── presets ───────────────────────────────────────────────────────────────
+
+  _denon_preset_dir() {
+    printf '%s' "${XDG_DATA_HOME:-$HOME/.local/share}/denon/presets"
+  }
+
+  _denon_preset_cmd() {
+    local subcmd="${1:-}"
+    local preset_dir
+    preset_dir=$(_denon_preset_dir)
+
+    case "$subcmd" in
+      save)
+        local name="${2:-}"
+        if [[ -z "$name" ]]; then
+          echo "Usage: denon preset save <name>" >&2
+          return 1
+        fi
+        local power_xml source_xml vol_xml
+        power_xml=$(_denon_get_power_xml) || return 1
+        source_xml=$(_denon_get_source_xml) || return 1
+        vol_xml=$(_denon_get_vol_xml) || return 1
+
+        local main_power main_src main_vol main_mute
+        local z2_power z2_src z2_vol z2_mute
+        main_power=$(_denon_extract_main_power "$power_xml")
+        z2_power=$(_denon_extract_zone2_power "$power_xml")
+        main_src=$(printf '%s' "$source_xml" | sed -n 's:.*<Zone zone="1" index="\([0-9]\+\)".*:\1:p')
+        z2_src=$(printf '%s' "$source_xml" | sed -n 's:.*<Zone zone="2" index="\([0-9]\+\)".*:\1:p')
+        main_vol=$(_denon_extract_main_volume_raw "$vol_xml")
+        z2_vol=$(_denon_extract_zone2_volume_raw "$vol_xml")
+        main_mute=$(_denon_extract_main_mute "$vol_xml")
+        z2_mute=$(_denon_extract_zone2_mute "$vol_xml")
+
+        mkdir -p "$preset_dir"
+        local preset_file="$preset_dir/$name"
+        printf '# denon-preset v1\n' >"$preset_file"
+        printf '# saved: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$preset_file"
+        printf 'main_power=%s\n' "${main_power:-3}" >>"$preset_file"
+        printf 'main_source=%s\n' "${main_src:-}" >>"$preset_file"
+        printf 'main_volume=%s\n' "${main_vol:-}" >>"$preset_file"
+        printf 'main_mute=%s\n' "${main_mute:-2}" >>"$preset_file"
+        printf 'zone2_power=%s\n' "${z2_power:-3}" >>"$preset_file"
+        printf 'zone2_source=%s\n' "${z2_src:-}" >>"$preset_file"
+        printf 'zone2_volume=%s\n' "${z2_vol:-}" >>"$preset_file"
+        printf 'zone2_mute=%s\n' "${z2_mute:-2}" >>"$preset_file"
+
+        local db_label=""
+        [[ -n "$main_vol" ]] && db_label=" ($(_denon_raw_to_db "$main_vol") dB)"
+        echo "Preset '$name' saved"
+        printf '  Main: power=%s source=%s vol=%s%s mute=%s\n' \
+          "${main_power:-?}" "${main_src:-?}" "${main_vol:-?}" "$db_label" "${main_mute:-?}"
+        printf '  Zone2: power=%s source=%s vol=%s mute=%s\n' \
+          "${z2_power:-?}" "${z2_src:-?}" "${z2_vol:-?}" "${z2_mute:-?}"
+        return 0
+        ;;
+
+      load)
+        local name="${2:-}"
+        if [[ -z "$name" ]]; then
+          echo "Usage: denon preset load <name>" >&2
+          return 1
+        fi
+        local preset_file="$preset_dir/$name"
+        if [[ ! -f "$preset_file" ]]; then
+          echo "Error: preset '$name' not found (${preset_file})" >&2
+          return 1
+        fi
+
+        local main_power="" main_source="" main_volume="" main_mute=""
+        local zone2_power="" zone2_source="" zone2_volume="" zone2_mute=""
+        local line key val
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          line="${line%%#*}"
+          [[ -z "${line// }" ]] && continue
+          key="${line%%=*}"; val="${line#*=}"
+          [[ "$key" == "$val" ]] && continue
+          case "$key" in
+            main_power)   main_power="$val" ;;
+            main_source)  main_source="$val" ;;
+            main_volume)  main_volume="$val" ;;
+            main_mute)    main_mute="$val" ;;
+            zone2_power)  zone2_power="$val" ;;
+            zone2_source) zone2_source="$val" ;;
+            zone2_volume) zone2_volume="$val" ;;
+            zone2_mute)   zone2_mute="$val" ;;
+          esac
+        done <"$preset_file"
+
+        echo "Loading preset '$name'..."
+
+        local restore_failed=0
+        local -a restore_failures=()
+        local step_desc
+
+        if [[ "$main_power" == "1" ]]; then
+          if ! _denon_set_config 4 '<MainZone><Power>1</Power></MainZone>'; then
+            restore_failed=1
+            restore_failures+=("main power on")
+          fi
+          sleep 1
+        fi
+        if [[ -n "$main_source" ]]; then
+          if ! _denon_set_source_index 1 "$main_source"; then
+            restore_failed=1
+            restore_failures+=("main source ${main_source}")
+          fi
+        fi
+        if [[ -n "$main_volume" ]]; then
+          if ! _denon_set_config 12 "<MainZone><Volume>${main_volume}</Volume></MainZone>"; then
+            restore_failed=1
+            restore_failures+=("main volume ${main_volume}")
+          fi
+        fi
+        if [[ -n "$main_mute" ]]; then
+          if ! _denon_set_config 12 "<MainZone><Mute>${main_mute}</Mute></MainZone>"; then
+            restore_failed=1
+            restore_failures+=("main mute ${main_mute}")
+          fi
+        fi
+
+        if [[ "$zone2_power" == "1" ]]; then
+          if ! _denon_set_config 4 '<Zone2><Power>1</Power></Zone2>'; then
+            restore_failed=1
+            restore_failures+=("zone2 power on")
+          fi
+          sleep 0.5
+        fi
+        if [[ -n "$zone2_source" ]]; then
+          if ! _denon_set_source_index 2 "$zone2_source"; then
+            restore_failed=1
+            restore_failures+=("zone2 source ${zone2_source}")
+          fi
+        fi
+        if [[ -n "$zone2_volume" ]]; then
+          if ! _denon_set_config 12 "<Zone2><Volume>${zone2_volume}</Volume></Zone2>"; then
+            restore_failed=1
+            restore_failures+=("zone2 volume ${zone2_volume}")
+          fi
+        fi
+        if [[ -n "$zone2_mute" ]]; then
+          if ! _denon_set_config 12 "<Zone2><Mute>${zone2_mute}</Mute></Zone2>"; then
+            restore_failed=1
+            restore_failures+=("zone2 mute ${zone2_mute}")
+          fi
+        fi
+
+        if [[ "$zone2_power" == "3" || "$zone2_power" == "2" ]]; then
+          if ! _denon_set_config 4 "<Zone2><Power>${zone2_power}</Power></Zone2>"; then
+            restore_failed=1
+            restore_failures+=("zone2 power ${zone2_power}")
+          fi
+        fi
+
+        if [[ "$main_power" == "3" || "$main_power" == "2" ]]; then
+          if ! _denon_set_config 4 "<MainZone><Power>${main_power}</Power></MainZone>"; then
+            restore_failed=1
+            restore_failures+=("main power ${main_power}")
+          fi
+        fi
+
+        printf 'Target main: power=%s source=%s volume=%s mute=%s\n' \
+          "$(_denon_power_name "${main_power:-}")" "${main_source:-unset}" "${main_volume:-unset}" "${main_mute:-unset}"
+        printf 'Target Zone 2: power=%s source=%s volume=%s mute=%s\n' \
+          "$(_denon_power_name "${zone2_power:-}")" "${zone2_source:-unset}" "${zone2_volume:-unset}" "${zone2_mute:-unset}"
+        _denon_status_pretty
+        if (( restore_failed )); then
+          echo "Preset '$name' loaded with partial failures:" >&2
+          for step_desc in "${restore_failures[@]}"; do
+            echo "  - $step_desc" >&2
+          done
+          return 1
+        fi
+        echo "Preset '$name' loaded successfully"
+        return 0
+        ;;
+
+      list)
+        if [[ ! -d "$preset_dir" ]] || [[ -z "$(ls -A "$preset_dir" 2>/dev/null)" ]]; then
+          echo "No presets saved. Use: denon preset save <name>"
+          return 0
+        fi
+        printf '%-20s %s\n' "PRESET" "SAVED"
+        printf '%-20s %s\n' "------" "-----"
+        local f
+        for f in "$preset_dir"/*; do
+          [[ -f "$f" ]] || continue
+          local saved_date=""
+          saved_date=$(grep '^# saved:' "$f" | head -1 | sed 's/^# saved: //')
+          printf '%-20s %s\n' "$(basename "$f")" "${saved_date:-unknown}"
+        done
+        return 0
+        ;;
+
+      delete|rm)
+        local name="${2:-}"
+        if [[ -z "$name" ]]; then
+          echo "Usage: denon preset delete <name>" >&2
+          return 1
+        fi
+        local preset_file="$preset_dir/$name"
+        if [[ ! -f "$preset_file" ]]; then
+          echo "Error: preset '$name' not found" >&2
+          return 1
+        fi
+        rm "$preset_file"
+        echo "Preset '$name' deleted"
+        return 0
+        ;;
+
+      show)
+        local name="${2:-}"
+        if [[ -z "$name" ]]; then
+          echo "Usage: denon preset show <name>" >&2
+          return 1
+        fi
+        local preset_file="$preset_dir/$name"
+        if [[ ! -f "$preset_file" ]]; then
+          echo "Error: preset '$name' not found" >&2
+          return 1
+        fi
+        cat "$preset_file"
+        return 0
+        ;;
+
+      "")
+        echo "Usage: denon preset <save|load|list|show|delete> [name]" >&2
+        return 1
+        ;;
+
+      *)
+        echo "Unknown preset subcommand '$subcmd'. Usage: denon preset <save|load|list|show|delete> [name]" >&2
+        return 1
+        ;;
+    esac
+  }
+
+  # ── watch-event ───────────────────────────────────────────────────────────
+
+  _denon_watch_event() {
+    local condition="${1:-}"
+    local user_cmd="${2:-}"
+    if [[ -z "$condition" || -z "$user_cmd" ]]; then
+      echo "Usage: denon watch-event <condition> <command> [--interval secs] [--once] [--timeout secs]" >&2
+      echo "  Conditions: source=tv  power=on  mute=off  vol<-30  vol>=-35" >&2
+      return 1
+    fi
+    shift 2
+
+    local interval=5 once=0 timeout_secs=0
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --interval) interval="$2"; shift 2 ;;
+        --once)     once=1; shift ;;
+        --timeout)  timeout_secs="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1" >&2; return 1 ;;
+      esac
+    done
+
+    local cond_key cond_op cond_val
+    if [[ "$condition" =~ ^([a-zA-Z_]+)([\<\>\!]?=|[\<\>])(.+)$ ]]; then
+      cond_key="${BASH_REMATCH[1]}"
+      cond_op="${BASH_REMATCH[2]}"
+      cond_val="${BASH_REMATCH[3]}"
+    else
+      echo "Error: cannot parse condition '$condition'" >&2
+      echo "Examples: source=tv  power=on  mute=off  vol<-30  vol>=-35" >&2
+      return 1
+    fi
+    cond_key=$(_denon_lower "$cond_key")
+    cond_val=$(_denon_lower "$cond_val")
+
+    echo "Watching: $condition (every ${interval}s, Ctrl-C to stop)"
+    local start_time
+    start_time=$(date +%s)
+
+    while true; do
+      if (( timeout_secs > 0 )); then
+        local now
+        now=$(date +%s)
+        if (( now - start_time >= timeout_secs )); then
+          echo "Timeout after ${timeout_secs}s — condition never met" >&2
+          return 1
+        fi
+      fi
+
+      local met=0
+      case "$cond_key" in
+        source)
+          local source_xml actual_idx target_idx
+          source_xml=$(_denon_get_source_xml 2>/dev/null) || { sleep "$interval"; continue; }
+          actual_idx=$(printf '%s' "$source_xml" | sed -n 's:.*<Zone zone="1" index="\([0-9]\+\)".*:\1:p')
+          if [[ "$cond_val" =~ ^[0-9]+$ ]]; then
+            target_idx="$cond_val"
+          else
+            target_idx=$(_denon_resolve_source_index "$cond_val" 1 2>/dev/null) || target_idx=""
+          fi
+          case "$cond_op" in
+            =|==) [[ "$actual_idx" == "$target_idx" ]] && met=1 ;;
+            !=)   [[ "$actual_idx" != "$target_idx" ]] && met=1 ;;
+          esac
+          ;;
+        power)
+          local power_xml power_code power_str
+          power_xml=$(_denon_get_power_xml 2>/dev/null) || { sleep "$interval"; continue; }
+          power_code=$(_denon_extract_main_power "$power_xml")
+          case "$power_code" in
+            1) power_str="on" ;;
+            2) power_str="standby" ;;
+            *) power_str="off" ;;
+          esac
+          case "$cond_op" in
+            =|==) [[ "$power_str" == "$cond_val" ]] && met=1 ;;
+            !=)   [[ "$power_str" != "$cond_val" ]] && met=1 ;;
+          esac
+          ;;
+        mute)
+          local mute_xml mute_code mute_str cv
+          mute_xml=$(_denon_get_vol_xml 2>/dev/null) || { sleep "$interval"; continue; }
+          mute_code=$(_denon_extract_main_mute "$mute_xml")
+          [[ "$mute_code" == "1" ]] && mute_str="on" || mute_str="off"
+          cv="$cond_val"
+          [[ "$cv" == "1" ]] && cv="on"
+          [[ "$cv" == "0" ]] && cv="off"
+          case "$cond_op" in
+            =|==) [[ "$mute_str" == "$cv" ]] && met=1 ;;
+            !=)   [[ "$mute_str" != "$cv" ]] && met=1 ;;
+          esac
+          ;;
+        vol|volume)
+          local vol_xml raw_vol actual_db
+          vol_xml=$(_denon_get_vol_xml 2>/dev/null) || { sleep "$interval"; continue; }
+          raw_vol=$(_denon_extract_main_volume_raw "$vol_xml")
+          [[ -z "$raw_vol" ]] && { sleep "$interval"; continue; }
+          actual_db=$(awk -v r="$raw_vol" 'BEGIN { printf "%.1f", r/10 - 80 }')
+          met=$(awk -v a="$actual_db" -v b="$cond_val" -v op="$cond_op" 'BEGIN {
+            if      (op == "=" || op == "==") { print (a+0 == b+0) ? 1 : 0 }
+            else if (op == "<")               { print (a+0 <  b+0) ? 1 : 0 }
+            else if (op == ">")               { print (a+0 >  b+0) ? 1 : 0 }
+            else if (op == "<=")              { print (a+0 <= b+0) ? 1 : 0 }
+            else if (op == ">=")              { print (a+0 >= b+0) ? 1 : 0 }
+            else if (op == "!=")              { print (a+0 != b+0) ? 1 : 0 }
+            else                              { print 0 }
+          }')
+          ;;
+        *)
+          echo "Error: unsupported condition key '$cond_key'" >&2
+          echo "Supported: source, power, mute, vol" >&2
+          return 1
+          ;;
+      esac
+
+      if (( met )); then
+        printf '[%s] Condition met: %s\n' "$(date '+%H:%M:%S')" "$condition"
+        bash -c "$user_cmd"
+        (( once )) && return 0
+      fi
+
+      sleep "$interval"
+    done
+  }
+
+  # ── Config file ───────────────────────────────────────────────────────────
+
+  _denon_config_path() {
+    printf '%s' "${DENON_CONFIG:-$HOME/.config/denon/config}"
+  }
+
+  _denon_profile_dir() {
+    printf '%s' "$(dirname "$(_denon_config_path)")/profiles"
+  }
+
+  _denon_load_config() {
+    local cfg="${1:-$(_denon_config_path)}"
+    [[ -f "$cfg" ]] || return 0
+    local line key val
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%%#*}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [[ -z "$line" ]] && continue
+      key="${line%%=*}"
+      val="${line#*=}"
+      [[ "$key" == "$val" ]] && continue
+      case "$key" in
+        DENON_IP|DENON_DEFAULT_IP|DENON_SCAN_LAN|DENON_MAX_VOLUME_DB|\
+        DENON_VOLUME_STEP_DB|DENON_SOURCE_ALIASES|DENON_CURL_CONNECT_TIMEOUT|\
+        DENON_CURL_MAX_TIME|DENON_SSDP_TIMEOUT|DENON_SSDP_MX|DENON_HEOS_PID|\
+        DENON_HEOS_GID|DENON_HEOS_HELPER|DENON_HEOS_TIMEOUT|DENON_DEBUG|\
+        DENON_CACHE_TTL_SECONDS|NO_COLOR)
+          if [[ -z "${!key+set}" ]]; then
+            export "$key"="$val"
+          fi
+          ;;
+      esac
+    done <"$cfg"
+  }
+
+  _denon_profile_cmd() {
+    local subcmd="${1:-}"
+    local profile_dir
+    profile_dir=$(_denon_profile_dir)
+    local known_keys="DENON_IP DENON_DEFAULT_IP DENON_SCAN_LAN DENON_MAX_VOLUME_DB \
+DENON_VOLUME_STEP_DB DENON_SOURCE_ALIASES DENON_CURL_CONNECT_TIMEOUT \
+DENON_CURL_MAX_TIME DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
+DENON_HEOS_GID DENON_HEOS_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
+DENON_CACHE_TTL_SECONDS NO_COLOR"
+
+    case "$subcmd" in
+      list)
+        printf 'Profiles dir: %s\n\n' "$profile_dir"
+        if [[ ! -d "$profile_dir" ]] || [[ -z "$(ls -A "$profile_dir" 2>/dev/null)" ]]; then
+          echo "No profiles found. Create one at: ${profile_dir}/<name>"
+          return 0
+        fi
+        local active="${DENON_PROFILE:-}"
+        local f
+        for f in "$profile_dir"/*; do
+          [[ -f "$f" ]] || continue
+          local n; n=$(basename "$f")
+          if [[ "$n" == "$active" ]]; then
+            printf '* %s (active)\n' "$n"
+          else
+            printf '  %s\n' "$n"
+          fi
+        done
+        return 0
+        ;;
+
+      show)
+        local name="${2:-${DENON_PROFILE:-}}"
+        if [[ -z "$name" ]]; then
+          echo "Usage: denon profile show <name>" >&2
+          echo "  (or set DENON_PROFILE to show the active profile)" >&2
+          return 1
+        fi
+        local pfile="$profile_dir/$name"
+        if [[ ! -f "$pfile" ]]; then
+          echo "Error: profile '$name' not found (${pfile})" >&2
+          return 1
+        fi
+        printf 'Profile: %s\n\n' "$name"
+        printf '%-32s %s\n' "KEY" "VALUE"
+        printf '%-32s %s\n' "---" "-----"
+        local k
+        for k in $known_keys; do
+          local fval=""
+          fval=$(grep "^${k}=" "$pfile" 2>/dev/null | tail -1 | cut -d= -f2-)
+          [[ -n "$fval" ]] && printf '%-32s %s\n' "$k" "$fval"
+        done
+        return 0
+        ;;
+
+      path)
+        local name="${2:-${DENON_PROFILE:-}}"
+        if [[ -z "$name" ]]; then
+          echo "Usage: denon profile path <name>" >&2
+          return 1
+        fi
+        printf '%s\n' "$profile_dir/$name"
+        return 0
+        ;;
+
+      set)
+        local name="${2:-}" key="${3:-}" val="${*:4}"
+        if [[ -z "$name" || -z "$key" || -z "$val" ]]; then
+          echo "Usage: denon profile set <name> KEY VALUE..." >&2
+          return 1
+        fi
+        local ok=0
+        for k in $known_keys; do [[ "$k" == "$key" ]] && ok=1 && break; done
+        if (( ! ok )); then
+          echo "Error: unknown key '$key'" >&2
+          return 1
+        fi
+        mkdir -p "$profile_dir"
+        local pfile="$profile_dir/$name"
+        if [[ -f "$pfile" ]] && grep -q "^${key}=" "$pfile"; then
+          local tmp; tmp=$(mktemp)
+          grep -v "^${key}=" "$pfile" >"$tmp"
+          mv "$tmp" "$pfile"
+        fi
+        printf '%s=%s\n' "$key" "$val" >>"$pfile"
+        echo "Set $key=$val in profile '$name' (${pfile})"
+        return 0
+        ;;
+
+      unset)
+        local name="${2:-}" key="${3:-}"
+        if [[ -z "$name" || -z "$key" ]]; then
+          echo "Usage: denon profile unset <name> KEY" >&2
+          return 1
+        fi
+        local pfile="$profile_dir/$name"
+        if [[ ! -f "$pfile" ]] || ! grep -q "^${key}=" "$pfile"; then
+          echo "$key not set in profile '$name'"
+          return 0
+        fi
+        local tmp; tmp=$(mktemp)
+        grep -v "^${key}=" "$pfile" >"$tmp"
+        mv "$tmp" "$pfile"
+        echo "Removed $key from profile '$name'"
+        return 0
+        ;;
+
+      active|"")
+        if [[ -n "${DENON_PROFILE:-}" ]]; then
+          printf 'Active profile: %s\n' "$DENON_PROFILE"
+          _denon_profile_cmd show "$DENON_PROFILE"
+        else
+          echo "No active profile. Set DENON_PROFILE=<name> or run: denon profile list"
+        fi
+        return 0
+        ;;
+
+      *)
+        echo "Usage: denon profile <list|show|path|set|unset|active> [args]" >&2
+        return 1
+        ;;
+    esac
+  }
+
+  _denon_config_cmd() {
+    local subcmd="${1:-}"
+    local cfg
+    cfg=$(_denon_config_path)
+    local known_keys="DENON_IP DENON_DEFAULT_IP DENON_SCAN_LAN DENON_MAX_VOLUME_DB \
+DENON_VOLUME_STEP_DB DENON_SOURCE_ALIASES DENON_CURL_CONNECT_TIMEOUT \
+DENON_CURL_MAX_TIME DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
+DENON_HEOS_GID DENON_HEOS_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
+DENON_CACHE_TTL_SECONDS NO_COLOR"
+
+    case "$subcmd" in
+      path)
+        echo "$cfg"
+        return 0
+        ;;
+      set)
+        local key="$2" val="${*:3}"
+        if [[ -z "$key" || -z "$val" ]]; then
+          echo "Usage: denon config set KEY VALUE..." >&2
+          return 1
+        fi
+        local ok=0
+        for k in $known_keys; do [[ "$k" == "$key" ]] && ok=1 && break; done
+        if (( ! ok )); then
+          echo "Error: unknown config key '$key'. Allowed keys: $known_keys" >&2
+          return 1
+        fi
+        mkdir -p "$(dirname "$cfg")"
+        if [[ -f "$cfg" ]] && grep -q "^${key}=" "$cfg"; then
+          local tmp
+          tmp=$(mktemp)
+          grep -v "^${key}=" "$cfg" >"$tmp"
+          mv "$tmp" "$cfg"
+        fi
+        printf '%s=%s\n' "$key" "$val" >>"$cfg"
+        echo "Set $key=$val in $cfg"
+        return 0
+        ;;
+      unset)
+        local key="$2"
+        if [[ -z "$key" ]]; then
+          echo "Usage: denon config unset KEY" >&2
+          return 1
+        fi
+        if [[ ! -f "$cfg" ]] || ! grep -q "^${key}=" "$cfg"; then
+          echo "$key not set in $cfg"
+          return 0
+        fi
+        local tmp
+        tmp=$(mktemp)
+        grep -v "^${key}=" "$cfg" >"$tmp"
+        mv "$tmp" "$cfg"
+        echo "Removed $key from $cfg"
+        return 0
+        ;;
+      "")
+        printf 'Config file: %s\n\n' "$cfg"
+        printf '%-32s %-20s %s\n' "KEY" "EFFECTIVE VALUE" "SOURCE"
+        printf '%-32s %-20s %s\n' "---" "---------------" "------"
+        local k
+        for k in $known_keys; do
+          local file_val="" env_src="env" file_src="file" effective="" source_lbl=""
+          if [[ -f "$cfg" ]]; then
+            file_val=$(grep "^${k}=" "$cfg" | tail -1 | cut -d= -f2-)
+          fi
+          if [[ -n "${!k+set}" ]]; then
+            effective="${!k}"
+            if [[ -n "$file_val" && "${!k}" == "$file_val" ]]; then
+              source_lbl="$file_src"
+            else
+              source_lbl="$env_src"
+            fi
+          elif [[ -n "$file_val" ]]; then
+            effective="$file_val"
+            source_lbl="$file_src"
+          else
+            effective="(unset)"
+            source_lbl=""
+          fi
+          printf '%-32s %-20s %s\n' "$k" "$effective" "$source_lbl"
+        done
+        return 0
+        ;;
+      *)
+        echo "Usage: denon config [set KEY VALUE | unset KEY | path]" >&2
+        return 1
+        ;;
+    esac
+  }
   # ── Init ──────────────────────────────────────────────────────────────────
+
+  if [[ -n "${DENON_PROFILE:-}" ]]; then
+    _denon_load_config "$(_denon_profile_dir)/${DENON_PROFILE}"
+  fi
+  _denon_load_config
+
+  local _arg _quiet=0 _silent=0
+  local -a _quiet_args=()
+  for _arg in "$@"; do
+    case "$_arg" in
+      --quiet|-q) _quiet=1 ;;
+      --silent) _silent=1 ;;
+      *) _quiet_args+=("$_arg") ;;
+    esac
+  done
+  if (( _silent )); then
+    denon "${_quiet_args[@]+"${_quiet_args[@]}"}" >/dev/null 2>&1
+    return $?
+  fi
+  if (( _quiet )); then
+    denon "${_quiet_args[@]+"${_quiet_args[@]}"}" >/dev/null
+    return $?
+  fi
 
   local cmd
   cmd=$(_denon_lower "$1")
@@ -2683,6 +3571,10 @@ EOF
   case "$cmd" in
     ""|-h|--help|help)
       _denon_usage
+      return 0
+      ;;
+    version|--version|-V)
+      grep -m1 '^# Version:' "${BASH_SOURCE[0]:-$0}" | awk '{print $3}'
       return 0
       ;;
     setip)
@@ -2704,6 +3596,18 @@ EOF
       _denon_doctor
       return $?
       ;;
+    diff)
+      _denon_snapshot_diff "$2" "$3"
+      return $?
+      ;;
+    config)
+      _denon_config_cmd "${@:2}"
+      return $?
+      ;;
+    profile)
+      _denon_profile_cmd "${@:2}"
+      return $?
+      ;;
     discover)
       rm -f "$HOME/.cache/denon_ip"
       local new_ip
@@ -2716,7 +3620,7 @@ EOF
       fi
       return 0
       ;;
-    info|status|signal-debug|rawstatus|raw|snapshot|dashboard|sources|source|rename-source|source-names|clear-source-name|sleep|qs|on|off|xbox|xfinity|bluray|tv|phono|heos|vol|up|down|mute|unmute|movie|game|night|music|mode|dyn-eq|dyn-vol|cinema-eq|multeq|bass|treble|play|pause|stop|next|prev|previous|track|now|zone2)
+    info|status|signal-debug|rawstatus|raw|snapshot|dashboard|sources|source|rename-source|source-names|clear-source-name|sleep|qs|on|off|xbox|xfinity|bluray|tv|phono|heos|vol|up|down|mute|unmute|toggle|movie|game|night|music|mode|dyn-eq|dyn-vol|cinema-eq|multeq|bass|treble|play|pause|stop|next|prev|previous|track|now|zone2|watch-event|preset)
       ;;
     *)
       _denon_usage
@@ -2776,7 +3680,7 @@ EOF
       ;;
 
     sources)
-      _denon_sources "${2:-1}"
+      _denon_sources "${@:2}"
       ;;
 
     source)
@@ -2837,6 +3741,8 @@ EOF
         fi
         mute_str=$([[ "$mute" == "1" ]] && echo " [MUTED]" || echo "")
         printf 'Volume: %s dB%s\n' "$db" "$mute_str"
+      elif [[ "$2" == "--fade" || "$2" == "fade" ]]; then
+        _denon_fade_volume "${@:3}"
       else
         if _denon_is_signed_step "$2" && [[ "$2" == +* ]]; then
           _denon_change_volume "$2"
@@ -2864,6 +3770,9 @@ EOF
     unmute)
       _denon_set_config 12 '<MainZone><Mute>2</Mute></MainZone>' || return 1
       echo "Unmuted"
+      ;;
+    toggle)
+      _denon_toggle "$2"
       ;;
 
     movie)
@@ -2966,14 +3875,32 @@ EOF
           _denon_set_config 12 "<Zone2><Volume>${3}</Volume></Zone2>" || return 1
           _denon_zone_status_pretty 2
           ;;
+        up)
+          local step="${3:-${DENON_VOLUME_STEP_DB:-1}}"
+          step="${step#[-+]}"
+          _denon_zone2_change_volume "$step"
+          ;;
+        down)
+          local step="${3:-${DENON_VOLUME_STEP_DB:-1}}"
+          step="${step#[-+]}"
+          _denon_zone2_change_volume "-$step"
+          ;;
         sleep)
           _denon_sleep_timer 2 "$3"
           ;;
         *)
-          echo "Usage: denon zone2 {status|sources|source <id|name>|rename-source <id|name> <new name>|clear-source-name <id|name>|on|off|mute|unmute|vol <raw>|volume <raw>|sleep [minutes|off]}" >&2
+          echo "Usage: denon zone2 {status|sources|source <id|name>|rename-source <id|name> <new name>|clear-source-name <id|name>|on|off|mute|unmute|vol <raw>|volume <raw>|up [dB]|down [dB]|sleep [minutes|off]}" >&2
           return 1
           ;;
       esac
+      ;;
+
+    watch-event)
+      _denon_watch_event "$2" "$3" "${@:4}"
+      ;;
+
+    preset)
+      _denon_preset_cmd "$2" "$3"
       ;;
 
     *)
@@ -2987,14 +3914,14 @@ EOF
 _denon_completion() {
   local -a commands modes zone2_commands raw_commands json_flags zones heos_commands onoff dyn_volumes multeq_modes tone_commands repeat_modes
   commands=(
-    info status signal-debug rawstatus raw snapshot sources source rename-source source-names clear-source-name
+    info status signal-debug rawstatus raw snapshot diff sources source rename-source source-names clear-source-name
     sleep qs quick quick-select
-    on off xbox xfinity bluray tv phono heos vol up down mute unmute movie game night music mode
+    on off xbox xfinity bluray tv phono heos vol up down mute unmute toggle movie game night music mode
     dyn-eq dyn-vol cinema-eq multeq bass treble
-    play pause stop next prev previous track now dashboard zone2 discover doctor setip help
+    play pause stop next prev previous track now dashboard zone2 preset watch-event discover doctor setip config profile help
   )
   modes=(stereo direct pure movie music game auto)
-  zone2_commands=(status sources source rename-source clear-source-name on off mute unmute vol volume sleep)
+  zone2_commands=(status sources source rename-source clear-source-name on off mute unmute vol volume up down sleep)
   raw_commands=(get set)
   json_flags=(--json)
   zones=(1 2)

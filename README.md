@@ -253,6 +253,8 @@ denon info --json
 denon status
 denon status --json
 denon signal-debug
+denon --quiet status
+denon --silent status
 denon rawstatus
 denon raw get <type>
 denon raw set <type> '<xml>'
@@ -262,6 +264,7 @@ denon dashboard [--watch] [--interval seconds] [--ascii|--unicode] [--color auto
 ```
 
 In watch mode, `q` quits, `r` redraws, and `Ctrl-C` exits cleanly.
+`--quiet` suppresses normal stdout but still shows stderr. `--silent` suppresses both stdout and stderr.
 
 ### Sources
 

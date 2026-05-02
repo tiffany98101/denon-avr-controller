@@ -94,9 +94,28 @@ if command -v zsh >/dev/null 2>&1; then
 else
   warn "zsh not installed; skipping zsh -n"
 fi
+if grep -q 'power_xml=\$(\_denon_get_power_xml' "$SCRIPT"; then
+  pass "watch-event power uses type 4 power XML"
+else
+  fail "watch-event power uses type 4 power XML"
+fi
 
 log "Direct execution read-only checks"
 run_expect_output "help" "$SCRIPT" help
+if "$SCRIPT" --quiet help >"$OUT" 2>"$ERR" && [[ ! -s "$OUT" && ! -s "$ERR" ]]; then
+  pass "--quiet suppresses stdout for help"
+else
+  fail "--quiet suppresses stdout for help"
+  sed 's/^/  | /' "$OUT" || true
+  sed 's/^/  ! /' "$ERR" >&2 || true
+fi
+if "$SCRIPT" --silent help >"$OUT" 2>"$ERR" && [[ ! -s "$OUT" && ! -s "$ERR" ]]; then
+  pass "--silent suppresses stdout and stderr for help"
+else
+  fail "--silent suppresses stdout and stderr for help"
+  sed 's/^/  | /' "$OUT" || true
+  sed 's/^/  ! /' "$ERR" >&2 || true
+fi
 run_expect_output "doctor" "$SCRIPT" doctor
 run_expect_output "discover" "$SCRIPT" discover
 run_expect_output "status" "$SCRIPT" status
@@ -105,11 +124,77 @@ run_expect_output "info --json" "$SCRIPT" info --json
 run_expect_output "sources" "$SCRIPT" sources
 run_expect_output "zone2 sources" "$SCRIPT" zone2 sources
 run_expect_output "zone2 status" "$SCRIPT" zone2 status
+run_expect_output "signal-debug" "$SCRIPT" signal-debug
 run_expect_output "raw get 3" "$SCRIPT" raw get 3
 run_expect_output "raw get 4" "$SCRIPT" raw get 4
 run_expect_output "raw get 7" "$SCRIPT" raw get 7
 run_expect_output "raw get 12" "$SCRIPT" raw get 12
 run_expect_output "snapshot" "$SCRIPT" snapshot "$TMPROOT/snapshot"
+
+log "Telnet read-only checks"
+"$SCRIPT" sleep >"$OUT" 2>"$ERR" || true
+if grep -qE '^Main zone sleep timer:' "$OUT"; then
+  pass "sleep query"
+  sed 's/^/  | /' "$OUT" || true
+else
+  warn "sleep query: nc/telnet unavailable or timer not reported (not a hard failure)"
+fi
+
+"$SCRIPT" dyn-eq >"$OUT" 2>"$ERR" || true
+if grep -qE '^Dynamic EQ:' "$OUT"; then
+  pass "dyn-eq query"
+  sed 's/^/  | /' "$OUT" || true
+else
+  warn "dyn-eq query: nc unavailable or not reported (not a hard failure)"
+fi
+
+"$SCRIPT" dyn-vol >"$OUT" 2>"$ERR" || true
+if grep -qE '^Dynamic Volume:' "$OUT"; then
+  pass "dyn-vol query"
+  sed 's/^/  | /' "$OUT" || true
+else
+  warn "dyn-vol query: nc unavailable or not reported (not a hard failure)"
+fi
+
+"$SCRIPT" cinema-eq >"$OUT" 2>"$ERR" || true
+if grep -qE '^Cinema EQ:' "$OUT"; then
+  pass "cinema-eq query"
+  sed 's/^/  | /' "$OUT" || true
+else
+  warn "cinema-eq query: nc unavailable or not reported (not a hard failure)"
+fi
+
+"$SCRIPT" multeq >"$OUT" 2>"$ERR" || true
+if grep -qE '^MultEQ:' "$OUT"; then
+  pass "multeq query"
+  sed 's/^/  | /' "$OUT" || true
+else
+  warn "multeq query: nc unavailable or not reported (not a hard failure)"
+fi
+
+"$SCRIPT" bass >"$OUT" 2>"$ERR" || true
+if grep -qE '^Bass:' "$OUT"; then
+  pass "bass query"
+  sed 's/^/  | /' "$OUT" || true
+else
+  warn "bass query: nc unavailable or not reported (not a hard failure)"
+fi
+
+"$SCRIPT" treble >"$OUT" 2>"$ERR" || true
+if grep -qE '^Treble:' "$OUT"; then
+  pass "treble query"
+  sed 's/^/  | /' "$OUT" || true
+else
+  warn "treble query: nc unavailable or not reported (not a hard failure)"
+fi
+
+"$SCRIPT" zone2 sleep >"$OUT" 2>"$ERR" || true
+if grep -qE '^Zone 2 sleep timer:' "$OUT"; then
+  pass "zone2 sleep query"
+  sed 's/^/  | /' "$OUT" || true
+else
+  warn "zone2 sleep query: nc unavailable or not reported (not a hard failure)"
+fi
 
 for f in ip.txt metadata.txt type_3.xml type_4.xml type_7.xml type_12.xml; do
   if [[ -f "$TMPROOT/snapshot/$f" ]]; then
@@ -152,6 +237,22 @@ if [[ "$DESTRUCTIVE" == "1" ]]; then
 
   run_expect_output "sound mode stereo" "$SCRIPT" mode stereo
   run_expect_output "sound mode movie" "$SCRIPT" mode movie
+
+  run_expect_output "stop" "$SCRIPT" stop
+
+  run_expect_output "zone2 mute" "$SCRIPT" zone2 mute
+  run_expect_output "zone2 unmute" "$SCRIPT" zone2 unmute
+
+  INITIAL_SLEEP=$("$SCRIPT" sleep 2>/dev/null | sed -n 's/^Main zone sleep timer: \(.*\)/\1/p')
+  if [[ -n "$INITIAL_SLEEP" ]]; then
+    run_expect_output "sleep set 30" "$SCRIPT" sleep 30
+    run_expect_output "sleep off" "$SCRIPT" sleep off
+    if [[ "$INITIAL_SLEEP" != "off" ]]; then
+      "$SCRIPT" sleep "${INITIAL_SLEEP% min}" >/dev/null 2>&1 || true
+    fi
+  else
+    warn "sleep set/clear: nc unavailable, skipping"
+  fi
 
   "$SCRIPT" track >"$OUT" 2>"$ERR" || true
   if grep -qE '^(Title:|Track info unavailable)' "$OUT"; then
