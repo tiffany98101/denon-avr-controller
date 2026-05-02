@@ -1689,7 +1689,7 @@ EOF
     local section key chunk
 
     if command -v jq >/dev/null 2>&1; then
-      jq -r ".$path // empty" 2>/dev/null <<<"$json" | sed 's/^null$//'
+      jq -r ".$path | if . == null then empty else . end" 2>/dev/null <<<"$json" | sed 's/^null$//'
       return 0
     fi
 
