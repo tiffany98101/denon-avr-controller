@@ -1,12 +1,23 @@
 # Denon
 
-A practical shell-based controller for modern Denon AVRs on a home LAN.
+A practical controller project for modern Denon AVRs on a home LAN.
 
 ## Status
 
 This project is currently in **beta**.
 
 It is tested primarily on a **Denon AVR-X1600H** on Ubuntu. Core AVR control, Zone 2 control, HEOS helper-backed features, and the live dashboard are working, but some behavior may vary by receiver model, firmware version, terminal, and HEOS account state.
+
+## Interfaces
+
+This repo currently ships two control surfaces:
+
+- `denon_release_candidate.sh`: the original Bash/Linux CLI with the widest feature coverage, including discovery, snapshots, HEOS helper-backed workflows, and the live terminal dashboard.
+- `powershell/DenonAvrController/`: an experimental native PowerShell module for Windows PowerShell and PowerShell 7+, using PowerShell/.NET HTTP, XML, and TCP APIs directly.
+
+The native PowerShell module does **not** require WSL. Use WSL only if you specifically want to run the Bash CLI from Windows.
+
+The PowerShell module is not yet at full Bash CLI parity. See [powershell/DenonAvrController/README.md](powershell/DenonAvrController/README.md) for current scope and limitations.
 
 ## Screenshot
 
@@ -38,6 +49,21 @@ chmod +x denon_release_candidate.sh denon_automated_test.sh denon_heos_helper.py
 ./denon_release_candidate.sh doctor
 ./denon_release_candidate.sh status
 ```
+
+## Windows PowerShell quick start
+
+PowerShell 7+ on Windows is the primary target for the native module.
+
+From the repository root:
+
+```powershell
+Import-Module .\powershell\DenonAvrController\DenonAvrController.psd1
+Set-DenonReceiver -IpAddress 192.168.1.100 -SkipCertificateCheck
+Get-DenonStatus
+Get-DenonSources
+```
+
+Replace `192.168.1.100` with your AVR's local IP address. Start with read-only commands first. For state-changing commands, `-SkipCertificateCheck` behavior, and the default `-10.0 dB` max-volume guard, see [powershell/DenonAvrController/README.md](powershell/DenonAvrController/README.md).
 
 ## Tested
 
