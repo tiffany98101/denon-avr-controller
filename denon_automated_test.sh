@@ -99,6 +99,7 @@ if grep -q 'power_xml=\$(\_denon_get_power_xml' "$SCRIPT"; then
 else
   fail "watch-event power uses type 4 power XML"
 fi
+run_cmd "json escape handles tab/control chars" bash -c 'unset DENON_PROFILE; source "$1"; denon help >/dev/null; actual=$(printf "a\tb\rc\n" | _denon_json_escape); [[ "$actual" == "a\\tbc" ]]' bash "$SCRIPT"
 
 log "Direct execution read-only checks"
 run_expect_output "help" "$SCRIPT" help
