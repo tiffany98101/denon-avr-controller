@@ -97,7 +97,7 @@ denon() {
     if [[ -f "$cache" ]]; then
       local cached_ip cache_ttl cache_mtime cache_age
       cache_ttl="${DENON_CACHE_TTL_SECONDS:-3600}"
-      cache_mtime=$(stat -c %Y "$cache" 2>/dev/null || date +%s)
+      cache_mtime=$(stat -c %Y "$cache" 2>/dev/null || stat -f %m "$cache" 2>/dev/null || echo 0)
       cache_age=$(( $(date +%s) - cache_mtime ))
       if (( cache_age <= cache_ttl )); then
         cached_ip=$(<"$cache")
@@ -366,13 +366,70 @@ EOF
   _denon_get_identity_xml() { _denon_get_config 3; }
 
   _denon_json_escape() {
-    sed 's/\\/\\\\/g; s/"/\\"/g'
+    LC_ALL=C awk '
+      BEGIN {
+        ORS=""
+        backslash=sprintf("%c", 92)
+        quote=sprintf("%c", 34)
+        tab=sprintf("%c", 9)
+        carriage_return=sprintf("%c", 13)
+      }
+      {
+        if (NR > 1) {
+          printf "\\n"
+        }
+        gsub(backslash, backslash backslash)
+        gsub(quote, backslash quote)
+        gsub(tab, "\\t")
+        gsub(carriage_return, "")
+        gsub(/[[:cntrl:]]/, "")
+        printf "%s", $0
+      }
+    '
+  }
+
+  _denon_script_path() {
+    local candidate trace
+    if [[ -n "${DENON_SCRIPT_PATH:-}" ]]; then
+      printf '%s\n' "$DENON_SCRIPT_PATH"
+      return 0
+    fi
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+      for trace in "${funcfiletrace[@]}"; do
+        candidate="${trace%%:*}"
+        if [[ -n "$candidate" && -r "$candidate" ]]; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      done
+    fi
+    candidate="${BASH_SOURCE[0]:-$0}"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    return 1
   }
 
   _denon_trim() {
     local value="$1"
     value=${value//$'\r'/}
     printf '%s' "$value" | awk '{$1=$1; print}'
+  }
+
+  _denon_validate_stored_name() {
+    local kind="$1"
+    local name="$2"
+
+    if [[ "$name" == */* ]]; then
+      echo "Error: $kind name must not contain '/': $name" >&2
+      return 1
+    fi
+    if [[ "$name" == .* ]]; then
+      echo "Error: $kind name must not start with '.': $name" >&2
+      return 1
+    fi
+    return 0
   }
 
   _denon_clean_source_name() {
@@ -1128,12 +1185,7 @@ EOF
 
   _denon_heos_helper() {
     local helper script_path script_dir
-    if [[ -n "${ZSH_VERSION:-}" ]]; then
-      # shellcheck disable=SC2154 # zsh-only special variable used when sourced from zsh.
-      script_path="${funcfiletrace[1]%:*}"
-    else
-      script_path="${BASH_SOURCE[0]}"
-    fi
+    script_path=$(_denon_script_path) || script_path="$PWD/denon_release_candidate.sh"
     script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
     helper="${DENON_HEOS_HELPER:-${script_dir:-$PWD}/denon_heos_helper.py}"
     if [[ ! -r "$helper" ]]; then
@@ -1880,7 +1932,7 @@ EOF
     command -v nc >/dev/null 2>&1 || return 1
     command -v timeout >/dev/null 2>&1 || return 1
 
-    timeout 2 sh -c "printf 'MS?\r' | nc '$IP' 23" 2>/dev/null
+    printf 'MS?\r' | timeout 2 nc "$IP" 23 2>/dev/null
   }
 
   _denon_dashboard_parse_telnet_status() {
@@ -1990,13 +2042,6 @@ EOF
   _denon_dashboard_heos_command() {
     local command="$1"
     command -v nc >/dev/null 2>&1 || return 1
-
-    if {
-      printf '%s\r\n' "$command"
-      sleep 0.1
-    } | nc -w 1 -q 0 "$IP" 1255 2>/dev/null; then
-      return 0
-    fi
 
     {
       printf '%s\r\n' "$command"
@@ -2947,6 +2992,7 @@ EOF
           echo "Usage: denon preset save <name>" >&2
           return 1
         fi
+        _denon_validate_stored_name "preset" "$name" || return 1
         local power_xml source_xml vol_xml
         power_xml=$(_denon_get_power_xml) || return 1
         source_xml=$(_denon_get_source_xml) || return 1
@@ -2992,6 +3038,7 @@ EOF
           echo "Usage: denon preset load <name>" >&2
           return 1
         fi
+        _denon_validate_stored_name "preset" "$name" || return 1
         local preset_file="$preset_dir/$name"
         if [[ ! -f "$preset_file" ]]; then
           echo "Error: preset '$name' not found (${preset_file})" >&2
@@ -3135,6 +3182,7 @@ EOF
           echo "Usage: denon preset delete <name>" >&2
           return 1
         fi
+        _denon_validate_stored_name "preset" "$name" || return 1
         local preset_file="$preset_dir/$name"
         if [[ ! -f "$preset_file" ]]; then
           echo "Error: preset '$name' not found" >&2
@@ -3151,6 +3199,7 @@ EOF
           echo "Usage: denon preset show <name>" >&2
           return 1
         fi
+        _denon_validate_stored_name "preset" "$name" || return 1
         local preset_file="$preset_dir/$name"
         if [[ ! -f "$preset_file" ]]; then
           echo "Error: preset '$name' not found" >&2
@@ -3371,6 +3420,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
           echo "  (or set DENON_PROFILE to show the active profile)" >&2
           return 1
         fi
+        _denon_validate_stored_name "profile" "$name" || return 1
         local pfile="$profile_dir/$name"
         if [[ ! -f "$pfile" ]]; then
           echo "Error: profile '$name' not found (${pfile})" >&2
@@ -3394,6 +3444,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
           echo "Usage: denon profile path <name>" >&2
           return 1
         fi
+        _denon_validate_stored_name "profile" "$name" || return 1
         printf '%s\n' "$profile_dir/$name"
         return 0
         ;;
@@ -3404,6 +3455,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
           echo "Usage: denon profile set <name> KEY VALUE..." >&2
           return 1
         fi
+        _denon_validate_stored_name "profile" "$name" || return 1
         local ok=0
         for k in $known_keys; do [[ "$k" == "$key" ]] && ok=1 && break; done
         if (( ! ok )); then
@@ -3428,6 +3480,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
           echo "Usage: denon profile unset <name> KEY" >&2
           return 1
         fi
+        _denon_validate_stored_name "profile" "$name" || return 1
         local pfile="$profile_dir/$name"
         if [[ ! -f "$pfile" ]] || ! grep -q "^${key}=" "$pfile"; then
           echo "$key not set in profile '$name'"
@@ -3549,6 +3602,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
   # ── Init ──────────────────────────────────────────────────────────────────
 
   if [[ -n "${DENON_PROFILE:-}" ]]; then
+    _denon_validate_stored_name "profile" "$DENON_PROFILE" || return 1
     _denon_load_config "$(_denon_profile_dir)/${DENON_PROFILE}"
   fi
   _denon_load_config
@@ -3580,7 +3634,12 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
       return 0
       ;;
     version|--version|-V)
-      grep -m1 '^# Version:' "${BASH_SOURCE[0]:-$0}" | awk '{print $3}'
+      local script_path
+      script_path=$(_denon_script_path) || {
+        echo "Error: could not resolve script path for version lookup" >&2
+        return 1
+      }
+      grep -m1 '^# Version:' "$script_path" | awk '{print $3}'
       return 0
       ;;
     setip)
