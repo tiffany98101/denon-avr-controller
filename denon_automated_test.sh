@@ -99,7 +99,10 @@ if grep -q 'power_xml=\$(\_denon_get_power_xml' "$SCRIPT"; then
 else
   fail "watch-event power uses type 4 power XML"
 fi
-run_cmd "json escape handles tab/control chars" bash -c 'unset DENON_PROFILE; source "$1"; denon help >/dev/null; actual=$(printf "a\tb\rc\n" | _denon_json_escape); [[ "$actual" == "a\\tbc" ]]' bash "$SCRIPT"
+run_cmd "json escape escapes quotes" bash -c 'unset DENON_PROFILE; source "$1"; denon help >/dev/null; actual=$(printf "%s" "\"hi\"" | _denon_json_escape); [[ "$actual" == "\\\"hi\\\"" ]]' bash "$SCRIPT"
+run_cmd "json escape escapes backslashes" bash -c 'unset DENON_PROFILE; source "$1"; denon help >/dev/null; actual=$(printf "%s" "a\\b" | _denon_json_escape); [[ "$actual" == "a\\\\b" ]]' bash "$SCRIPT"
+run_cmd "json escape handles tab/control chars" bash -c 'unset DENON_PROFILE; source "$1"; denon help >/dev/null; actual=$(printf "a\tb\rc" | _denon_json_escape); [[ "$actual" == "a\\tbc" ]]' bash "$SCRIPT"
+run_cmd "json escape escapes multiline newlines" bash -c 'unset DENON_PROFILE; source "$1"; denon help >/dev/null; actual=$(printf "line1\nline2" | _denon_json_escape); [[ "$actual" == "line1\\nline2" ]]' bash "$SCRIPT"
 
 log "Direct execution read-only checks"
 run_expect_output "help" "$SCRIPT" help

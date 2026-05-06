@@ -366,7 +366,49 @@ EOF
   _denon_get_identity_xml() { _denon_get_config 3; }
 
   _denon_json_escape() {
-    LC_ALL=C awk 'BEGIN { ORS=""; tab=sprintf("%c", 9) } { gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(tab, "\\t"); gsub(/[[:cntrl:]]/, ""); printf "%s", $0 }'
+    LC_ALL=C awk '
+      BEGIN {
+        ORS=""
+        backslash=sprintf("%c", 92)
+        quote=sprintf("%c", 34)
+        tab=sprintf("%c", 9)
+        carriage_return=sprintf("%c", 13)
+      }
+      {
+        if (NR > 1) {
+          printf "\\n"
+        }
+        gsub(backslash, backslash backslash)
+        gsub(quote, backslash quote)
+        gsub(tab, "\\t")
+        gsub(carriage_return, "")
+        gsub(/[[:cntrl:]]/, "")
+        printf "%s", $0
+      }
+    '
+  }
+
+  _denon_script_path() {
+    local candidate trace
+    if [[ -n "${DENON_SCRIPT_PATH:-}" ]]; then
+      printf '%s\n' "$DENON_SCRIPT_PATH"
+      return 0
+    fi
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+      for trace in "${funcfiletrace[@]}"; do
+        candidate="${trace%%:*}"
+        if [[ -n "$candidate" && -r "$candidate" ]]; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      done
+    fi
+    candidate="${BASH_SOURCE[0]:-$0}"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    return 1
   }
 
   _denon_trim() {
@@ -387,6 +429,7 @@ EOF
       echo "Error: $kind name must not start with '.': $name" >&2
       return 1
     fi
+    return 0
   }
 
   _denon_clean_source_name() {
@@ -1142,12 +1185,7 @@ EOF
 
   _denon_heos_helper() {
     local helper script_path script_dir
-    if [[ -n "${ZSH_VERSION:-}" ]]; then
-      # shellcheck disable=SC2154 # zsh-only special variable used when sourced from zsh.
-      script_path="${funcfiletrace[1]%:*}"
-    else
-      script_path="${BASH_SOURCE[0]}"
-    fi
+    script_path=$(_denon_script_path) || script_path="$PWD/denon_release_candidate.sh"
     script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
     helper="${DENON_HEOS_HELPER:-${script_dir:-$PWD}/denon_heos_helper.py}"
     if [[ ! -r "$helper" ]]; then
@@ -2004,13 +2042,6 @@ EOF
   _denon_dashboard_heos_command() {
     local command="$1"
     command -v nc >/dev/null 2>&1 || return 1
-
-    if {
-      printf '%s\r\n' "$command"
-      sleep 0.1
-    } | nc -w 1 -q 0 "$IP" 1255 2>/dev/null; then
-      return 0
-    fi
 
     {
       printf '%s\r\n' "$command"
@@ -3603,7 +3634,12 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
       return 0
       ;;
     version|--version|-V)
-      grep -m1 '^# Version:' "${BASH_SOURCE[0]:-$0}" | awk '{print $3}'
+      local script_path
+      script_path=$(_denon_script_path) || {
+        echo "Error: could not resolve script path for version lookup" >&2
+        return 1
+      }
+      grep -m1 '^# Version:' "$script_path" | awk '{print $3}'
       return 0
       ;;
     setip)

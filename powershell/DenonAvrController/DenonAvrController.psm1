@@ -73,7 +73,9 @@ function Set-DenonReceiver {
     }
 
     $script:DenonReceiverConfig.IpAddress = $IpAddress
-    $script:DenonReceiverConfig.Port = $Port
+    if ($PSBoundParameters.ContainsKey('Port')) {
+        $script:DenonReceiverConfig.Port = $Port
+    }
     $script:DenonReceiverConfig.SkipCertificateCheck = $SkipCertificateCheck.IsPresent
     if ($PSBoundParameters.ContainsKey('MaxVolumeDb')) {
         $script:DenonReceiverConfig.MaxVolumeDb = $MaxVolumeDb
@@ -696,17 +698,25 @@ function Invoke-DenonTelnetCommand {
             }
         }
 
-        Start-Sleep -Milliseconds 150
         $buffer = New-Object byte[] 1024
         $memory = New-Object System.IO.MemoryStream
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $quietPeriodMilliseconds = 75
+        $lastDataAtMilliseconds = $null
 
         while ($stopwatch.ElapsedMilliseconds -lt $TimeoutMilliseconds) {
             if ($stream.DataAvailable) {
-                $read = $stream.Read($buffer, 0, $buffer.Length)
-                if ($read -gt 0) {
-                    $memory.Write($buffer, 0, $read)
-                }
+                do {
+                    $read = $stream.Read($buffer, 0, $buffer.Length)
+                    if ($read -gt 0) {
+                        $memory.Write($buffer, 0, $read)
+                        $lastDataAtMilliseconds = $stopwatch.ElapsedMilliseconds
+                    }
+                } while ($stream.DataAvailable)
+            }
+            elseif ($null -ne $lastDataAtMilliseconds -and
+                ($stopwatch.ElapsedMilliseconds - $lastDataAtMilliseconds) -ge $quietPeriodMilliseconds) {
+                break
             }
             else {
                 Start-Sleep -Milliseconds 25
