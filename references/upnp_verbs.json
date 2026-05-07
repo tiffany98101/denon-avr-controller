@@ -1,0 +1,51 @@
+{
+  "surface": "UPnP / SSDP",
+  "notes": [
+    "Source: Community Denon AVR research, Home Assistant denonavr integration, ol-iver/denonavr",
+    "All are HTTP GET (read-only).",
+    "Port 8080 is the Denon HTTP server; port 60006 is the AIOS/HEOS UPnP server.",
+    "These descriptors expose AVR firmware version, MAC, serial, and API version — fields absent from all other surfaces."
+  ],
+  "endpoints": [
+    {
+      "name": "Deviceinfo.xml",
+      "url": "http://{ip}:8080/goform/Deviceinfo.xml",
+      "method": "GET",
+      "expected_fields": {
+        "UpgradeVersion": "AVR main firmware version string",
+        "CommApiVers": "Control API version",
+        "BrandCode": "Manufacturer code",
+        "ModelName": "Model name",
+        "SerialNumber": "Serial number (may be empty on some firmware)",
+        "MacAddress": "Network MAC address"
+      },
+      "notes": "Primary source for AVR firmware version. denonavr library polls this for update checks."
+    },
+    {
+      "name": "description.xml",
+      "url": "http://{ip}:8080/description.xml",
+      "method": "GET",
+      "expected_fields": {
+        "friendlyName": "UPnP friendly name",
+        "manufacturer": "Denon",
+        "modelName": "Model name",
+        "modelNumber": "Model number",
+        "serialNumber": "Serial number",
+        "UDN": "UUID-based unique device name"
+      },
+      "notes": "Standard UPnP root device description. Used by media renderers."
+    },
+    {
+      "name": "aios_device.xml",
+      "url": "http://{ip}:60006/upnp/desc/aios_device/aios_device.xml",
+      "method": "GET",
+      "expected_fields": {
+        "friendlyName": "HEOS device name",
+        "modelName": "HEOS board model",
+        "modelNumber": "HEOS firmware version",
+        "serialNumber": "HEOS serial"
+      },
+      "notes": "HEOS/AIOS network board UPnP descriptor. May contain HEOS-specific firmware version."
+    }
+  ]
+}

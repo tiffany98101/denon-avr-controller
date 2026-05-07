@@ -1,0 +1,47 @@
+{
+  "surface": "HTML/JS Web UI assets",
+  "base_url": "http://{ip}/",
+  "notes": [
+    "Source: Live scrape of AVR-X1600H web UI, 2026-05-07",
+    "All are HTTP GET (read-only). Port 80.",
+    "Entry point is /general/general.html. JS/CSS/XML links are followed one level.",
+    "Bug B-1 fix required: src= and href= HTML attributes now parsed.",
+    "Bug B-2 fix required: JS code fragments no longer mistaken for URL paths."
+  ],
+  "endpoints": [
+    {
+      "name": "general.html",
+      "url": "http://{ip}/general/general.html",
+      "method": "GET",
+      "expected_fields": {
+        "Firmware Version": "AVR firmware version string",
+        "DTS Version": "DTS decoder version",
+        "Input Signal": "Current input signal format",
+        "Sound Mode": "Active surround sound mode",
+        "HDMI Signal Info": "HDMI signal metadata"
+      },
+      "notes": "Primary web UI entry point. Serves status and firmware info."
+    },
+    {
+      "name": "ajax/globals/get_config",
+      "url": "http://{ip}/ajax/globals/get_config?type=N",
+      "method": "GET",
+      "expected_fields": {},
+      "notes": "AJAX endpoint discovered from web UI JS. Same as AppCommand GET surface on port 10443 (HTTPS)."
+    },
+    {
+      "name": "JS bundles (minified)",
+      "url": "http://{ip}/js/*.js",
+      "method": "GET",
+      "expected_fields": {},
+      "notes": "jQuery and app JS bundles. Scraped for further endpoint discovery. Bug B-2: JS token splitter must reject code fragments."
+    },
+    {
+      "name": "CSS assets",
+      "url": "http://{ip}/css/*.css",
+      "method": "GET",
+      "expected_fields": {},
+      "notes": "Stylesheet assets. Discovered via href= attribute extraction (Bug B-1 fix)."
+    }
+  ]
+}

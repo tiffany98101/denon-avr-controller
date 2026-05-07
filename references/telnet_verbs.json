@@ -1,0 +1,250 @@
+{
+  "surface": "Telnet",
+  "protocol": "TCP/23",
+  "notes": [
+    "Source: Denon AVR Control Protocol specification (community reference), existing tool, Home Assistant denonavr integration",
+    "All commands end with \\r (carriage return). Response lines end with \\r.",
+    "Query form: append ? to the command mnemonic.",
+    "Rate limit: 100ms minimum between probes per safety constraint."
+  ],
+  "commands": [
+    {
+      "name": "PW?",
+      "query_syntax": "PW?\r",
+      "expected_response": "PWSTANDBY | PWON",
+      "field": "main_power",
+      "notes": "Main unit power state. Redundant with type-4 XML but raw telnet form."
+    },
+    {
+      "name": "MV?",
+      "query_syntax": "MV?\r",
+      "expected_response": "MV{value} e.g. MV535",
+      "field": "main_volume_raw",
+      "notes": "Main zone volume raw. Redundant with type-12 XML."
+    },
+    {
+      "name": "MU?",
+      "query_syntax": "MU?\r",
+      "expected_response": "MUON | MUOFF",
+      "field": "main_mute",
+      "notes": "Main zone mute. Redundant with type-12 XML."
+    },
+    {
+      "name": "ZM?",
+      "query_syntax": "ZM?\r",
+      "expected_response": "ZMON | ZMOFF",
+      "field": "main_zone_power",
+      "notes": "Main zone power (ZM is zone-specific; PW is unit-wide)."
+    },
+    {
+      "name": "Z2?",
+      "query_syntax": "Z2?\r",
+      "expected_response": "Z2ON | Z2OFF | Z2{source}",
+      "field": "zone2_power_or_source",
+      "notes": "Zone 2 power/source composite. May return source name instead of on/off."
+    },
+    {
+      "name": "Z2MU?",
+      "query_syntax": "Z2MU?\r",
+      "expected_response": "Z2MUON | Z2MUOFF",
+      "field": "zone2_mute",
+      "notes": "Zone 2 mute state."
+    },
+    {
+      "name": "Z2MV?",
+      "query_syntax": "Z2MV?\r",
+      "expected_response": "Z2MV{value}",
+      "field": "zone2_volume_raw",
+      "notes": "Zone 2 volume raw."
+    },
+    {
+      "name": "SI?",
+      "query_syntax": "SI?\r",
+      "expected_response": "SI{source_name}",
+      "field": "main_source_name_telnet",
+      "notes": "Already covered in signal-debug."
+    },
+    {
+      "name": "MS?",
+      "query_syntax": "MS?\r",
+      "expected_response": "MS{mode_name}",
+      "field": "sound_mode_telnet",
+      "notes": "Already covered in signal-debug and data collection."
+    },
+    {
+      "name": "SLP?",
+      "query_syntax": "SLP?\r",
+      "expected_response": "SLPOFF | SLP{mmm}",
+      "field": "main_zone_sleep",
+      "notes": "Already covered."
+    },
+    {
+      "name": "Z2SLP?",
+      "query_syntax": "Z2SLP?\r",
+      "expected_response": "Z2SLPOFF | Z2SLP{mmm}",
+      "field": "zone2_sleep",
+      "notes": "Already covered."
+    },
+    {
+      "name": "PSDYNEQ ?",
+      "query_syntax": "PSDYNEQ ?\r",
+      "expected_response": "PSDYNEQ ON | PSDYNEQ OFF",
+      "field": "dynamic_eq",
+      "notes": "Already covered."
+    },
+    {
+      "name": "PSDYNVOL ?",
+      "query_syntax": "PSDYNVOL ?\r",
+      "expected_response": "PSDYNVOL OFF | PSDYNVOL LIT | PSDYNVOL MED | PSDYNVOL HEV",
+      "field": "dynamic_volume",
+      "notes": "Already covered."
+    },
+    {
+      "name": "PSCINEMA EQ. ?",
+      "query_syntax": "PSCINEMA EQ. ?\r",
+      "expected_response": "PSCINEMA EQ.ON | PSCINEMA EQ.OFF",
+      "field": "cinema_eq",
+      "notes": "Already covered."
+    },
+    {
+      "name": "PSMULTEQ ?",
+      "query_syntax": "PSMULTEQ ?\r",
+      "expected_response": "PSMULTEQ:AUDYSSEY | PSMULTEQ:BYP.LR | PSMULTEQ:FLAT | PSMULTEQ:MANUAL | PSMULTEQ:OFF",
+      "field": "multeq",
+      "notes": "Already covered."
+    },
+    {
+      "name": "PSBAS ?",
+      "query_syntax": "PSBAS ?\r",
+      "expected_response": "PSBAS {50=0dB range}",
+      "field": "bass",
+      "notes": "Already covered."
+    },
+    {
+      "name": "PSTRE ?",
+      "query_syntax": "PSTRE ?\r",
+      "expected_response": "PSTRE {50=0dB range}",
+      "field": "treble",
+      "notes": "Already covered."
+    },
+    {
+      "name": "PSSWR ?",
+      "query_syntax": "PSSWR ?\r",
+      "expected_response": "PSSWR ON | PSSWR OFF",
+      "field": "subwoofer_enabled",
+      "notes": "Subwoofer enable/disable. Read-only query."
+    },
+    {
+      "name": "PSSWL ?",
+      "query_syntax": "PSSWL ?\r",
+      "expected_response": "PSSWL {level}",
+      "field": "subwoofer_level",
+      "notes": "Subwoofer level (±12 dB range)."
+    },
+    {
+      "name": "PSLOM ?",
+      "query_syntax": "PSLOM ?\r",
+      "expected_response": "PSLOM ON | PSLOM OFF",
+      "field": "loudness_management",
+      "notes": "Loudness Management on/off."
+    },
+    {
+      "name": "PSDIL ?",
+      "query_syntax": "PSDIL ?\r",
+      "expected_response": "PSDIL {level}",
+      "field": "dialog_level",
+      "notes": "Dialog level enhancement."
+    },
+    {
+      "name": "SPPR ?",
+      "query_syntax": "SPPR ?\r",
+      "expected_response": "SPPR1 | SPPR2",
+      "field": "speaker_preset",
+      "notes": "Speaker preset (1 or 2)."
+    },
+    {
+      "name": "VSASP ?",
+      "query_syntax": "VSASP ?\r",
+      "expected_response": "VSASPNRM | VSASPFUL",
+      "field": "video_aspect",
+      "notes": "Video aspect ratio setting."
+    },
+    {
+      "name": "VSMONI ?",
+      "query_syntax": "VSMONI ?\r",
+      "expected_response": "VSMONIAUTO | VSMONI1 | VSMONI2",
+      "field": "hdmi_monitor",
+      "notes": "HDMI monitor output assignment."
+    },
+    {
+      "name": "VSSC ?",
+      "query_syntax": "VSSC ?\r",
+      "expected_response": "VSSCAUTO | VSSC48P | VSSC10P | ...",
+      "field": "video_resolution",
+      "notes": "Video output resolution/scaling."
+    },
+    {
+      "name": "VSSCH ?",
+      "query_syntax": "VSSCH ?\r",
+      "expected_response": "VSSCHAUTO | VSSCH48P | ...",
+      "field": "hdmi_resolution",
+      "notes": "HDMI scaler output resolution."
+    },
+    {
+      "name": "OPINFINS ?",
+      "query_syntax": "OPINFINS ?\r",
+      "expected_response": "OPINFINS{info}",
+      "field": "input_signal_info",
+      "notes": "Already covered in signal-debug."
+    },
+    {
+      "name": "OPINFASP ?",
+      "query_syntax": "OPINFASP ?\r",
+      "expected_response": "OPINFASP{info}",
+      "field": "aspect_ratio_info",
+      "notes": "Already covered in signal-debug."
+    },
+    {
+      "name": "TFAN?",
+      "query_syntax": "TFAN?\r",
+      "expected_response": "TFAN{frequency}",
+      "field": "tuner_frequency",
+      "notes": "Tuner frequency. Only meaningful when source is Tuner."
+    },
+    {
+      "name": "TFANNAME?",
+      "query_syntax": "TFANNAME?\r",
+      "expected_response": "TFANNAME{station_name}",
+      "field": "tuner_station_name",
+      "notes": "RDS station name if available."
+    },
+    {
+      "name": "NSE?",
+      "query_syntax": "NSE?\r",
+      "expected_response": "NSE{line_index}{text}",
+      "field": "on_screen_display",
+      "notes": "On-screen display text lines. Read-only."
+    },
+    {
+      "name": "NSFRN?",
+      "query_syntax": "NSFRN?\r",
+      "expected_response": "NSFRN{name}",
+      "field": "net_audio_friendly_name",
+      "notes": "Network audio stream friendly name."
+    },
+    {
+      "name": "CV?",
+      "query_syntax": "CV?\r",
+      "expected_response": "CVFL {level} CVCNL {level} ...",
+      "field": "channel_levels",
+      "notes": "Per-channel volume trims. Multiple response lines expected."
+    },
+    {
+      "name": "SSSOD ?",
+      "query_syntax": "SSSOD ?\r",
+      "expected_response": "SSSODDEL | SSSODADD",
+      "field": "source_delete_status",
+      "notes": "Source visibility status."
+    }
+  ]
+}

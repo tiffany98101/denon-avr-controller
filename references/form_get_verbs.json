@@ -1,0 +1,81 @@
+{
+  "surface": "Form GET endpoints",
+  "base_url": "http://{ip}/goform/",
+  "notes": [
+    "Source: Community Denon AVR research, ol-iver/denonavr, Home Assistant denonavr integration",
+    "All are HTTP GET (read-only).",
+    "Port 80 for /goform/ on most Denon AVR-X models; port 8080 also sometimes responds.",
+    "Responses are XML."
+  ],
+  "endpoints": [
+    {
+      "name": "formNetAudio_StatusXml.xml",
+      "url": "http://{ip}/goform/formNetAudio_StatusXml.xml",
+      "expected_fields": {
+        "Song": "Now-playing track title",
+        "Artist": "Now-playing artist",
+        "Album": "Now-playing album",
+        "Station": "Internet radio station name",
+        "Service": "Streaming service name",
+        "PlayStatus": "Play/pause/stop"
+      },
+      "notes": "Already covered. Best for now-playing metadata."
+    },
+    {
+      "name": "formMainZone_MainZoneXml.xml",
+      "url": "http://{ip}/goform/formMainZone_MainZoneXml.xml",
+      "expected_fields": {
+        "Power": "Main zone power",
+        "InputFuncSelect": "Active input source name",
+        "VolumeDisplay": "Volume as displayed",
+        "MasterVolume": "Volume value",
+        "Mute": "Mute state",
+        "SurrMode": "Surround mode"
+      },
+      "notes": "Comprehensive main zone status. Overlaps with get_config but different format."
+    },
+    {
+      "name": "formMainZone_MainZoneXmlStatus.xml",
+      "url": "http://{ip}/goform/formMainZone_MainZoneXmlStatus.xml",
+      "expected_fields": {
+        "InputFuncSelect": "Active input",
+        "MasterVolume": "Volume",
+        "Mute": "Mute",
+        "Power": "Power"
+      },
+      "notes": "Lighter main zone status endpoint."
+    },
+    {
+      "name": "formZone2_Zone2Xml.xml",
+      "url": "http://{ip}/goform/formZone2_Zone2Xml.xml",
+      "expected_fields": {
+        "Power": "Zone 2 power",
+        "InputFuncSelect": "Zone 2 active input",
+        "MasterVolume": "Zone 2 volume",
+        "Mute": "Zone 2 mute"
+      },
+      "notes": "Zone 2 comprehensive status."
+    },
+    {
+      "name": "formZone2_Zone2XmlStatus.xml",
+      "url": "http://{ip}/goform/formZone2_Zone2XmlStatus.xml",
+      "expected_fields": {
+        "Power": "Zone 2 power",
+        "InputFuncSelect": "Zone 2 active input",
+        "MasterVolume": "Zone 2 volume",
+        "Mute": "Zone 2 mute"
+      },
+      "notes": "Lighter Zone 2 status endpoint."
+    },
+    {
+      "name": "formTuner_TunerXml.xml",
+      "url": "http://{ip}/goform/formTuner_TunerXml.xml",
+      "expected_fields": {
+        "Band": "AM or FM",
+        "Frequency": "Tuner frequency",
+        "StationName": "RDS station name"
+      },
+      "notes": "Tuner status. Only relevant when source is Tuner."
+    }
+  ]
+}

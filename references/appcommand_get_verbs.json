@@ -1,0 +1,93 @@
+{
+  "surface": "AppCommand GET (get_config)",
+  "base_url": "https://{ip}:10443/ajax/globals/get_config?type=N",
+  "notes": [
+    "Source: Live probe of AVR-X1600H at 192.168.1.162 (HEOS 3.88.614), 2026-05-07",
+    "All are HTTPS GET (read-only). Port 10443.",
+    "Types 0–30 were swept; types with data are listed here.",
+    "Type numbers are not officially documented; names are inferred from XML content."
+  ],
+  "endpoints": [
+    {
+      "type": 3,
+      "name": "FriendlyName",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=3",
+      "expected_fields": {
+        "FriendlyName": "User-assigned receiver name (e.g. 'Denon AVR-X1600H')"
+      },
+      "notes": "Identity. First type probed."
+    },
+    {
+      "type": 4,
+      "name": "Power/Zone",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=4",
+      "expected_fields": {
+        "Power": "Main zone power (ON/STANDBY)",
+        "ZonePower": "Main zone power (ZMON/ZMOFF)",
+        "Zone2Power": "Zone 2 power"
+      },
+      "notes": "Main zone and Zone 2 power state."
+    },
+    {
+      "type": 6,
+      "name": "ZoneNames",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=6",
+      "expected_fields": {
+        "ZoneName": "Display name for each zone"
+      },
+      "notes": "User-configured zone names."
+    },
+    {
+      "type": 7,
+      "name": "SourceList",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=7",
+      "expected_fields": {
+        "SourceList.Zone.Source.Name": "Source display names (repeated — one per source)",
+        "SourceList.Zone.Source.Index": "Source index numbers"
+      },
+      "notes": "Full input source list. Bug B-4 fix required: repeated siblings now emitted as JSON array."
+    },
+    {
+      "type": 12,
+      "name": "Volume/Mute",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=12",
+      "expected_fields": {
+        "MasterVolume": "Main zone volume (dB string, e.g. '-26.5dB')",
+        "Mute": "Main zone mute (on/off)",
+        "Zone2Volume": "Zone 2 volume",
+        "Zone2Mute": "Zone 2 mute"
+      },
+      "notes": "Live volume and mute for all zones."
+    },
+    {
+      "type": 1,
+      "name": "Unknown-1",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=1",
+      "expected_fields": {},
+      "notes": "Returns data; content not yet mapped."
+    },
+    {
+      "type": 2,
+      "name": "Unknown-2",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=2",
+      "expected_fields": {},
+      "notes": "Returns data; content not yet mapped."
+    },
+    {
+      "type": 5,
+      "name": "Unknown-5",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=5",
+      "expected_fields": {},
+      "notes": "Returns data; content not yet mapped."
+    },
+    {
+      "type": 13,
+      "name": "StringIDs",
+      "url": "https://{ip}:10443/ajax/globals/get_config?type=13",
+      "expected_fields": {
+        "StringID": "Large list of UI string identifiers"
+      },
+      "notes": "UI localisation string table. Very large response (~4KB). Read-only."
+    }
+  ]
+}
