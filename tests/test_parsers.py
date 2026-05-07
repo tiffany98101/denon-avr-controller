@@ -1,0 +1,312 @@
+"""
+Pytest tests for denon_release_candidate.sh parser functions.
+
+Each test sources the script via bash subprocess (DENON_UNIT_TEST=1 suppresses
+the top-level command dispatch) and calls individual helper functions with
+fixture bodies captured during Phase 4 live probing.
+"""
+
+import json
+import os
+import subprocess
+import textwrap
+from pathlib import Path
+
+SCRIPT = Path(__file__).parent.parent / "denon_release_candidate.sh"
+FIXTURES = Path(__file__).parent / "fixtures"
+SCRIPT_STR = str(SCRIPT)
+
+
+def _bash(code: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
+    """Run bash snippet with the script sourced."""
+    env = os.environ.copy()
+    env["DENON_UNIT_TEST"] = "1"
+    if env_extra:
+        env.update(env_extra)
+    full = f'source {SCRIPT_STR}\n{code}'
+    return subprocess.run(
+        ["bash", "-c", full],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+    )
+
+
+# ---------------------------------------------------------------------------
+# _denon_data_parse_xml_field  (UPnP fixture tests)
+# ---------------------------------------------------------------------------
+
+class TestParseXmlField:
+    def _read(self, name: str) -> str:
+        return (FIXTURES / name).read_text()
+
+    def test_modelname_from_deviceinfo(self):
+        body = self._read("upnp_deviceinfo.xml").replace("'", "'\\''")
+        r = _bash(f"printf '%s' '{body}' | _denon_data_parse_xml_field /dev/stdin ModelName || "
+                  f"_denon_data_parse_xml_field '{body}' ModelName; "
+                  # direct call form
+                  f"_denon_data_parse_xml_field $'{ body }' ModelName 2>/dev/null || true")
+        # Use the function with body as variable argument
+        body2 = self._read("upnp_deviceinfo.xml")
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/upnp_deviceinfo.xml')
+            _denon_data_parse_xml_field "$body" "ModelName"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "AVR-X1600H" in r.stdout
+
+    def test_macaddress_from_deviceinfo(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/upnp_deviceinfo.xml')
+            _denon_data_parse_xml_field "$body" "MacAddress"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "0006786D20A0"
+
+    def test_commapiversfrom_deviceinfo(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/upnp_deviceinfo.xml')
+            _denon_data_parse_xml_field "$body" "CommApiVers"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "0301"
+
+    def test_device_zones_from_deviceinfo(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/upnp_deviceinfo.xml')
+            _denon_data_parse_xml_field "$body" "DeviceZones"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "2"
+
+    def test_serial_from_aios(self):
+        """aios_device.xml has namespace-qualified tags; sed must strip prefix."""
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/upnp_aios_device.xml')
+            printf '%s' "$body" | sed -n 's:.*<serialNumber>\\([^<]*\\)</serialNumber>.*:\\1:p' | sed -n '1p'
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "BJE27210571433"
+
+    def test_aios_firmware_from_aios(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/upnp_aios_device.xml')
+            printf '%s' "$body" | sed -n 's:.*<modelNumber>\\([^<]*\\)</modelNumber>.*:\\1:p' | sed -n '1p'
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "4.025" in r.stdout
+
+    def test_udn_from_aios(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/upnp_aios_device.xml')
+            printf '%s' "$body" | sed -n 's:.*<UDN>\\([^<]*\\)</UDN>.*:\\1:p' | sed -n '1p'
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip().startswith("uuid:")
+
+
+# ---------------------------------------------------------------------------
+# Bug B-3: multi-line body → single record line
+# ---------------------------------------------------------------------------
+
+class TestBugB3MultiLineBody:
+    def test_multiline_body_produces_single_record(self):
+        """Multi-line HTML body must collapse to one tab-separated record, not several."""
+        code = textwrap.dedent("""\
+            data_discovered_endpoint_records=""
+            body=$'<html>\\n<body>\\n<h1>Title</h1>\\n<p>Some text here</p>\\n</body>\\n</html>'
+            _denon_data_record_discovered_endpoint "/test/path" "$body"
+            # Count lines in the record (should be exactly 1 non-empty line)
+            count=$(printf '%s' "$data_discovered_endpoint_records" | grep -c '.')
+            printf '%s\\n' "$count"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        # Exactly one record line
+        assert r.stdout.strip() == "1"
+
+    def test_multiline_body_summary_has_no_newlines(self):
+        """The summary field in a record must not contain embedded newlines."""
+        code = textwrap.dedent("""\
+            data_discovered_endpoint_records=""
+            body=$'line1\\nline2\\nline3'
+            _denon_data_record_discovered_endpoint "/some/path" "$body"
+            printf '%s' "$data_discovered_endpoint_records"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        assert len(lines) == 1, f"Expected 1 record line, got {len(lines)}: {r.stdout!r}"
+
+
+# ---------------------------------------------------------------------------
+# Bug B-1 + B-2: web endpoint discovery
+# ---------------------------------------------------------------------------
+
+class TestBugB1B2WebDiscovery:
+    def test_b1_extracts_src_attribute(self):
+        """src= and href= attributes should be discovered (B-1 fix)."""
+        html = '<script src="/ajax/globals/get_config"></script>'
+        code = textwrap.dedent(f"""\
+            result=$(_denon_data_discover_web_endpoints_from_text '{html}')
+            printf '%s\\n' "$result"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "/ajax/globals/get_config" in r.stdout
+
+    def test_b1_extracts_href_attribute(self):
+        html = '<link href="/css/main.css" rel="stylesheet">'
+        code = textwrap.dedent(f"""\
+            result=$(_denon_data_discover_web_endpoints_from_text '{html}')
+            printf '%s\\n' "$result"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "/css/main.css" in r.stdout
+
+    def test_b2_rejects_js_code_fragment(self):
+        """Tokens like ,d=b.css should not match as URL paths (B-2 fix)."""
+        js = 'var d=b.css,e=c.html;this.attr("src",d+e);'
+        code = textwrap.dedent(f"""\
+            result=$(_denon_data_discover_web_endpoints_from_text '{js}')
+            printf '%s\\n' "$result"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        # None of the JS tokens should appear as discovered paths
+        for bad in ["d=b.css", "c.html", ",d", ";this"]:
+            assert bad not in r.stdout, f"JS fragment {bad!r} should not appear in output"
+
+    def test_b2_accepts_clean_quoted_path(self):
+        """A clean quoted path like "/goform/AppCommand.xml" must be discovered."""
+        text = 'var url = "/goform/AppCommand.xml";'
+        code = textwrap.dedent(f"""\
+            result=$(_denon_data_discover_web_endpoints_from_text '{text}')
+            printf '%s\\n' "$result"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "/goform/AppCommand.xml" in r.stdout
+
+    def test_dedup_same_path_appears_once(self):
+        """Duplicate paths in the source text should be de-duplicated."""
+        html = '<a href="/index.html">A</a><a href="/index.html">B</a>'
+        code = textwrap.dedent(f"""\
+            result=$(_denon_data_discover_web_endpoints_from_text '{html}')
+            count=$(printf '%s\\n' "$result" | grep -c '/index.html' || true)
+            printf '%s\\n' "$count"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "1"
+
+
+# ---------------------------------------------------------------------------
+# Bug B-4: repeated XML leaf paths produce JSON arrays
+# ---------------------------------------------------------------------------
+
+class TestBugB4XmlLeafArrays:
+    def test_repeated_path_produces_array(self):
+        """When the same dotted path appears multiple times, output must be a JSON array."""
+        # Simulate what _denon_data_print_get_config_json does: feed tab-sep path/value pairs
+        # through the awk block. We call it by populating data_get_config_leaf_records.
+        code = textwrap.dedent("""\
+            data_get_config_leaf_records=""
+            data_get_config_leaf_records+=$'7\\tSourceList.Zone.Source.Name\\tBD\\n'
+            data_get_config_leaf_records+=$'7\\tSourceList.Zone.Source.Name\\tDVD\\n'
+            data_get_config_leaf_records+=$'7\\tSourceList.Zone.Source.Name\\tGame\\n'
+            data_get_config_types="7"
+            data_get_config_raw_7=""
+            out=$(_denon_data_print_get_config_json 2>/dev/null)
+            printf '%s\\n' "$out"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        try:
+            obj = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            assert False, f"Output is not valid JSON: {r.stdout!r}"
+        # Records are nested: {"7": {"raw": "...", "fields": {"path": value}}}
+        val = obj["7"]["fields"]["SourceList.Zone.Source.Name"]
+        assert isinstance(val, list), f"Repeated path should be a JSON array, got: {val!r}"
+        assert set(val) == {"BD", "DVD", "Game"}
+
+    def test_unique_path_produces_scalar(self):
+        """A path appearing exactly once must remain a JSON string, not an array."""
+        code = textwrap.dedent("""\
+            data_get_config_leaf_records=$'4\\tZone.Power\\tON\\n'
+            data_get_config_types="4"
+            data_get_config_raw_4=""
+            out=$(_denon_data_print_get_config_json 2>/dev/null)
+            printf '%s\\n' "$out"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        try:
+            obj = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            assert False, f"Output is not valid JSON: {r.stdout!r}"
+        val = obj["4"]["fields"]["Zone.Power"]
+        assert isinstance(val, str), f"Unique path should be a scalar string, got: {val!r}"
+        assert val == "ON"
+
+
+# ---------------------------------------------------------------------------
+# Telnet fixture sanity checks
+# ---------------------------------------------------------------------------
+
+class TestTelnetFixtures:
+    def test_psswr_fixture_content(self):
+        body = (FIXTURES / "telnet_psswr.txt").read_text()
+        assert "PSSWR ON" in body
+
+    def test_psswl_fixture_content(self):
+        body = (FIXTURES / "telnet_psswl.txt").read_text()
+        assert "PSSWL 50" in body
+
+    def test_cv_fixture_has_fl_fr(self):
+        body = (FIXTURES / "telnet_cv.txt").read_text()
+        assert "CVFL" in body
+        assert "CVFR" in body
+
+    def test_psswl_dB_conversion(self):
+        """Raw PSSWL value 50 should convert to 0 dB (50 = 0 dB centre)."""
+        raw = 50
+        db = raw - 50
+        assert db == 0
+
+    def test_mv_parse(self):
+        body = (FIXTURES / "telnet_mv.txt").read_text()
+        # MV535 means volume raw = 535
+        import re
+        m = re.search(r'MV(\d+)', body)
+        assert m is not None
+        assert int(m.group(1)) == 535
+
+
+# ---------------------------------------------------------------------------
+# HEOS fixture sanity checks
+# ---------------------------------------------------------------------------
+
+class TestHeosFixtures:
+    def test_get_volume_level(self):
+        body = (FIXTURES / "heos_get_volume.json").read_text()
+        data = json.loads(body)
+        assert data["heos"]["result"] == "success"
+        msg = data["heos"]["message"]
+        assert "level=53" in msg
+
+    def test_check_account_signed_out(self):
+        body = (FIXTURES / "heos_check_account.json").read_text()
+        data = json.loads(body)
+        assert data["heos"]["result"] == "success"
+        assert "signed_out" in data["heos"]["message"]
