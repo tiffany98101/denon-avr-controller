@@ -1,0 +1,405 @@
+{
+  "target": "192.168.1.162",
+  "rate_limit_ms": 100,
+  "error_rate_limit_ms": 250,
+  "timeout_s": 5,
+  "notes": [
+    "All probes are read-only per safety constraints.",
+    "AppCommand GET types 0-30 already covered by existing tool; not repeated here.",
+    "Only unqueried verbs from the reference documents are listed.",
+    "Estimated wall-clock time at 100ms spacing: ~120 probes * 0.1s + HTTP RTTs = ~30-60s total."
+  ],
+  "estimated_probe_count": 43,
+  "estimated_wall_clock_seconds": 60,
+  "probes": [
+    {
+      "id": "upnp_deviceinfo",
+      "surface": "upnp",
+      "verb": "Deviceinfo.xml",
+      "request": "GET http://192.168.1.162:8080/goform/Deviceinfo.xml",
+      "method": "GET",
+      "url": "http://192.168.1.162:8080/goform/Deviceinfo.xml",
+      "expected_parse_path": ["UpgradeVersion", "CommApiVers", "MacAddress", "ModelName"],
+      "expected_failure_modes": ["connection_refused", "empty_body", "404"],
+      "priority": "high"
+    },
+    {
+      "id": "upnp_description",
+      "surface": "upnp",
+      "verb": "description.xml",
+      "request": "GET http://192.168.1.162:8080/description.xml",
+      "method": "GET",
+      "url": "http://192.168.1.162:8080/description.xml",
+      "expected_parse_path": ["friendlyName", "manufacturer", "modelName", "serialNumber", "UDN"],
+      "expected_failure_modes": ["connection_refused", "empty_body", "404"],
+      "priority": "high"
+    },
+    {
+      "id": "upnp_aios_device",
+      "surface": "upnp",
+      "verb": "aios_device.xml",
+      "request": "GET http://192.168.1.162:60006/upnp/desc/aios_device/aios_device.xml",
+      "method": "GET",
+      "url": "http://192.168.1.162:60006/upnp/desc/aios_device/aios_device.xml",
+      "expected_parse_path": ["friendlyName", "modelName", "modelNumber"],
+      "expected_failure_modes": ["connection_refused", "empty_body", "404"],
+      "priority": "high"
+    },
+    {
+      "id": "appcommand_GetAllZonePowerStatus",
+      "surface": "appcommand_post",
+      "verb": "GetAllZonePowerStatus",
+      "request": "POST http://192.168.1.162/goform/AppCommand.xml",
+      "method": "POST",
+      "url": "http://192.168.1.162/goform/AppCommand.xml",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">GetAllZonePowerStatus</cmd></tx>",
+      "expected_parse_path": ["zone/@power"],
+      "expected_failure_modes": ["empty_body", "document_error", "404"],
+      "priority": "high"
+    },
+    {
+      "id": "appcommand_GetAllZoneVolume",
+      "surface": "appcommand_post",
+      "verb": "GetAllZoneVolume",
+      "request": "POST http://192.168.1.162/goform/AppCommand.xml",
+      "method": "POST",
+      "url": "http://192.168.1.162/goform/AppCommand.xml",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">GetAllZoneVolume</cmd></tx>",
+      "expected_parse_path": ["zone/@volume"],
+      "expected_failure_modes": ["empty_body", "document_error", "404"],
+      "priority": "high"
+    },
+    {
+      "id": "appcommand_GetAllZoneSource",
+      "surface": "appcommand_post",
+      "verb": "GetAllZoneSource",
+      "request": "POST http://192.168.1.162/goform/AppCommand.xml",
+      "method": "POST",
+      "url": "http://192.168.1.162/goform/AppCommand.xml",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">GetAllZoneSource</cmd></tx>",
+      "expected_parse_path": ["zone/@source"],
+      "expected_failure_modes": ["empty_body", "document_error", "404"],
+      "priority": "high"
+    },
+    {
+      "id": "appcommand_GetNetAudioStatus",
+      "surface": "appcommand_post",
+      "verb": "GetNetAudioStatus",
+      "request": "POST http://192.168.1.162/goform/AppCommand.xml",
+      "method": "POST",
+      "url": "http://192.168.1.162/goform/AppCommand.xml",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">GetNetAudioStatus</cmd></tx>",
+      "expected_parse_path": ["song", "artist", "album"],
+      "expected_failure_modes": ["empty_body", "document_error", "404"],
+      "priority": "medium"
+    },
+    {
+      "id": "appcommand_GetTunerStatus",
+      "surface": "appcommand_post",
+      "verb": "GetTunerStatus",
+      "request": "POST http://192.168.1.162/goform/AppCommand.xml",
+      "method": "POST",
+      "url": "http://192.168.1.162/goform/AppCommand.xml",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">GetTunerStatus</cmd></tx>",
+      "expected_parse_path": ["band", "frequency"],
+      "expected_failure_modes": ["empty_body", "document_error", "404"],
+      "priority": "medium"
+    },
+    {
+      "id": "appcommand_GetSurroundModeStatus",
+      "surface": "appcommand_post",
+      "verb": "GetSurroundModeStatus",
+      "request": "POST http://192.168.1.162/goform/AppCommand.xml",
+      "method": "POST",
+      "url": "http://192.168.1.162/goform/AppCommand.xml",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">GetSurroundModeStatus</cmd></tx>",
+      "expected_parse_path": ["surround"],
+      "expected_failure_modes": ["empty_body", "document_error", "404"],
+      "priority": "medium"
+    },
+    {
+      "id": "appcommand_GetSoftwareVersion",
+      "surface": "appcommand_post",
+      "verb": "GetSoftwareVersion",
+      "request": "POST http://192.168.1.162/goform/AppCommand.xml",
+      "method": "POST",
+      "url": "http://192.168.1.162/goform/AppCommand.xml",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">GetSoftwareVersion</cmd></tx>",
+      "expected_parse_path": ["SoftwareVersion"],
+      "expected_failure_modes": ["empty_body", "document_error", "404"],
+      "priority": "high"
+    },
+    {
+      "id": "appcommand_GetModelName",
+      "surface": "appcommand_post",
+      "verb": "GetModelName",
+      "request": "POST http://192.168.1.162/goform/AppCommand.xml",
+      "method": "POST",
+      "url": "http://192.168.1.162/goform/AppCommand.xml",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">GetModelName</cmd></tx>",
+      "expected_parse_path": ["ModelName"],
+      "expected_failure_modes": ["empty_body", "document_error", "404"],
+      "priority": "medium"
+    },
+    {
+      "id": "form_mainzonexml",
+      "surface": "form_get",
+      "verb": "formMainZone_MainZoneXml.xml",
+      "request": "GET http://192.168.1.162/goform/formMainZone_MainZoneXml.xml",
+      "method": "GET",
+      "url": "http://192.168.1.162/goform/formMainZone_MainZoneXml.xml",
+      "expected_parse_path": ["Power", "InputFuncSelect", "MasterVolume", "Mute"],
+      "expected_failure_modes": ["empty_body", "404", "connection_refused"],
+      "priority": "high"
+    },
+    {
+      "id": "form_mainzonexml_status",
+      "surface": "form_get",
+      "verb": "formMainZone_MainZoneXmlStatus.xml",
+      "request": "GET http://192.168.1.162/goform/formMainZone_MainZoneXmlStatus.xml",
+      "method": "GET",
+      "url": "http://192.168.1.162/goform/formMainZone_MainZoneXmlStatus.xml",
+      "expected_parse_path": ["Power", "InputFuncSelect", "MasterVolume"],
+      "expected_failure_modes": ["empty_body", "404", "connection_refused"],
+      "priority": "medium"
+    },
+    {
+      "id": "form_zone2xml",
+      "surface": "form_get",
+      "verb": "formZone2_Zone2Xml.xml",
+      "request": "GET http://192.168.1.162/goform/formZone2_Zone2Xml.xml",
+      "method": "GET",
+      "url": "http://192.168.1.162/goform/formZone2_Zone2Xml.xml",
+      "expected_parse_path": ["Power", "InputFuncSelect", "MasterVolume", "Mute"],
+      "expected_failure_modes": ["empty_body", "404", "connection_refused"],
+      "priority": "high"
+    },
+    {
+      "id": "form_zone2xml_status",
+      "surface": "form_get",
+      "verb": "formZone2_Zone2XmlStatus.xml",
+      "request": "GET http://192.168.1.162/goform/formZone2_Zone2XmlStatus.xml",
+      "method": "GET",
+      "url": "http://192.168.1.162/goform/formZone2_Zone2XmlStatus.xml",
+      "expected_parse_path": ["Power", "InputFuncSelect", "MasterVolume"],
+      "expected_failure_modes": ["empty_body", "404", "connection_refused"],
+      "priority": "medium"
+    },
+    {
+      "id": "form_tunerxml",
+      "surface": "form_get",
+      "verb": "formTuner_TunerXml.xml",
+      "request": "GET http://192.168.1.162/goform/formTuner_TunerXml.xml",
+      "method": "GET",
+      "url": "http://192.168.1.162/goform/formTuner_TunerXml.xml",
+      "expected_parse_path": ["Band", "Frequency"],
+      "expected_failure_modes": ["empty_body", "404", "connection_refused"],
+      "priority": "low"
+    },
+    {
+      "id": "telnet_PW",
+      "surface": "telnet",
+      "verb": "PW?",
+      "request": "PW?\r",
+      "expected_response_prefix": "PW",
+      "expected_parse_path": ["main_power"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_MV",
+      "surface": "telnet",
+      "verb": "MV?",
+      "request": "MV?\r",
+      "expected_response_prefix": "MV",
+      "expected_parse_path": ["main_volume_raw"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_MU",
+      "surface": "telnet",
+      "verb": "MU?",
+      "request": "MU?\r",
+      "expected_response_prefix": "MU",
+      "expected_parse_path": ["main_mute"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_ZM",
+      "surface": "telnet",
+      "verb": "ZM?",
+      "request": "ZM?\r",
+      "expected_response_prefix": "ZM",
+      "expected_parse_path": ["main_zone_power"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_Z2",
+      "surface": "telnet",
+      "verb": "Z2?",
+      "request": "Z2?\r",
+      "expected_response_prefix": "Z2",
+      "expected_parse_path": ["zone2_power_or_source"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_Z2MU",
+      "surface": "telnet",
+      "verb": "Z2MU?",
+      "request": "Z2MU?\r",
+      "expected_response_prefix": "Z2MU",
+      "expected_parse_path": ["zone2_mute"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_Z2MV",
+      "surface": "telnet",
+      "verb": "Z2MV?",
+      "request": "Z2MV?\r",
+      "expected_response_prefix": "Z2MV",
+      "expected_parse_path": ["zone2_volume_raw"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_PSSWR",
+      "surface": "telnet",
+      "verb": "PSSWR ?",
+      "request": "PSSWR ?\r",
+      "expected_response_prefix": "PSSWR",
+      "expected_parse_path": ["subwoofer_enabled"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_PSSWL",
+      "surface": "telnet",
+      "verb": "PSSWL ?",
+      "request": "PSSWL ?\r",
+      "expected_response_prefix": "PSSWL",
+      "expected_parse_path": ["subwoofer_level"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_PSLOM",
+      "surface": "telnet",
+      "verb": "PSLOM ?",
+      "request": "PSLOM ?\r",
+      "expected_response_prefix": "PSLOM",
+      "expected_parse_path": ["loudness_management"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_SPPR",
+      "surface": "telnet",
+      "verb": "SPPR ?",
+      "request": "SPPR ?\r",
+      "expected_response_prefix": "SPPR",
+      "expected_parse_path": ["speaker_preset"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "low"
+    },
+    {
+      "id": "telnet_VSASP",
+      "surface": "telnet",
+      "verb": "VSASP ?",
+      "request": "VSASP ?\r",
+      "expected_response_prefix": "VSASP",
+      "expected_parse_path": ["video_aspect"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "low"
+    },
+    {
+      "id": "telnet_VSMONI",
+      "surface": "telnet",
+      "verb": "VSMONI ?",
+      "request": "VSMONI ?\r",
+      "expected_response_prefix": "VSMONI",
+      "expected_parse_path": ["hdmi_monitor"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "low"
+    },
+    {
+      "id": "telnet_VSSC",
+      "surface": "telnet",
+      "verb": "VSSC ?",
+      "request": "VSSC ?\r",
+      "expected_response_prefix": "VSSC",
+      "expected_parse_path": ["video_resolution"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "low"
+    },
+    {
+      "id": "telnet_CV",
+      "surface": "telnet",
+      "verb": "CV?",
+      "request": "CV?\r",
+      "expected_response_prefix": "CV",
+      "expected_parse_path": ["channel_levels"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "medium"
+    },
+    {
+      "id": "telnet_NSE",
+      "surface": "telnet",
+      "verb": "NSE?",
+      "request": "NSE?\r",
+      "expected_response_prefix": "NSE",
+      "expected_parse_path": ["on_screen_display"],
+      "expected_failure_modes": ["no_response", "timeout"],
+      "priority": "low"
+    },
+    {
+      "id": "heos_heart_beat",
+      "surface": "heos_cli",
+      "verb": "system/heart_beat",
+      "request": "heos://system/heart_beat\r\n",
+      "expected_parse_path": ["heos.result"],
+      "expected_failure_modes": ["connection_refused", "no_response", "json_error"],
+      "priority": "high"
+    },
+    {
+      "id": "heos_get_system_info",
+      "surface": "heos_cli",
+      "verb": "system/get_system_info",
+      "request": "heos://system/get_system_info\r\n",
+      "expected_parse_path": ["payload.serial", "payload.version", "payload.network"],
+      "expected_failure_modes": ["connection_refused", "heos_error", "unsupported"],
+      "priority": "high"
+    },
+    {
+      "id": "heos_check_account",
+      "surface": "heos_cli",
+      "verb": "system/check_account",
+      "request": "heos://system/check_account\r\n",
+      "expected_parse_path": ["heos.message"],
+      "expected_failure_modes": ["connection_refused", "heos_error"],
+      "priority": "medium"
+    },
+    {
+      "id": "heos_get_volume",
+      "surface": "heos_cli",
+      "verb": "player/get_volume",
+      "request": "heos://player/get_volume?pid={pid}\r\n",
+      "expected_parse_path": ["heos.message.level"],
+      "expected_failure_modes": ["heos_error", "unsupported"],
+      "priority": "medium"
+    },
+    {
+      "id": "heos_get_mute",
+      "surface": "heos_cli",
+      "verb": "player/get_mute",
+      "request": "heos://player/get_mute?pid={pid}\r\n",
+      "expected_parse_path": ["heos.message.state"],
+      "expected_failure_modes": ["heos_error", "unsupported"],
+      "priority": "medium"
+    }
+  ]
+}
