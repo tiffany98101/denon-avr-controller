@@ -269,6 +269,26 @@ Use raw API and snapshots:
 ./denon_release_candidate.sh snapshot
 ```
 
+## Receiver data inventory
+
+Use the Bash CLI to inspect the data fields this tool knows about without manually reading raw XML:
+
+```bash
+./denon_release_candidate.sh data fields --all
+./denon_release_candidate.sh data fields --available
+./denon_release_candidate.sh data dump --readable
+./denon_release_candidate.sh data dump --json
+./denon_release_candidate.sh data dump --raw
+DENON_DATA_DISCOVERY_MAX_TYPE=50 ./denon_release_candidate.sh data dump --json
+```
+
+- `data fields --all` is an offline catalog. It shows read-only fields/endpoints known to this tool and where each field comes from. It does not claim to enumerate hidden firmware internals.
+- `data fields --available` queries the configured AVR through read-only paths and shows known fields that currently have values.
+- `data dump --readable`, `data dump --json`, and `data dump --raw` query safe read-only sources for an exhaustive receiver snapshot. This includes responding `get_config` XML types from `0..DENON_DATA_DISCOVERY_MAX_TYPE` (default `30`), `/general/general.html`, same-host read-only web UI links, JS-discovered read-only AJAX/XML/status paths, HEOS player metadata already used by the tool, and supported telnet query commands.
+- Live `data` modes do not scan for receivers. Set `DENON_IP`, `DENON_DEFAULT_IP`, or use an existing cached receiver IP.
+- Raw/full dumps may include serial numbers, MAC addresses, network identifiers, account-related fields, or other sensitive receiver-provided data. Nothing is uploaded or sent off-machine.
+- Data varies by Denon model, firmware version, network setup, and HEOS state.
+
 ## Command summary
 
 ### Receiver status
@@ -276,6 +296,12 @@ Use raw API and snapshots:
 ```bash
 denon info
 denon info --json
+denon data fields --all
+denon data fields --available
+denon data dump --readable
+denon data dump --json
+denon data dump --raw
+denon data discover [--json]
 denon status
 denon status --json
 denon signal-debug

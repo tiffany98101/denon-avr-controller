@@ -2285,7 +2285,7 @@ with socket.create_connection(('$IP',1255),timeout=3) as s:
         try: c=s.recv(4096); d+=c if c else b''; (not c) and sys.exit()
         except: break
 print(d.decode('utf-8','replace'))
-" 2>/dev/null | grep '"level"' | sed -n 's/.*"level":"\\?\\([0-9]*\\)"\\?.*/\1/p' | head -1 || printf '')
+" 2>/dev/null | sed -n 's/.*"level":"\([0-9]*\)".*/\1/p; s/.*level=\([0-9]*\).*/\1/p' | head -1 || printf '')
       [[ -n "$_heos_vol_resp" ]] && _denon_data_add_value "network_heos" "Network / HEOS" "heos_volume_level" "$_heos_vol_resp"
     fi
   }
