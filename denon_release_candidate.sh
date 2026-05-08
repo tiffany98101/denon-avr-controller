@@ -199,6 +199,8 @@ Receiver status:
                              Discover read-only web/AJAX endpoints exposed by the AVR UI
   denon data capabilities [--json] [--source file] [--probe-safe]
                              Inventory advertised Deviceinfo/AppCommand verbs; live probing is opt-in
+  denon data summary [--json]
+                             Show concise receiver diagnostics from safe read-only surfaces
   denon status               Show main zone power, source, volume, and mute state
   denon status --json        Print main zone status as JSON
   denon signal-debug         Show raw input/signal diagnostics without guessing a decoder
@@ -342,7 +344,7 @@ Notes:
   "data fields --all" lists fields/endpoints known to this tool, not hidden firmware internals.
   Live data/dump modes use GET/query-only network paths and may expose serial numbers, MAC addresses,
   network identifiers, account-related fields, or other receiver-provided sensitive data.
-  Examples: denon data fields --all | denon data fields --available | denon data dump --readable | denon data dump --json | denon data dump --raw | denon data capabilities --json
+  Examples: denon data fields --all | denon data fields --available | denon data summary | denon data dump --readable | denon data dump --json | denon data dump --raw | denon data capabilities --json
   The script can be run directly or sourced from bash/zsh.
   Pass --quiet or -q before or after any command to suppress stdout output.
   Pass --silent before or after any command to suppress both stdout and stderr.
@@ -1625,12 +1627,14 @@ Usage:
   denon data dump --raw [--full]
   denon data discover [--json]
   denon data capabilities [--json] [--source file] [--probe-safe]
+  denon data summary [--json]
 
 Notes:
   --all shows data fields known to this tool and where they come from.
   --available, dump, and discover query the configured AVR using read-only GET/query paths.
   capabilities defaults to offline inventory from references/deviceinfo_capabilities.xml.
   capabilities --probe-safe fetches live Deviceinfo.xml and probes only exact allowlisted Get* AppCommand verbs.
+  summary queries existing safe read-only data surfaces and prints concise diagnostics.
 EOF
   }
 
@@ -2039,6 +2043,203 @@ EOF
       first=0
     done <<<"$data_available_records"
     printf '}'
+  }
+
+  _denon_data_record_value() {
+    local wanted_group="$1"
+    local wanted_field="$2"
+
+    awk -F '\t' -v group="$wanted_group" -v field="$wanted_field" \
+      '$1 == group && $3 == field { print $4; found=1; exit } END { exit found ? 0 : 1 }' <<<"$data_available_records"
+  }
+
+  _denon_data_raw_label() {
+    local raw="$1"
+
+    if [[ -z "$raw" ]]; then
+      printf 'unknown'
+    else
+      printf 'unknown'
+    fi
+  }
+
+  _denon_data_print_raw_labeled_line() {
+    local label="$1"
+    local raw="$2"
+    local text="${raw:-unknown}"
+
+    printf '  %-28s raw=%s label=%s\n' "$label" "$text" "$(_denon_data_raw_label "$raw")"
+  }
+
+  _denon_data_json_string_or_null() {
+    local value="$1"
+
+    if [[ -z "$value" ]]; then
+      printf 'null'
+    else
+      printf '"%s"' "$(printf '%s' "$value" | _denon_json_escape)"
+    fi
+  }
+
+  _denon_data_json_raw_label() {
+    local raw="$1"
+
+    printf '{"raw":'
+    _denon_data_json_string_or_null "$raw"
+    printf ',"label":"%s"}' "$(_denon_data_raw_label "$raw")"
+  }
+
+  _denon_data_print_summary_readable() {
+    local receiver ip brand_code model_type
+    local main_zone main_volume_scale main_volume_limit main_volume_max
+    local zone2_name zone2_volume_scale zone2_volume_limit
+    local setup_lock bt_headphones speaker_preset advanced_mode ci_mode menu_lock gui_type heos_sign_in webui_type product_type
+    local heos_model heos_version network pending_upgrade_version aios_firmware
+
+    receiver=$(_denon_data_record_value "receiver" "name" 2>/dev/null || printf '')
+    ip=$(_denon_data_record_value "receiver" "ip" 2>/dev/null || printf '')
+    brand_code=$(_denon_data_record_value "receiver" "brand_code" 2>/dev/null || printf '')
+    model_type=$(_denon_data_record_value "receiver" "model_type" 2>/dev/null || printf '')
+    main_zone=$(_denon_data_record_value "main_zone" "zone_name" 2>/dev/null || printf '')
+    main_volume_scale=$(_denon_data_record_value "main_zone" "volume_scale" 2>/dev/null || printf '')
+    main_volume_limit=$(_denon_data_record_value "main_zone" "volume_limit_raw" 2>/dev/null || printf '')
+    main_volume_max=$(_denon_data_record_value "main_zone" "volume_max_db" 2>/dev/null || printf '')
+    zone2_name=$(_denon_data_record_value "zone2" "zone_name" 2>/dev/null || printf '')
+    zone2_volume_scale=$(_denon_data_record_value "zone2" "volume_scale" 2>/dev/null || printf '')
+    zone2_volume_limit=$(_denon_data_record_value "zone2" "volume_limit_raw" 2>/dev/null || printf '')
+    setup_lock=$(_denon_data_record_value "system" "setup_lock" 2>/dev/null || printf '')
+    bt_headphones=$(_denon_data_record_value "system" "bt_headphones_single_used" 2>/dev/null || printf '')
+    speaker_preset=$(_denon_data_record_value "system" "speaker_preset" 2>/dev/null || printf '')
+    advanced_mode=$(_denon_data_record_value "system" "advanced_mode" 2>/dev/null || printf '')
+    ci_mode=$(_denon_data_record_value "system" "ci_mode" 2>/dev/null || printf '')
+    menu_lock=$(_denon_data_record_value "system" "menu_lock" 2>/dev/null || printf '')
+    gui_type=$(_denon_data_record_value "system" "gui_type" 2>/dev/null || printf '')
+    heos_sign_in=$(_denon_data_record_value "system" "heos_sign_in" 2>/dev/null || printf '')
+    webui_type=$(_denon_data_record_value "system" "webui_type" 2>/dev/null || printf '')
+    product_type=$(_denon_data_record_value "system" "product_type" 2>/dev/null || printf '')
+    heos_model=$(_denon_data_record_value "network_heos" "heos_model" 2>/dev/null || printf '')
+    heos_version=$(_denon_data_record_value "network_heos" "heos_version" 2>/dev/null || printf '')
+    network=$(_denon_data_record_value "network_heos" "network" 2>/dev/null || printf '')
+    pending_upgrade_version=$(_denon_data_record_value "upnp" "pending_upgrade_version" 2>/dev/null || printf '')
+    aios_firmware=$(_denon_data_record_value "upnp" "aios_firmware" 2>/dev/null || printf '')
+
+    printf 'Receiver diagnostics\n'
+    printf '  %-28s %s\n' "name" "${receiver:-unknown}"
+    printf '  %-28s %s\n' "ip" "${ip:-unknown}"
+    _denon_data_print_raw_labeled_line "brand_code" "$brand_code"
+    _denon_data_print_raw_labeled_line "model_type" "$model_type"
+    printf '\n'
+
+    printf 'Volume diagnostics\n'
+    printf '  %-28s %s\n' "main_zone" "${main_zone:-unknown}"
+    _denon_data_print_raw_labeled_line "main_volume_scale" "$main_volume_scale"
+    printf '  %-28s %s\n' "main_volume_limit_raw" "${main_volume_limit:-unknown}"
+    printf '  %-28s %s dB\n' "main_volume_max" "${main_volume_max:-unknown}"
+    printf '  %-28s %s\n' "zone2" "${zone2_name:-unknown}"
+    _denon_data_print_raw_labeled_line "zone2_volume_scale" "$zone2_volume_scale"
+    printf '  %-28s %s\n' "zone2_volume_limit_raw" "${zone2_volume_limit:-unknown}"
+    printf '\n'
+
+    printf 'System diagnostics\n'
+    _denon_data_print_raw_labeled_line "setup_lock" "$setup_lock"
+    _denon_data_print_raw_labeled_line "menu_lock" "$menu_lock"
+    _denon_data_print_raw_labeled_line "advanced_mode" "$advanced_mode"
+    _denon_data_print_raw_labeled_line "ci_mode" "$ci_mode"
+    _denon_data_print_raw_labeled_line "speaker_preset" "$speaker_preset"
+    _denon_data_print_raw_labeled_line "gui_type" "$gui_type"
+    _denon_data_print_raw_labeled_line "webui_type" "$webui_type"
+    _denon_data_print_raw_labeled_line "product_type" "$product_type"
+    _denon_data_print_raw_labeled_line "bt_headphones_single_used" "$bt_headphones"
+    _denon_data_print_raw_labeled_line "heos_sign_in" "$heos_sign_in"
+    printf '\n'
+
+    printf 'Network / firmware notes\n'
+    printf '  %-28s %s\n' "heos_model" "${heos_model:-unknown}"
+    printf '  %-28s %s (separate HEOS firmware, not AVR mainboard firmware)\n' "heos_version" "${heos_version:-unknown}"
+    printf '  %-28s %s\n' "network" "${network:-unknown}"
+    printf '  %-28s %s (pending update metadata, not installed firmware)\n' "pending_upgrade_version" "${pending_upgrade_version:-unknown}"
+    printf '  %-28s %s (separate AIOS/HEOS firmware, not AVR mainboard firmware)\n' "aios_firmware" "${aios_firmware:-unknown}"
+    printf '  %-28s %s\n' "avr_mainboard_firmware" "unavailable on tested read-only surfaces"
+  }
+
+  _denon_data_print_summary_json() {
+    local receiver ip brand_code model_type
+    local main_zone main_volume_scale main_volume_limit main_volume_max
+    local zone2_name zone2_volume_scale zone2_volume_limit
+    local setup_lock bt_headphones speaker_preset advanced_mode ci_mode menu_lock gui_type heos_sign_in webui_type product_type
+    local heos_model heos_version network pending_upgrade_version aios_firmware
+
+    receiver=$(_denon_data_record_value "receiver" "name" 2>/dev/null || printf '')
+    ip=$(_denon_data_record_value "receiver" "ip" 2>/dev/null || printf '')
+    brand_code=$(_denon_data_record_value "receiver" "brand_code" 2>/dev/null || printf '')
+    model_type=$(_denon_data_record_value "receiver" "model_type" 2>/dev/null || printf '')
+    main_zone=$(_denon_data_record_value "main_zone" "zone_name" 2>/dev/null || printf '')
+    main_volume_scale=$(_denon_data_record_value "main_zone" "volume_scale" 2>/dev/null || printf '')
+    main_volume_limit=$(_denon_data_record_value "main_zone" "volume_limit_raw" 2>/dev/null || printf '')
+    main_volume_max=$(_denon_data_record_value "main_zone" "volume_max_db" 2>/dev/null || printf '')
+    zone2_name=$(_denon_data_record_value "zone2" "zone_name" 2>/dev/null || printf '')
+    zone2_volume_scale=$(_denon_data_record_value "zone2" "volume_scale" 2>/dev/null || printf '')
+    zone2_volume_limit=$(_denon_data_record_value "zone2" "volume_limit_raw" 2>/dev/null || printf '')
+    setup_lock=$(_denon_data_record_value "system" "setup_lock" 2>/dev/null || printf '')
+    bt_headphones=$(_denon_data_record_value "system" "bt_headphones_single_used" 2>/dev/null || printf '')
+    speaker_preset=$(_denon_data_record_value "system" "speaker_preset" 2>/dev/null || printf '')
+    advanced_mode=$(_denon_data_record_value "system" "advanced_mode" 2>/dev/null || printf '')
+    ci_mode=$(_denon_data_record_value "system" "ci_mode" 2>/dev/null || printf '')
+    menu_lock=$(_denon_data_record_value "system" "menu_lock" 2>/dev/null || printf '')
+    gui_type=$(_denon_data_record_value "system" "gui_type" 2>/dev/null || printf '')
+    heos_sign_in=$(_denon_data_record_value "system" "heos_sign_in" 2>/dev/null || printf '')
+    webui_type=$(_denon_data_record_value "system" "webui_type" 2>/dev/null || printf '')
+    product_type=$(_denon_data_record_value "system" "product_type" 2>/dev/null || printf '')
+    heos_model=$(_denon_data_record_value "network_heos" "heos_model" 2>/dev/null || printf '')
+    heos_version=$(_denon_data_record_value "network_heos" "heos_version" 2>/dev/null || printf '')
+    network=$(_denon_data_record_value "network_heos" "network" 2>/dev/null || printf '')
+    pending_upgrade_version=$(_denon_data_record_value "upnp" "pending_upgrade_version" 2>/dev/null || printf '')
+    aios_firmware=$(_denon_data_record_value "upnp" "aios_firmware" 2>/dev/null || printf '')
+
+    printf '{"receiver":{"name":'
+    _denon_data_json_string_or_null "$receiver"
+    printf ',"ip":'
+    _denon_data_json_string_or_null "$ip"
+    printf ',"brand_code":'
+    _denon_data_json_raw_label "$brand_code"
+    printf ',"model_type":'
+    _denon_data_json_raw_label "$model_type"
+    printf '},"volume":{"main_zone":{"zone_name":'
+    _denon_data_json_string_or_null "$main_zone"
+    printf ',"volume_scale":'
+    _denon_data_json_raw_label "$main_volume_scale"
+    printf ',"volume_limit_raw":'
+    _denon_data_json_string_or_null "$main_volume_limit"
+    printf ',"volume_max_db":'
+    _denon_data_json_string_or_null "$main_volume_max"
+    printf '},"zone2":{"zone_name":'
+    _denon_data_json_string_or_null "$zone2_name"
+    printf ',"volume_scale":'
+    _denon_data_json_raw_label "$zone2_volume_scale"
+    printf ',"volume_limit_raw":'
+    _denon_data_json_string_or_null "$zone2_volume_limit"
+    printf '}},"system":{'
+    printf '"setup_lock":'; _denon_data_json_raw_label "$setup_lock"
+    printf ',"menu_lock":'; _denon_data_json_raw_label "$menu_lock"
+    printf ',"advanced_mode":'; _denon_data_json_raw_label "$advanced_mode"
+    printf ',"ci_mode":'; _denon_data_json_raw_label "$ci_mode"
+    printf ',"speaker_preset":'; _denon_data_json_raw_label "$speaker_preset"
+    printf ',"gui_type":'; _denon_data_json_raw_label "$gui_type"
+    printf ',"webui_type":'; _denon_data_json_raw_label "$webui_type"
+    printf ',"product_type":'; _denon_data_json_raw_label "$product_type"
+    printf ',"bt_headphones_single_used":'; _denon_data_json_raw_label "$bt_headphones"
+    printf ',"heos_sign_in":'; _denon_data_json_raw_label "$heos_sign_in"
+    printf '},"network":{"heos_model":'
+    _denon_data_json_string_or_null "$heos_model"
+    printf ',"network":'
+    _denon_data_json_string_or_null "$network"
+    printf '},"firmware":{"installed_avr_mainboard_firmware":"unavailable_on_tested_read_only_surfaces","pending_upgrade_version":{"value":'
+    _denon_data_json_string_or_null "$pending_upgrade_version"
+    printf ',"meaning":"pending_update_metadata_not_installed_firmware"},"heos_version":{"value":'
+    _denon_data_json_string_or_null "$heos_version"
+    printf ',"meaning":"separate_heos_firmware_not_avr_mainboard_firmware"},"aios_firmware":{"value":'
+    _denon_data_json_string_or_null "$aios_firmware"
+    printf ',"meaning":"separate_aios_heos_firmware_not_avr_mainboard_firmware"}}}\n'
   }
 
   _denon_data_print_get_config_json() {
@@ -2862,7 +3063,7 @@ EOF
     local arg
 
     case "$sub:$mode" in
-      fields:--available|dump:--readable|dump:--all|dump:--json|dump:--raw|discover:*|discover:) return 0 ;;
+      fields:--available|dump:--readable|dump:--all|dump:--json|dump:--raw|discover:*|discover:|summary:*|summary:) return 0 ;;
     esac
     if [[ "$sub" == "capabilities" ]]; then
       for arg in "$@"; do
@@ -2955,6 +3156,22 @@ EOF
         ;;
       capabilities|discover-capabilities|verbs)
         _denon_data_capabilities_cmd "${@:2}"
+        ;;
+      summary)
+        case "$mode" in
+          ""|--json)
+            _denon_data_collect_full || return 1
+            if [[ "$mode" == "--json" ]]; then
+              _denon_data_print_summary_json
+            else
+              _denon_data_print_summary_readable
+            fi
+            ;;
+          *)
+            _denon_data_usage >&2
+            return 1
+            ;;
+        esac
         ;;
       *)
         _denon_data_usage >&2
@@ -5385,7 +5602,7 @@ _denon_completion() {
       ;;
     data)
       if (( CURRENT == 3 )); then
-        _values 'data subcommand' fields dump discover capabilities discover-capabilities verbs
+        _values 'data subcommand' fields dump discover capabilities discover-capabilities verbs summary
         return
       fi
       case "${words[3]}" in
@@ -5403,6 +5620,10 @@ _denon_completion() {
           ;;
         capabilities|discover-capabilities|verbs)
           _values 'data capabilities options' --json --source --probe-safe --help
+          return
+          ;;
+        summary)
+          _values 'data summary options' --json
           return
           ;;
       esac

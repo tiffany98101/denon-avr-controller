@@ -388,6 +388,78 @@ class TestPromotedLiveFieldParsers:
         assert "6" in summary
 
 
+class TestDataSummaryOutput:
+    SUMMARY_RECORDS = """\
+        data_available_records=""
+        data_available_records+=$'receiver\\tReceiver\\tname\\tDenon AVR-X1600H\\n'
+        data_available_records+=$'receiver\\tReceiver\\tip\\t192.0.2.10\\n'
+        data_available_records+=$'receiver\\tReceiver\\tbrand_code\\t7\\n'
+        data_available_records+=$'receiver\\tReceiver\\tmodel_type\\t1\\n'
+        data_available_records+=$'main_zone\\tMain Zone\\tzone_name\\tLivingRoom\\n'
+        data_available_records+=$'main_zone\\tMain Zone\\tvolume_scale\\t7\\n'
+        data_available_records+=$'main_zone\\tMain Zone\\tvolume_limit_raw\\t99\\n'
+        data_available_records+=$'main_zone\\tMain Zone\\tvolume_max_db\\t18.0\\n'
+        data_available_records+=$'zone2\\tZone 2\\tzone_name\\tZONE2\\n'
+        data_available_records+=$'zone2\\tZone 2\\tvolume_scale\\t1\\n'
+        data_available_records+=$'zone2\\tZone 2\\tvolume_limit_raw\\t70\\n'
+        data_available_records+=$'system\\tSystem\\tsetup_lock\\t2\\n'
+        data_available_records+=$'system\\tSystem\\tbt_headphones_single_used\\t0\\n'
+        data_available_records+=$'system\\tSystem\\tspeaker_preset\\t0\\n'
+        data_available_records+=$'system\\tSystem\\tadvanced_mode\\t1\\n'
+        data_available_records+=$'system\\tSystem\\tci_mode\\t2\\n'
+        data_available_records+=$'system\\tSystem\\tmenu_lock\\t2\\n'
+        data_available_records+=$'system\\tSystem\\tgui_type\\t1\\n'
+        data_available_records+=$'system\\tSystem\\theos_sign_in\\t3\\n'
+        data_available_records+=$'system\\tSystem\\twebui_type\\t3\\n'
+        data_available_records+=$'system\\tSystem\\tproduct_type\\t219\\n'
+        data_available_records+=$'network_heos\\tNetwork / HEOS\\theos_model\\tDenon AVR-X1600H\\n'
+        data_available_records+=$'network_heos\\tNetwork / HEOS\\theos_version\\t3.88.614\\n'
+        data_available_records+=$'network_heos\\tNetwork / HEOS\\tnetwork\\twifi\\n'
+        data_available_records+=$'upnp\\tUPnP / Device Identity\\tpending_upgrade_version\\t00\\n'
+        data_available_records+=$'upnp\\tUPnP / Device Identity\\taios_firmware\\tAios 4.025\\n'
+    """
+
+    def test_summary_json_includes_promoted_fields_with_unknown_labels(self):
+        code = textwrap.dedent(self.SUMMARY_RECORDS + """\
+            _denon_data_print_summary_json
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        obj = json.loads(r.stdout)
+        assert obj["receiver"]["brand_code"] == {"raw": "7", "label": "unknown"}
+        assert obj["volume"]["main_zone"]["volume_scale"] == {"raw": "7", "label": "unknown"}
+        assert obj["system"]["setup_lock"] == {"raw": "2", "label": "unknown"}
+        assert obj["system"]["heos_sign_in"] == {"raw": "3", "label": "unknown"}
+
+    def test_summary_readable_preserves_firmware_limitation(self):
+        code = textwrap.dedent(self.SUMMARY_RECORDS + """\
+            _denon_data_print_summary_readable
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "avr_mainboard_firmware" in r.stdout
+        assert "unavailable on tested read-only surfaces" in r.stdout
+        assert "heos_version" in r.stdout
+        assert "separate HEOS firmware, not AVR mainboard firmware" in r.stdout
+        assert "pending update metadata, not installed firmware" in r.stdout
+        assert "AVR mainboard firmware: 3.88.614" not in r.stdout
+
+    def test_status_output_stays_concise(self):
+        code = textwrap.dedent("""\
+            _denon_get_power_xml() { printf '%s' '<listGlobals><MainZone><Power>1</Power></MainZone></listGlobals>'; }
+            _denon_get_source_xml() { printf '%s' '<SourceList><Zone zone="1" index="6"><Source index="6"><Name>TV Audio</Name></Source></Zone></SourceList>'; }
+            _denon_get_vol_xml() { printf '%s' '<listGlobals><MainZone><Volume>490</Volume><Mute>2</Mute></MainZone></listGlobals>'; }
+            _denon_alias_for_source() { return 1; }
+            _denon_source_name_by_idx() { printf '%s' 'TV Audio'; }
+            _denon_status_pretty
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "Power: ON | Source: TV Audio | Volume: -31.0 dB"
+        for noisy in ["brand_code", "model_type", "setup_lock", "heos_sign_in", "firmware"]:
+            assert noisy not in r.stdout
+
+
 # ---------------------------------------------------------------------------
 # Telnet fixture sanity checks
 # ---------------------------------------------------------------------------
