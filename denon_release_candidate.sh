@@ -8,7 +8,7 @@
 #   ./denon_release_candidate.sh status
 #
 # For testing without discovery:
-#   export DENON_IP=192.168.1.162
+#   export DENON_IP=192.168.1.100
 
 _denon_lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'

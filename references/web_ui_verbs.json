@@ -14,13 +14,13 @@
       "url": "http://{ip}/general/general.html",
       "method": "GET",
       "expected_fields": {
-        "Firmware Version": "AVR firmware version string",
+        "Firmware Version": "Version label exposed by the web UI; verify meaning before treating it as AVR mainboard firmware",
         "DTS Version": "DTS decoder version",
         "Input Signal": "Current input signal format",
         "Sound Mode": "Active surround sound mode",
         "HDMI Signal Info": "HDMI signal metadata"
       },
-      "notes": "Primary web UI entry point. Serves status and firmware info."
+      "notes": "Primary web UI entry point. Serves status and version labels; do not assume HEOS/AIOS firmware is AVR mainboard firmware."
     },
     {
       "name": "ajax/globals/get_config",

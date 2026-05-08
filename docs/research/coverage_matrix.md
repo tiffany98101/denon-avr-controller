@@ -1,6 +1,6 @@
 # Coverage Matrix — Denon AVR-X1600H Data Inventory
 
-**Target:** 192.168.1.162 · HEOS firmware 3.88.614  
+**Target:** 192.168.1.100 · HEOS firmware 3.88.614
 **Branch:** feature/receiver-data-inventory  
 **Phase 1 baseline** — updated post-Phase 5
 
@@ -8,7 +8,7 @@
 
 ## 1. AppCommand GET (`/ajax/globals/get_config?type=N`)
 
-**Base URL:** `https://192.168.1.162:10443/ajax/globals/get_config?type=N`
+**Base URL:** `https://192.168.1.100:10443/ajax/globals/get_config?type=N`
 
 ### What the current tool queries
 - Types explicitly named: 3 (identity), 4 (power), 6 (zone names), 7 (sources), 12 (volume/mute)
@@ -41,10 +41,12 @@
 
 ## 2. AppCommand POST (`/goform/AppCommand.xml`)
 
-**Base URL:** `http://192.168.1.162/goform/AppCommand.xml` (POST with XML body)
+**Base URL:** `http://192.168.1.100/goform/AppCommand.xml` (POST with XML body)
 
 ### What the current tool queries
-- **Nothing.** AppCommand POST is entirely absent from the tool.
+- Offline capability inventory parses advertised AppCommand/Deviceinfo XML.
+- Live AppCommand probing is opt-in with `data capabilities --probe-safe` and is restricted to an exact read-only allowlist.
+- On the tested receiver, allowlisted AppCommand probes returned no useful payload, so AppCommand remains inventory-first rather than a primary data surface.
 
 ### What is documented to exist (denonavr library + community docs)
 The POST surface uses `<cmd id="1">GetAllZonePowerStatus</cmd>` etc. Known read-only `Get*` verbs from the denonavr library and community sources:
@@ -63,13 +65,13 @@ The POST surface uses `<cmd id="1">GetAllZonePowerStatus</cmd>` etc. Known read-
 - `GetModelName`
 - `GetToneControl`
 
-### Status: **Absent** (pre-Phase 5) → **Partial** (post-Phase 5, added as first-class surface)
+### Status: **Inventory-only / Partial**
 
 ---
 
 ## 3. Form GET Endpoints (`/goform/form*Xml*.xml`)
 
-**Base URL:** `http://192.168.1.162/goform/`
+**Base URL:** `http://192.168.1.100/goform/`
 
 ### What the current tool queries
 - `/goform/formNetAudio_StatusXml.xml` — for Now Playing (title, artist, album)
@@ -186,16 +188,18 @@ Read-only `?` queries from the Denon AVR Control Protocol:
 ## 6. UPnP / SSDP Descriptors (port 8080 and 60006)
 
 ### What the current tool queries
-- SSDP M-SEARCH (UDP) — only used to discover the AVR IP, not to fetch descriptors
+- SSDP M-SEARCH (UDP) — used to discover the AVR IP.
+- `Deviceinfo.xml` — used for model/API/zone/pending-upgrade metadata.
+- `aios_device.xml` — used for AIOS/HEOS identity fields.
 
 ### What is documented to exist but unqueried (baseline)
 | URL | Expected content |
 |-----|-----------------|
-| `http://192.168.1.162:8080/goform/Deviceinfo.xml` | `UpgradeVersion` (AVR firmware), `CommApiVers`, serial |
-| `http://192.168.1.162:8080/description.xml` | UPnP root device description, MAC, model |
-| `http://192.168.1.162:60006/upnp/desc/aios_device/aios_device.xml` | AIOS (HEOS board) device description |
+| `http://192.168.1.100:8080/goform/Deviceinfo.xml` | `UpgradeVersion` (pending update metadata, not installed AVR firmware), `CommApiVers`, model/MAC fields |
+| `http://192.168.1.100:8080/description.xml` | UPnP root device description, MAC, model |
+| `http://192.168.1.100:60006/upnp/desc/aios_device/aios_device.xml` | AIOS/HEOS board device description; firmware here is separate from AVR mainboard firmware |
 
-### Status: **Absent** (pre-Phase 5) → **Partial** (post-Phase 5, added as first-class surface)
+### Status: **Partial**
 
 ---
 
@@ -210,7 +214,7 @@ Read-only `?` queries from the Denon AVR Control Protocol:
 - `/general/` subdirectory assets (CSS, images, additional JS)
 - `/ajax/globals/get_config` type constants in `GlobalsServerInterface.js` — partially useful
 
-### Status: **Partial** (Bug B-1 suppresses attribute-embedded path discovery)
+### Status: **Partial** (attribute extraction and JS-fragment filtering improved)
 
 ---
 

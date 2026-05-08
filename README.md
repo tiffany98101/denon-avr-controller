@@ -523,7 +523,7 @@ Examples:
 Pin the receiver IP:
 
 ```bash
-export DENON_IP=192.168.1.162
+export DENON_IP=192.168.1.100
 ```
 
 Enable verbose logging:
@@ -576,7 +576,7 @@ denon doctor
 If discovery is noisy or unreliable, test with an explicit one-shot IP first:
 
 ```bash
-DENON_IP=192.168.1.162 denon status
+DENON_IP=192.168.1.100 denon status
 ```
 
 If you later decide to pin the IP longer-term, you can export `DENON_IP`, but using it one-shot first makes discovery problems easier to notice and debug.
