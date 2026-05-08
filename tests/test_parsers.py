@@ -261,6 +261,48 @@ class TestBugB4XmlLeafArrays:
 
 
 # ---------------------------------------------------------------------------
+# Deviceinfo/AppCommand capability inventory
+# ---------------------------------------------------------------------------
+
+class TestDeviceinfoCapabilities:
+    def _capabilities(self) -> list[dict]:
+        code = textwrap.dedent(f"""\
+            denon data capabilities --source '{FIXTURES}/deviceinfo_capabilities_trimmed.xml' --json
+        """)
+        r = _bash(code)
+        assert r.returncode == 0, r.stderr
+        return json.loads(r.stdout)["capabilities"]
+
+    def _verbs(self, verb: str) -> list[dict]:
+        return [item for item in self._capabilities() if item["verb"] == verb]
+
+    def test_repeated_xml_paths_are_preserved(self):
+        items = self._verbs("GetZoneName")
+        assert len(items) == 2
+        assert {item["xml_path"] for item in items} == {
+            "Device_Info.DeviceCapabilities.DeviceZoneCapabilities.Zone.Functions.GetZoneName"
+        }
+
+    def test_unsafe_verbs_are_classified_as_skipped(self):
+        skipped = {item["verb"]: item for item in self._capabilities() if item["safety"] == "skipped"}
+        assert skipped["SetToneControl"]["skip_reason"] == "mutating or account/action verb prefix"
+        assert skipped["ResetDevice"]["skip_reason"] == "mutating or account/action verb prefix"
+
+    def test_unknown_verbs_are_listed_but_not_executed(self):
+        [item] = self._verbs("GetMystery")
+        assert item["safety"] == "unknown"
+        assert item["probe_status"] == "not_probed"
+        assert item["probe_summary"] == "not in exact live-probe allowlist"
+
+    def test_known_safe_verbs_are_included_in_dry_run_plan(self):
+        [item] = self._verbs("GetToneControl")
+        assert item["safety"] == "known-safe"
+        assert item["probe_status"] == "dry-run"
+        assert item["probe_summary"] == "eligible for --probe-safe"
+        assert item["has_parser"] is True
+
+
+# ---------------------------------------------------------------------------
 # Telnet fixture sanity checks
 # ---------------------------------------------------------------------------
 

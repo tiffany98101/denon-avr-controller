@@ -197,6 +197,8 @@ Receiver status:
                              Query all safe read-only sources and print labeled raw responses
   denon data discover [--json]
                              Discover read-only web/AJAX endpoints exposed by the AVR UI
+  denon data capabilities [--json] [--source file] [--probe-safe]
+                             Inventory advertised Deviceinfo/AppCommand verbs; live probing is opt-in
   denon status               Show main zone power, source, volume, and mute state
   denon status --json        Print main zone status as JSON
   denon signal-debug         Show raw input/signal diagnostics without guessing a decoder
@@ -340,7 +342,7 @@ Notes:
   "data fields --all" lists fields/endpoints known to this tool, not hidden firmware internals.
   Live data/dump modes use GET/query-only network paths and may expose serial numbers, MAC addresses,
   network identifiers, account-related fields, or other receiver-provided sensitive data.
-  Examples: denon data fields --all | denon data fields --available | denon data dump --readable | denon data dump --json | denon data dump --raw
+  Examples: denon data fields --all | denon data fields --available | denon data dump --readable | denon data dump --json | denon data dump --raw | denon data capabilities --json
   The script can be run directly or sourced from bash/zsh.
   Pass --quiet or -q before or after any command to suppress stdout output.
   Pass --silent before or after any command to suppress both stdout and stderr.
@@ -1622,10 +1624,13 @@ Usage:
   denon data dump --json
   denon data dump --raw [--full]
   denon data discover [--json]
+  denon data capabilities [--json] [--source file] [--probe-safe]
 
 Notes:
   --all shows data fields known to this tool and where they come from.
   --available, dump, and discover query the configured AVR using read-only GET/query paths.
+  capabilities defaults to offline inventory from references/deviceinfo_capabilities.xml.
+  capabilities --probe-safe fetches live Deviceinfo.xml and probes only exact allowlisted Get* AppCommand verbs.
 EOF
   }
 
@@ -1669,7 +1674,7 @@ Tone / Audyssey	telnet_cv	channel_levels	telnet CV? per-channel trims
 Network / HEOS	heos_players	heos_volume_level	HEOS player/get_volume (main player)
 UPnP / Device Identity	upnp_deviceinfo	upnp_model	:8080/goform/Deviceinfo.xml / ModelName
 UPnP / Device Identity	upnp_deviceinfo	upnp_mac	:8080/goform/Deviceinfo.xml / MacAddress
-UPnP / Device Identity	upnp_deviceinfo	avr_firmware	:8080/goform/Deviceinfo.xml / UpgradeVersion
+UPnP / Device Identity	upnp_deviceinfo	pending_upgrade_version	:8080/goform/Deviceinfo.xml / UpgradeVersion (pending update metadata, not installed firmware)
 UPnP / Device Identity	upnp_deviceinfo	comm_api_vers	:8080/goform/Deviceinfo.xml / CommApiVers
 UPnP / Device Identity	upnp_deviceinfo	device_zones	:8080/goform/Deviceinfo.xml / DeviceZones
 UPnP / Device Identity	upnp_aios	serial_number	:60006/upnp/desc/aios_device/aios_device.xml / serialNumber
@@ -2366,7 +2371,7 @@ print(d.decode('utf-8','replace'))
   _denon_data_collect_upnp() {
     local deviceinfo_body aios_body url field_val
 
-    data_upnp_mac="" data_upnp_model="" data_upnp_avr_fw="" data_upnp_comm_api="" data_upnp_zones=""
+    data_upnp_mac="" data_upnp_model="" data_upnp_pending_upgrade_version="" data_upnp_comm_api="" data_upnp_zones=""
     data_upnp_serial="" data_upnp_aios_fw="" data_upnp_udn=""
 
     # Deviceinfo.xml on port 8080 — AVR identity: MAC, firmware, API version
@@ -2375,7 +2380,7 @@ print(d.decode('utf-8','replace'))
     if printf '%s' "$deviceinfo_body" | grep -q '<ModelName>'; then
       data_upnp_model=$(_denon_data_parse_xml_field "$deviceinfo_body" "ModelName")
       data_upnp_mac=$(_denon_data_parse_xml_field "$deviceinfo_body" "MacAddress")
-      data_upnp_avr_fw=$(_denon_data_parse_xml_field "$deviceinfo_body" "UpgradeVersion")
+      data_upnp_pending_upgrade_version=$(_denon_data_parse_xml_field "$deviceinfo_body" "UpgradeVersion")
       data_upnp_comm_api=$(_denon_data_parse_xml_field "$deviceinfo_body" "CommApiVers")
       data_upnp_zones=$(_denon_data_parse_xml_field "$deviceinfo_body" "DeviceZones")
       _denon_data_store_raw_body "upnp" "$url" "$deviceinfo_body"
@@ -2399,7 +2404,7 @@ print(d.decode('utf-8','replace'))
     if _denon_data_collect_upnp; then
       [[ -n "$data_upnp_model"    ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "upnp_model"       "$data_upnp_model"
       [[ -n "$data_upnp_mac"      ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "upnp_mac"         "$data_upnp_mac"
-      [[ -n "$data_upnp_avr_fw"   ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "avr_firmware"     "$data_upnp_avr_fw"
+      [[ -n "$data_upnp_pending_upgrade_version" ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "pending_upgrade_version" "$data_upnp_pending_upgrade_version"
       [[ -n "$data_upnp_comm_api" ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "comm_api_vers"    "$data_upnp_comm_api"
       [[ -n "$data_upnp_zones"    ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "device_zones"     "$data_upnp_zones"
       [[ -n "$data_upnp_serial"   ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "serial_number"    "$data_upnp_serial"
@@ -2429,14 +2434,329 @@ print(d.decode('utf-8','replace'))
     printf '}\n'
   }
 
+  _denon_data_capabilities_usage() {
+    cat <<'EOF'
+Usage:
+  denon data capabilities [--json] [--source file] [--probe-safe]
+
+Options:
+  --json          Print structured JSON.
+  --source file   Parse a Deviceinfo/AppCommand capability XML file instead of the bundled reference.
+  --probe-safe    Fetch live Deviceinfo.xml and probe only exact allowlisted read-only AppCommand Get* verbs.
+  --help          Show this help.
+
+Default behavior is dry-run inventory only. Unknown verbs are listed but not executed.
+EOF
+  }
+
+  _denon_data_capabilities_default_source() {
+    local script_path script_dir
+    script_path=$(_denon_script_path) || return 1
+    script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
+    [[ -n "$script_dir" ]] || return 1
+    printf '%s/references/deviceinfo_capabilities.xml' "$script_dir"
+  }
+
+  _denon_data_capability_records_from_xml() {
+    local source_endpoint="$1"
+    local xml="$2"
+
+    printf '%s' "$xml" |
+      sed 's/></>\n</g' |
+      awk -v source="$source_endpoint" '
+        function tag_name(line, out) {
+          out=line
+          sub(/^<\//, "", out)
+          sub(/^</, "", out)
+          sub(/[ >\/].*$/, "", out)
+          gsub(/[[:space:]]+$/, "", out)
+          return out
+        }
+        function path(  i, out) {
+          out=""
+          for (i=1; i<=depth; i++) out=(out == "" ? stack[i] : out "." stack[i])
+          return out
+        }
+        function trim(value) {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+          return value
+        }
+        function emit(xml_path, verb, kind) {
+          verb=trim(verb)
+          if (verb == "") return
+          printf "%s\t%s\t%s\t%s\n", source, xml_path, verb, kind
+        }
+        {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+          if ($0 ~ /^<\?/) next
+          if ($0 ~ /^<!--/) next
+          if ($0 ~ /^<[^\/][^>]*>[^<]*<\/[^>]+>$/) {
+            name=tag_name($0)
+            value=$0
+            sub(/^<[^>]*>/, "", value)
+            sub(/<\/[^>]+>$/, "", value)
+            value=trim(value)
+            full_path=path() (path() == "" ? "" : ".") name
+            if (name == "FuncName") {
+              emit(full_path, value, "function")
+            } else if (path() ~ /(^|\.)(Functions|Commands)$/ && value == "1" && name ~ /^[A-Za-z][A-Za-z0-9_ -]*$/) {
+              emit(full_path, name, "appcommand")
+            }
+            next
+          }
+          if ($0 ~ /^<[^\/!][^>]*>$/ && $0 !~ /\/>$/) {
+            stack[++depth]=tag_name($0)
+            next
+          }
+          if ($0 ~ /^<\//) {
+            if (depth > 0) depth--
+            next
+          }
+        }
+      '
+  }
+
+  _denon_data_capability_skip_reason() {
+    local verb="$1"
+    local lower
+    lower=$(_denon_lower "$verb")
+
+    case "$lower" in
+      set*|put*|update*|upgrade*|factory*|reset*|reboot*|delete*|pair*|register*|login*|account*|write*)
+        printf 'mutating or account/action verb prefix'
+        return 0
+        ;;
+    esac
+    case "$lower" in
+      *firmware*|*update*|*upgrade*|*factory*|*reboot*|*delete*|*pair*|*register*|*login*|*account*|*write*|*factoryreset*|*resetdefault*)
+        printf 'blocked keyword in advertised verb'
+        return 0
+        ;;
+    esac
+    return 1
+  }
+
+  _denon_data_capability_is_known_safe() {
+    case "$1" in
+      GetAllZonePowerStatus|GetZoneName|GetVolume|GetMute|GetSource|GetSurroundMode|GetSoundMode|GetAudyssey|GetToneControl|GetVideoSelect|GetECO|GetECOMeter|GetAutoStandby|GetNetworkInfo|GetDeviceInfo|GetStatus|GetDialogLevel|GetSubwooferLevel|GetChLevel|GetAllZoneStereo|GetDimmer|GetInputSignal|GetActiveSpeaker|GetVideoInfo|GetAudioInfo|GetAudyssyInfo)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  _denon_data_capability_has_parser() {
+    case "$1" in
+      GetZoneName|GetVolume|GetMute|GetSource|GetSurroundMode|GetSoundMode|GetAudyssey|GetToneControl|GetNetworkInfo|GetStatus)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  _denon_data_capability_classify() {
+    local verb="$1"
+    local reason
+
+    reason=$(_denon_data_capability_skip_reason "$verb") && {
+      printf 'skipped\t%s' "$reason"
+      return 0
+    }
+    if _denon_data_capability_is_known_safe "$verb"; then
+      printf 'known-safe\tnone'
+    else
+      printf 'unknown\tnone'
+    fi
+  }
+
+  _denon_data_capability_probe_result() {
+    local verb="$1" line status summary
+    line=$(printf '%s\n' "$data_capability_probe_records" | awk -F '\t' -v v="$verb" '$1 == v { print; found=1; exit } END { exit found ? 0 : 1 }') || return 1
+    status=${line#*$'\t'}
+    summary=${status#*$'\t'}
+    status=${status%%$'\t'*}
+    printf '%s\t%s' "$status" "$summary"
+  }
+
+  _denon_data_probe_appcommand_safe() {
+    local verb="$1"
+    local request response summary status
+
+    _denon_data_capability_is_known_safe "$verb" || {
+      printf 'not_probed\tnot in exact live-probe allowlist'
+      return 0
+    }
+    request="<tx><cmd id=\"1\">${verb}</cmd></tx>"
+    response=$(_denon_curl -X POST -H 'Content-Type: text/xml' --data-binary "$request" "$BASE/goform/AppCommand.xml" 2>/dev/null || printf '')
+    summary=$(printf '%s' "$response" | sed 's/<[^>]*>/ /g' | tr '\n\r' '  ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^[[:space:]]*//; s/[[:space:]]*$//' | cut -c 1-160)
+    [[ -n "$summary" ]] || summary="none"
+    if printf '%s' "$response" | grep -q '<rx>.*[^[:space:]].*</rx>'; then
+      status="ok"
+    elif printf '%s' "$response" | grep -q '<rx'; then
+      status="empty"
+    else
+      status="no_response"
+    fi
+    printf '%s\t%s' "$status" "$summary"
+  }
+
+  _denon_data_capability_prepare_records() {
+    local xml="$1"
+    local source_endpoint="$2"
+    local probe_safe="$3"
+    local source xml_path verb kind safety reason has_parser probe_status probe_summary probe_line
+
+    data_capability_records=""
+    data_capability_probe_records=""
+
+    while IFS=$'\t' read -r source xml_path verb kind; do
+      [[ -n "$source$xml_path$verb$kind" ]] || continue
+      IFS=$'\t' read -r safety reason <<<"$(_denon_data_capability_classify "$verb")"
+      has_parser="no"
+      _denon_data_capability_has_parser "$verb" && has_parser="yes"
+      probe_status="dry-run"
+      probe_summary="none"
+
+      if [[ "$safety" == "skipped" ]]; then
+        probe_status="skipped"
+        probe_summary="$reason"
+      elif [[ "$safety" == "unknown" ]]; then
+        probe_status="not_probed"
+        probe_summary="not in exact live-probe allowlist"
+      elif [[ "$probe_safe" == "1" && "$kind" == "appcommand" ]]; then
+        probe_line=$(_denon_data_capability_probe_result "$verb" 2>/dev/null || true)
+        if [[ -z "$probe_line" ]]; then
+          probe_line=$(_denon_data_probe_appcommand_safe "$verb")
+          data_capability_probe_records+="${verb}"$'\t'"${probe_line}"$'\n'
+          sleep "${DENON_DATA_CAPABILITY_PROBE_DELAY_SECONDS:-0.10}" 2>/dev/null || true
+        fi
+        probe_status=${probe_line%%$'\t'*}
+        probe_summary=${probe_line#*$'\t'}
+      elif [[ "$safety" == "known-safe" ]]; then
+        probe_summary="eligible for --probe-safe"
+      fi
+
+      [[ -n "$reason" ]] || reason="none"
+      [[ -n "$probe_summary" ]] || probe_summary="none"
+      data_capability_records+="${source}"$'\t'"${xml_path}"$'\t'"${verb}"$'\t'"${kind}"$'\t'"${safety}"$'\t'"${reason}"$'\t'"${has_parser}"$'\t'"${probe_status}"$'\t'"${probe_summary}"$'\n'
+    done < <(_denon_data_capability_records_from_xml "$source_endpoint" "$xml")
+  }
+
+  _denon_data_print_capabilities_readable() {
+    local source xml_path verb kind safety reason has_parser probe_status probe_summary
+
+    printf 'Advertised Deviceinfo/AppCommand capabilities\n'
+    printf '  %-34s %-28s %-11s %-6s %s\n' "source endpoint" "verb" "safety" "parser" "status / reason"
+    while IFS=$'\t' read -r source xml_path verb kind safety reason has_parser probe_status probe_summary; do
+      [[ -n "$verb" ]] || continue
+      printf '  %-34s %-28s %-11s %-6s %s' "$source" "$verb" "$safety" "$has_parser" "$probe_status"
+      if [[ "$safety" == "skipped" && "$reason" != "none" ]]; then
+        printf ': %s' "$reason"
+      elif [[ "$probe_summary" != "none" ]]; then
+        printf ': %s' "$probe_summary"
+      fi
+      printf ' [%s]\n' "$xml_path"
+    done <<<"$data_capability_records"
+  }
+
+  _denon_data_print_capabilities_json() {
+    local source xml_path verb kind safety reason has_parser probe_status probe_summary first=1
+    local json_reason json_summary
+
+    printf '{"capabilities":['
+    while IFS=$'\t' read -r source xml_path verb kind safety reason has_parser probe_status probe_summary; do
+      [[ -n "$verb" ]] || continue
+      (( first )) || printf ','
+      json_reason="$reason"
+      json_summary="$probe_summary"
+      [[ "$json_reason" == "none" ]] && json_reason=""
+      [[ "$json_summary" == "none" ]] && json_summary=""
+      printf '{"source_endpoint":"%s","xml_path":"%s","verb":"%s","kind":"%s","safety":"%s","skip_reason":"%s","has_parser":%s,"probe_status":"%s","probe_summary":"%s"}' \
+        "$(printf '%s' "$source" | _denon_json_escape)" \
+        "$(printf '%s' "$xml_path" | _denon_json_escape)" \
+        "$(printf '%s' "$verb" | _denon_json_escape)" \
+        "$(printf '%s' "$kind" | _denon_json_escape)" \
+        "$(printf '%s' "$safety" | _denon_json_escape)" \
+        "$(printf '%s' "$json_reason" | _denon_json_escape)" \
+        "$([[ "$has_parser" == "yes" ]] && printf true || printf false)" \
+        "$(printf '%s' "$probe_status" | _denon_json_escape)" \
+        "$(printf '%s' "$json_summary" | _denon_json_escape)"
+      first=0
+    done <<<"$data_capability_records"
+    printf ']}\n'
+  }
+
+  _denon_data_capabilities_cmd() {
+    local json=0 probe_safe=0 source_file="" arg source_endpoint xml
+
+    while [[ $# -gt 0 ]]; do
+      arg="$1"
+      case "$arg" in
+        --json) json=1; shift ;;
+        --probe-safe) probe_safe=1; shift ;;
+        --source)
+          source_file="${2:-}"
+          if [[ -z "$source_file" ]]; then
+            echo "Error: --source requires a file path" >&2
+            return 1
+          fi
+          shift 2
+          ;;
+        --help|-h|help)
+          _denon_data_capabilities_usage
+          return 0
+          ;;
+        *)
+          _denon_data_capabilities_usage >&2
+          return 1
+          ;;
+      esac
+    done
+
+    if [[ -n "$source_file" ]]; then
+      [[ -r "$source_file" ]] || { echo "Error: cannot read capability source: $source_file" >&2; return 1; }
+      source_endpoint="$source_file"
+      xml=$(<"$source_file")
+    elif [[ "$probe_safe" == "1" ]]; then
+      source_endpoint="http://${IP}:8080/goform/Deviceinfo.xml"
+      xml=$(_denon_curl "$source_endpoint" 2>/dev/null || printf '')
+      [[ -n "$(_denon_trim "$xml")" ]] || { echo "Error: live Deviceinfo.xml returned no data" >&2; return 1; }
+    else
+      source_file=$(_denon_data_capabilities_default_source) || {
+        echo "Error: could not locate bundled capability reference" >&2
+        return 1
+      }
+      [[ -r "$source_file" ]] || { echo "Error: cannot read bundled capability reference: $source_file" >&2; return 1; }
+      source_endpoint="$source_file"
+      xml=$(<"$source_file")
+    fi
+
+    _denon_data_capability_prepare_records "$xml" "$source_endpoint" "$probe_safe"
+    if [[ "$json" == "1" ]]; then
+      _denon_data_print_capabilities_json
+    else
+      _denon_data_print_capabilities_readable
+    fi
+  }
+
   _denon_data_requires_receiver() {
     local sub="$(_denon_lower "${1:-}")"
     local mode="$(_denon_lower "${2:-}")"
+    local arg
 
     case "$sub:$mode" in
       fields:--available|dump:--readable|dump:--all|dump:--json|dump:--raw|discover:*|discover:) return 0 ;;
-      *) return 1 ;;
     esac
+    if [[ "$sub" == "capabilities" ]]; then
+      for arg in "$@"; do
+        [[ "$(_denon_lower "$arg")" == "--probe-safe" ]] && return 0
+      done
+    fi
+    return 1
   }
 
   _denon_data_target_ip() {
@@ -2519,6 +2839,9 @@ print(d.decode('utf-8','replace'))
             return 1
             ;;
         esac
+        ;;
+      capabilities|discover-capabilities|verbs)
+        _denon_data_capabilities_cmd "${@:2}"
         ;;
       *)
         _denon_data_usage >&2
@@ -4949,7 +5272,7 @@ _denon_completion() {
       ;;
     data)
       if (( CURRENT == 3 )); then
-        _values 'data subcommand' fields dump discover
+        _values 'data subcommand' fields dump discover capabilities discover-capabilities verbs
         return
       fi
       case "${words[3]}" in
@@ -4963,6 +5286,10 @@ _denon_completion() {
           ;;
         discover)
           _values 'data discover mode' --json
+          return
+          ;;
+        capabilities|discover-capabilities|verbs)
+          _values 'data capabilities options' --json --source --probe-safe --help
           return
           ;;
       esac

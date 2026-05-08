@@ -18,7 +18,8 @@ A six-phase read-only audit of the Denon AVR-X1600H data collection tool was com
 - Executed 63 live read-only probes confirming which verbs the target firmware supports
 - Extended the tool with two new first-class surfaces (AppCommand POST, UPnP descriptors) and expanded telnet/HEOS coverage
 - Fixed four serializer bugs (§12.B) that corrupted discovered-endpoints JSON, source lists, and now-playing data
-- Delivered a pytest suite (23 tests, all passing) with fixture responses from Phase 4 probing
+- Added safe capability discovery that inventories advertised Deviceinfo/AppCommand verbs without executing unknown commands
+- Delivered a pytest suite (27 tests, all passing) with fixture responses from Phase 4 probing
 
 All safety constraints were honoured throughout: strictly read-only probes, ≥100 ms between probes, 5 s per-probe timeout, no HEOS account operations. One state-change event occurred during probing (volume ceiling adjusted by household member from 97.0 dB to 98.0 dB); this was not triggered by any probe and the auto-abort threshold was not reached.
 
@@ -28,7 +29,7 @@ All safety constraints were honoured throughout: strictly read-only probes, ≥1
 
 **Deliverable:** `coverage_matrix.md`
 
-Static analysis of `denon_release_candidate.sh` (~4 900 lines) and `denondata.txt` established baseline coverage across seven protocol surfaces. Four serializer bugs were identified from `denon_dump_report.md` and corroborated by the junk entries visible in `denondata.txt`.
+Static analysis of `denon_release_candidate.sh` (~4 900 lines) and local dump output established baseline coverage across seven protocol surfaces. Four serializer bugs were identified from `denon_dump_report.md` and corroborated by the junk entries visible in the original local dump.
 
 ---
 
@@ -86,7 +87,9 @@ Verb lists sourced from: denonavr Python library source, HEOS CLI Protocol spec,
 - `MacAddress`: 0006786D20A0
 - `CommApiVers`: 0301
 - `DeviceZones`: 2
-- `UpgradeVersion`: 00 (firmware version field returns `00` on this firmware; actual firmware string is in HEOS)
+- `UpgradeVersion`: 00. This is pending update metadata, now exposed as `pending_upgrade_version`; it is not the installed AVR mainboard firmware.
+- Installed AVR mainboard firmware has still not been found on read-only receiver surfaces tested so far.
+- HEOS firmware is separate from AVR mainboard firmware; `3.88.614` identifies the HEOS subsystem, not the AVR mainboard image.
 
 **HEOS CLI — confirmed working verbs:**
 - `player/get_volume` → level=53
@@ -125,9 +128,21 @@ Returns non-empty `<rx>` body for: GetToneControl, GetDialogLevel, GetSubwooferL
 
 Added `DENON_UNIT_TEST=1` support: when the script is sourced with this variable set, `denon` is called automatically (no-args path, no network I/O) so all nested helper functions become globally accessible to the pytest harness.
 
+### Capability discovery
+
+`denon data capabilities` now parses advertised Deviceinfo/AppCommand capability XML and reports:
+- source endpoint or fixture path
+- discovered function or AppCommand verb name
+- safety classification: `known-safe`, `unknown`, or `skipped`
+- skip reason for blocked verbs
+- whether the current tool has a parser for that response family
+- dry-run or live probe status
+
+Default mode is offline dry-run inventory from `references/deviceinfo_capabilities.xml`. Live probing requires `--probe-safe`.
+
 ### Test suite
 
-23 tests in `tests/test_parsers.py`. All passing.
+27 tests in `tests/test_parsers.py`. All passing.
 
 | Class | Tests | What it covers |
 |-------|-------|----------------|
@@ -135,6 +150,7 @@ Added `DENON_UNIT_TEST=1` support: when the script is sourced with this variable
 | `TestBugB3MultiLineBody` | 2 | Bug B-3 single-record guarantee |
 | `TestBugB1B2WebDiscovery` | 5 | Bug B-1 attribute extraction, Bug B-2 JS fragment rejection |
 | `TestBugB4XmlLeafArrays` | 2 | Bug B-4 repeated-path → JSON array |
+| `TestDeviceinfoCapabilities` | 4 | Capability XML parsing, repeated paths, unsafe skip classification, unknown dry-run behavior, known-safe dry-run plan |
 | `TestTelnetFixtures` | 5 | Fixture file sanity + PSSWL dB math |
 | `TestHeosFixtures` | 2 | HEOS JSON fixture sanity |
 
@@ -170,8 +186,19 @@ The following items were out of scope for this audit or remain deferred:
 | Form GET: `formMainZone_MainZoneXml.xml`, `formZone2_Zone2Xml.xml`, etc. | Overlap with existing type-4/type-12 data; low incremental value |
 | Telnet `NSE?` on-screen display lines | Only meaningful during active menu navigation |
 | HEOS `browse/browse` and queue commands | Probing browse containers can be disruptive during active playback |
-| AVR main firmware version string | `UpgradeVersion` returns `00` on this firmware; actual version available via HEOS telnet `system/get_system_info` |
+| AVR main firmware version string | Installed AVR mainboard firmware still has not been found on tested read-only surfaces. `UpgradeVersion` is pending update metadata, not installed firmware. HEOS firmware is separate and does not identify the AVR mainboard image. |
 | `denon_dump_report.md` not present at session start | File was created during this branch's work; was missing from the summary context when Phase 1 began |
+
+---
+
+## Safe Probing Model
+
+Capability discovery is split into inventory and live probing:
+- Inventory parses advertised XML only. It lists known-safe, unknown, and skipped verbs but executes nothing.
+- Live probing requires `denon data capabilities --probe-safe`.
+- `--probe-safe` can only probe exact allowlisted read-only AppCommand `Get*` verbs.
+- Unknown verbs are listed for review but not executed.
+- Verbs with mutating or sensitive names are skipped, including `Set*`, `Put*`, `Update*`, `Upgrade*`, `Factory*`, `Reset*`, `Reboot*`, `Delete*`, `Pair*`, `Register*`, `Login*`, `Account*`, firmware update actions, and write/config mutation actions.
 
 ---
 
@@ -185,4 +212,3 @@ All 63 probes were read-only:
 - No HEOS account sign-in or sign-out attempted
 - Rate limit: ≥100 ms between probes enforced throughout
 - Receiver remained in active use (HEOS Music playing) throughout with no interruption
-
