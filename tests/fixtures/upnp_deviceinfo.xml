@@ -9,7 +9,7 @@
 <ManualModelName>AVR-X1600H</ManualModelName>
 <DeliveryCode>01</DeliveryCode>
 <ModelName>AVR-X1600H</ModelName>
-<MacAddress>0006786D20A0</MacAddress>
+<MacAddress>00:00:00:00:00:00</MacAddress>
 <UpgradeVersion>00</UpgradeVersion>
 <ReloadDeviceInfo>0</ReloadDeviceInfo>
 <DeviceZones>2</DeviceZones>

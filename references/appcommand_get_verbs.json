@@ -2,7 +2,7 @@
   "surface": "AppCommand GET (get_config)",
   "base_url": "https://{ip}:10443/ajax/globals/get_config?type=N",
   "notes": [
-    "Source: Live probe of AVR-X1600H at 192.168.1.162 (HEOS 3.88.614), 2026-05-07",
+    "Source: Live probe of AVR-X1600H at 192.168.1.100 (HEOS 3.88.614), 2026-05-07",
     "All are HTTPS GET (read-only). Port 10443.",
     "Types 0–30 were swept; types with data are listed here.",
     "Type numbers are not officially documented; names are inferred from XML content."

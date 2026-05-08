@@ -21,9 +21,18 @@ docs/denon-demo.gif
 
 # local receiver dumps
 denondata*.txt
+probe_log*.jsonl
+probe_plan*.json
+!docs/research/probe_plan.template.json
+state_before*.json
+state_after*.json
+state_diff*.json
 *_dump*.txt
 data-dump*.json
 local-live-runs/
+codex-research-*.log
+*_dump_report.md
+FINAL_REPORT.md
 __pycache__/
 *.pyc
 .pytest_cache/

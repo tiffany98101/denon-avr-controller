@@ -4,7 +4,7 @@
     "Source: Community Denon AVR research, Home Assistant denonavr integration, ol-iver/denonavr",
     "All are HTTP GET (read-only).",
     "Port 8080 is the Denon HTTP server; port 60006 is the AIOS/HEOS UPnP server.",
-    "These descriptors expose AVR firmware version, MAC, serial, and API version — fields absent from all other surfaces."
+    "These descriptors expose model identity, MAC, serial-like identifiers, API version, pending update metadata, and separate HEOS/AIOS firmware fields."
   ],
   "endpoints": [
     {
@@ -12,14 +12,14 @@
       "url": "http://{ip}:8080/goform/Deviceinfo.xml",
       "method": "GET",
       "expected_fields": {
-        "UpgradeVersion": "AVR main firmware version string",
+        "UpgradeVersion": "Pending update metadata; not installed AVR mainboard firmware",
         "CommApiVers": "Control API version",
         "BrandCode": "Manufacturer code",
         "ModelName": "Model name",
         "SerialNumber": "Serial number (may be empty on some firmware)",
         "MacAddress": "Network MAC address"
       },
-      "notes": "Primary source for AVR firmware version. denonavr library polls this for update checks."
+      "notes": "Primary source for Deviceinfo metadata. Do not label UpgradeVersion as installed firmware."
     },
     {
       "name": "description.xml",

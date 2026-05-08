@@ -15,8 +15,8 @@
   <manufacturerURL>http://www.denon.com</manufacturerURL>
   <modelName>Denon AVR-X1600H</modelName>
   <modelNumber>Aios 4.025</modelNumber>
-  <serialNumber>BJE27210571433</serialNumber>
-  <UDN>uuid:98dc1474-f5a6-189c-0080-0006786d20a2</UDN>
+  <serialNumber>SERIAL_PLACEHOLDER</serialNumber>
+  <UDN>uuid:00000000-0000-0000-0000-000000000000</UDN>
   <DMH:X_Audyssey>00000002</DMH:X_Audyssey>
   <DMH:X_AudysseyPort>1256</DMH:X_AudysseyPort>
   <DMH:X_DeviceCapabilities>ba153b04</DMH:X_DeviceCapabilities>
@@ -29,7 +29,7 @@
   <manufacturerURL>http://www.denon.com</manufacturerURL>
   <modelName>Denon AVR-X1600H</modelName>
   <modelNumber>Aios 4.025</modelNumber>
-  <UDN>uuid:1e731f55-5221-1c4b-0080-0006786d20a2</UDN>
+  <UDN>uuid:00000000-0000-0000-0000-000000000000</UDN>
   <X_Play_Queue_Capacity>1000</X_Play_Queue_Capacity>
   <qq:X_QPlay_SoftwareCapability>QPlay:2</qq:X_QPlay_SoftwareCapability>
 <serviceList>

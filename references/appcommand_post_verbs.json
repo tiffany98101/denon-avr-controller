@@ -69,7 +69,7 @@
       "name": "GetSoftwareVersion",
       "query_syntax": "<cmd id=\"1\">GetSoftwareVersion</cmd>",
       "expected_response_shape": "<cmd id=\"1\"><SoftwareVersion>...</SoftwareVersion></cmd>",
-      "notes": "AVR main firmware version string — may be empty on some firmware"
+      "notes": "Possible software-version field if the receiver returns one; do not substitute HEOS/AIOS firmware for AVR mainboard firmware."
     },
     {
       "name": "GetModelName",

@@ -64,7 +64,7 @@ class TestParseXmlField:
         """)
         r = _bash(code)
         assert r.returncode == 0
-        assert r.stdout.strip() == "0006786D20A0"
+        assert r.stdout.strip() == "00:00:00:00:00:00"
 
     def test_commapiversfrom_deviceinfo(self):
         code = textwrap.dedent(f"""\
@@ -92,7 +92,7 @@ class TestParseXmlField:
         """)
         r = _bash(code)
         assert r.returncode == 0
-        assert r.stdout.strip() == "BJE27210571433"
+        assert r.stdout.strip() == "SERIAL_PLACEHOLDER"
 
     def test_aios_firmware_from_aios(self):
         code = textwrap.dedent(f"""\
