@@ -24,3 +24,6 @@ denondata*.txt
 *_dump*.txt
 data-dump*.json
 local-live-runs/
+__pycache__/
+*.pyc
+.pytest_cache/
