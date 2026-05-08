@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Device_Info>
+  <DeviceCapabilities>
+    <Setup>
+      <ToneControl>
+        <FuncName>ToneControl</FuncName>
+        <Functions>
+          <GetToneControl>1</GetToneControl>
+          <SetToneControl>1</SetToneControl>
+        </Functions>
+      </ToneControl>
+      <Mystery>
+        <FuncName>Mystery</FuncName>
+        <Commands>
+          <GetMystery>1</GetMystery>
+          <ResetDevice>1</ResetDevice>
+        </Commands>
+      </Mystery>
+    </Setup>
+    <DeviceZoneCapabilities>
+      <Zone>
+        <Functions>
+          <GetZoneName>1</GetZoneName>
+        </Functions>
+      </Zone>
+      <Zone>
+        <Functions>
+          <GetZoneName>1</GetZoneName>
+        </Functions>
+      </Zone>
+    </DeviceZoneCapabilities>
+  </DeviceCapabilities>
+</Device_Info>

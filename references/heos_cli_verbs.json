@@ -1,0 +1,112 @@
+{
+  "surface": "HEOS CLI",
+  "protocol": "TCP/1255",
+  "notes": [
+    "Source: HEOS CLI Protocol Specification (community reference), denon_heos_helper.py, Home Assistant denonavr integration",
+    "All commands listed are read-only (get_* or check_* or heart_beat).",
+    "Mutating commands (set_*, play_*, clear_, remove_, save_) are excluded per safety constraint.",
+    "browse/ and player/get_queue are technically read-only but skipped in active-use mode per safety rule 3.",
+    "Responses are JSON: {\"heos\":{\"command\":\"...\",\"result\":\"success\",\"message\":\"...\"},\"payload\":...}"
+  ],
+  "commands": [
+    {
+      "name": "system/heart_beat",
+      "query_syntax": "heos://system/heart_beat\r\n",
+      "expected_response_shape": {"heos": {"command": "system/heart_beat", "result": "success", "message": ""}},
+      "notes": "Connectivity / keep-alive check. Safe always.",
+      "active_use_safe": true
+    },
+    {
+      "name": "system/get_system_info",
+      "query_syntax": "heos://system/get_system_info\r\n",
+      "expected_response_shape": {"heos": {"command": "system/get_system_info", "result": "success", "message": ""}, "payload": {"name": "...", "model": "...", "version": "...", "ip": "...", "network": "...", "serial": "...", "lineout": "..."}},
+      "notes": "Returns hardware model, firmware version, serial number, network type. Key field: serial.",
+      "active_use_safe": true
+    },
+    {
+      "name": "system/check_account",
+      "query_syntax": "heos://system/check_account\r\n",
+      "expected_response_shape": {"heos": {"command": "system/check_account", "result": "success", "message": "signed_out"}},
+      "notes": "Returns account sign-in state. Unit is intentionally signed out; expect signed_out. Does NOT trigger sign-in.",
+      "active_use_safe": true
+    },
+    {
+      "name": "player/get_players",
+      "query_syntax": "heos://player/get_players\r\n",
+      "expected_response_shape": {"payload": [{"name": "...", "pid": "...", "model": "...", "version": "...", "network": "...", "lineout": "..."}]},
+      "notes": "Already covered. Returns pid used for per-player commands.",
+      "active_use_safe": true
+    },
+    {
+      "name": "player/get_volume",
+      "query_syntax": "heos://player/get_volume?pid={pid}\r\n",
+      "expected_response_shape": {"heos": {"message": "pid=...&level=..."}},
+      "notes": "HEOS-reported volume level (0-100). Cross-check against type-12 raw volume.",
+      "active_use_safe": true
+    },
+    {
+      "name": "player/get_mute",
+      "query_syntax": "heos://player/get_mute?pid={pid}\r\n",
+      "expected_response_shape": {"heos": {"message": "pid=...&state=on|off"}},
+      "notes": "HEOS-reported mute state. Cross-check against type-12 mute.",
+      "active_use_safe": true
+    },
+    {
+      "name": "player/get_play_state",
+      "query_syntax": "heos://player/get_play_state?pid={pid}\r\n",
+      "expected_response_shape": {"heos": {"message": "pid=...&state=play|pause|stop"}},
+      "notes": "Already covered in denon_heos_helper.py show_now().",
+      "active_use_safe": true
+    },
+    {
+      "name": "player/get_now_playing_media",
+      "query_syntax": "heos://player/get_now_playing_media?pid={pid}\r\n",
+      "expected_response_shape": {"payload": {"type": "...", "song": "...", "artist": "...", "album": "...", "station": "..."}},
+      "notes": "Already covered. Safe per safety rule 3.",
+      "active_use_safe": true
+    },
+    {
+      "name": "player/get_play_mode",
+      "query_syntax": "heos://player/get_play_mode?pid={pid}\r\n",
+      "expected_response_shape": {"heos": {"message": "pid=...&repeat=off|on_all|on_one&shuffle=on|off"}},
+      "notes": "Already covered in set_play_mode() read-path.",
+      "active_use_safe": true
+    },
+    {
+      "name": "player/check_update",
+      "query_syntax": "heos://player/check_update?pid={pid}\r\n",
+      "expected_response_shape": {"heos": {"message": "pid=..."}},
+      "notes": "Already covered. Does not trigger update, only checks availability.",
+      "active_use_safe": true
+    },
+    {
+      "name": "group/get_groups",
+      "query_syntax": "heos://group/get_groups\r\n",
+      "expected_response_shape": {"payload": [{"gid": "...", "name": "...", "players": []}]},
+      "notes": "Already covered.",
+      "active_use_safe": true
+    },
+    {
+      "name": "group/get_volume",
+      "query_syntax": "heos://group/get_volume?gid={gid}\r\n",
+      "expected_response_shape": {"heos": {"message": "gid=...&level=..."}},
+      "notes": "Group volume. Requires at least one group to exist.",
+      "active_use_safe": true
+    },
+    {
+      "name": "group/get_mute",
+      "query_syntax": "heos://group/get_mute?gid={gid}\r\n",
+      "expected_response_shape": {"heos": {"message": "gid=...&state=on|off"}},
+      "notes": "Group mute state.",
+      "active_use_safe": true
+    },
+    {
+      "name": "browse/get_music_sources",
+      "query_syntax": "heos://browse/get_music_sources\r\n",
+      "expected_response_shape": {"payload": [{"name": "...", "type": "...", "sid": "..."}]},
+      "notes": "Already covered. Deferred in active-use mode per safety rule 3 browse flag.",
+      "active_use_safe": false,
+      "defer_in_active_use": true
+    }
+  ]
+}

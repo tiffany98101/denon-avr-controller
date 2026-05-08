@@ -1,0 +1,87 @@
+{
+  "surface": "AppCommand POST",
+  "endpoint": "/goform/AppCommand.xml",
+  "method": "POST",
+  "content_type": "text/xml",
+  "request_envelope": "<?xml version=\"1.0\" encoding=\"utf-8\"?><tx><cmd id=\"1\">{VERB}</cmd></tx>",
+  "notes": [
+    "Source: ol-iver/denonavr decoders.py + appcommand.py, Home Assistant denonavr integration",
+    "All verbs listed here are Get* (read-only). Set* verbs are excluded per safety constraint.",
+    "Response envelope: <rx><cmd id=\"1\">{RESPONSE_XML}</cmd></rx>",
+    "Port 80 or 8080 (try both); some units require HTTP not HTTPS for /goform/"
+  ],
+  "verbs": [
+    {
+      "name": "GetAllZonePowerStatus",
+      "query_syntax": "<cmd id=\"1\">GetAllZonePowerStatus</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><zone name=\"...\" zone=\"1\" power=\"ON|OFF|STANDBY\"/></cmd>",
+      "notes": "Zone power for all zones"
+    },
+    {
+      "name": "GetAllZoneVolume",
+      "query_syntax": "<cmd id=\"1\">GetAllZoneVolume</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><zone name=\"...\" zone=\"1\" volume=\"...\"/></cmd>",
+      "notes": "Volume for all zones; value is raw (numeric)"
+    },
+    {
+      "name": "GetAllZoneSource",
+      "query_syntax": "<cmd id=\"1\">GetAllZoneSource</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><zone name=\"...\" zone=\"1\" source=\"...\"/></cmd>",
+      "notes": "Active source for all zones"
+    },
+    {
+      "name": "GetNetAudioStatus",
+      "query_syntax": "<cmd id=\"1\">GetNetAudioStatus</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><netaudio><song>...</song><artist>...</artist><album>...</album><station>...</station></netaudio></cmd>",
+      "notes": "Now-playing metadata for network audio / HEOS source"
+    },
+    {
+      "name": "GetTunerStatus",
+      "query_syntax": "<cmd id=\"1\">GetTunerStatus</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><tuner band=\"...\" frequency=\"...\"/></cmd>",
+      "notes": "Tuner band + frequency"
+    },
+    {
+      "name": "GetPresetStatus",
+      "query_syntax": "<cmd id=\"1\">GetPresetStatus</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><preset>...</preset></cmd>",
+      "notes": "Quick-select / preset info"
+    },
+    {
+      "name": "GetSourceStatus",
+      "query_syntax": "<cmd id=\"1\">GetSourceStatus</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><source>...</source></cmd>",
+      "notes": "Current input source with rename info"
+    },
+    {
+      "name": "GetSurroundModeStatus",
+      "query_syntax": "<cmd id=\"1\">GetSurroundModeStatus</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><surround>...</surround></cmd>",
+      "notes": "Current surround/sound mode"
+    },
+    {
+      "name": "GetFriendlyName",
+      "query_syntax": "<cmd id=\"1\">GetFriendlyName</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><FriendlyName>...</FriendlyName></cmd>",
+      "notes": "Receiver display name"
+    },
+    {
+      "name": "GetSoftwareVersion",
+      "query_syntax": "<cmd id=\"1\">GetSoftwareVersion</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><SoftwareVersion>...</SoftwareVersion></cmd>",
+      "notes": "AVR main firmware version string — may be empty on some firmware"
+    },
+    {
+      "name": "GetModelName",
+      "query_syntax": "<cmd id=\"1\">GetModelName</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><ModelName>...</ModelName></cmd>",
+      "notes": "Model name string"
+    },
+    {
+      "name": "GetToneControl",
+      "query_syntax": "<cmd id=\"1\">GetToneControl</cmd>",
+      "expected_response_shape": "<cmd id=\"1\"><ToneControl>...</ToneControl></cmd>",
+      "notes": "Tone control (bass/treble) via AppCommand path"
+    }
+  ]
+}
