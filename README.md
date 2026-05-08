@@ -287,6 +287,7 @@ DENON_DATA_DISCOVERY_MAX_TYPE=50 ./denon_release_candidate.sh data dump --json
 - `data fields --available` queries the configured AVR through read-only paths and shows known fields that currently have values.
 - `data dump --readable`, `data dump --json`, and `data dump --raw` query safe read-only sources for an exhaustive receiver snapshot. This includes responding `get_config` XML types from `0..DENON_DATA_DISCOVERY_MAX_TYPE` (default `30`), `/general/general.html`, same-host read-only web UI links, JS-discovered read-only AJAX/XML/status paths, HEOS player metadata already used by the tool, and supported telnet query commands.
 - `data capabilities` parses advertised Deviceinfo/AppCommand capability XML and reports each discovered verb as `known-safe`, `unknown`, or `skipped`. It defaults to offline dry-run inventory from `references/deviceinfo_capabilities.xml`; live AppCommand probing requires `--probe-safe` and is limited to an exact read-only allowlist.
+- The live capability analysis is summarized in `docs/live-capability-analysis.md`.
 - Live `data` modes do not scan for receivers. Set `DENON_IP`, `DENON_DEFAULT_IP`, or use an existing cached receiver IP.
 - Raw/full dumps may include serial numbers, MAC addresses, network identifiers, account-related fields, or other sensitive receiver-provided data. Nothing is uploaded or sent off-machine.
 - Data varies by Denon model, firmware version, network setup, and HEOS state.

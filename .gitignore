@@ -23,3 +23,4 @@ docs/denon-demo.gif
 denondata*.txt
 *_dump*.txt
 data-dump*.json
+local-live-runs/

@@ -301,6 +301,92 @@ class TestDeviceinfoCapabilities:
         assert item["probe_summary"] == "eligible for --probe-safe"
         assert item["has_parser"] is True
 
+    def test_capability_json_shape_for_probe_results(self):
+        [item] = self._verbs("GetToneControl")
+        assert set(item) == {
+            "source_endpoint",
+            "xml_path",
+            "verb",
+            "kind",
+            "safety",
+            "skip_reason",
+            "has_parser",
+            "probe_status",
+            "probe_summary",
+        }
+
+
+class TestPromotedLiveFieldParsers:
+    def test_system_type11_fields_are_parsed_by_path(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/get_config_live_system_type11.xml')
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "System.AdvancedMode")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "System.CIMode")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "System.MenuLock")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "System.GuiType")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "System.HEOSSignIn")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "System.WebUIType")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "System.ProductType")"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.splitlines() == ["1", "2", "2", "1", "3", "3", "219"]
+
+    def test_volume_scale_and_limits_are_parsed_by_zone(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/get_config_live_volume_type12.xml')
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "listGlobals.MainZone.VolumeScale")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "listGlobals.MainZone.VolumeLimit")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "listGlobals.Zone2.VolumeScale")"
+            printf '%s\\n' "$(_denon_data_xml_leaf_first "$body" "listGlobals.Zone2.VolumeLimit")"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.splitlines() == ["1", "99", "1", "70"]
+
+    def test_promoted_xml_leaves_are_not_reported_as_unhandled(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/get_config_live_system_type11.xml')
+            data_available_records=""
+            data_get_config_leaf_records=""
+            _denon_data_add_xml_leaves "11" "$body"
+            printf '%s' "$data_available_records"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Unhandled parsed XML leaves" not in r.stdout
+        assert "System.AdvancedMode" not in r.stdout
+
+    def test_empty_rx_response_is_classified_without_payload(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/appcommand_empty_rx.xml')
+            _denon_data_appcommand_response_status_summary "$body"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "empty\tnone"
+
+    def test_no_response_error_is_classified(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/appcommand_error.txt')
+            _denon_data_appcommand_response_status_summary "$body"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "no_response\tCould not handle the request"
+
+    def test_useful_rx_response_is_classified_ok(self):
+        code = textwrap.dedent(f"""\
+            body=$(cat '{FIXTURES}/appcommand_useful_rx.xml')
+            _denon_data_appcommand_response_status_summary "$body"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        status, summary = r.stdout.strip().split("\t", 1)
+        assert status == "ok"
+        assert "GetToneControl" in summary
+        assert "6" in summary
+
 
 # ---------------------------------------------------------------------------
 # Telnet fixture sanity checks

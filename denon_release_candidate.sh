@@ -1638,6 +1638,8 @@ EOF
     cat <<'EOF'
 Receiver identity	power_xml	receiver_name	type 3 XML / FriendlyName
 Receiver identity	power_xml	receiver_ip	discovered receiver IP
+Receiver identity	type_1	brand_code	type 1 XML / Brand
+Receiver identity	type_5	model_type	type 5 XML / ModelType
 Network / HEOS	heos_players	heos_model	HEOS player/get_players / model
 Network / HEOS	heos_players	heos_version	HEOS player/get_players / version
 Network / HEOS	heos_players	network	HEOS player/get_players / network
@@ -1647,6 +1649,8 @@ Main Zone	type_7	source_index	type 7 XML / Zone zone=1 @index
 Main Zone	type_7	source_name	type 7 XML / Zone zone=1 source map lookup
 Main Zone	type_12	volume_raw	type 12 XML / MainZone/Volume
 Main Zone	type_12	volume_db	raw volume converted to dB
+Main Zone	type_12	volume_scale	type 12 XML / MainZone/VolumeScale
+Main Zone	type_12	volume_limit_raw	type 12 XML / MainZone/VolumeLimit
 Main Zone	type_12	volume_max_db	type 12 XML / MainZone/Max
 Main Zone	type_12	muted	type 12 XML / MainZone/Mute
 Zone 2	type_6	zone2_name	type 6 XML / Zone2
@@ -1655,6 +1659,8 @@ Zone 2	type_7	source_index	type 7 XML / Zone zone=2 @index
 Zone 2	type_7	source_name	type 7 XML / Zone zone=2 source map lookup
 Zone 2	type_12	volume_raw	type 12 XML / Zone2/Volume
 Zone 2	type_12	volume_db	raw volume converted to dB
+Zone 2	type_12	volume_scale	type 12 XML / Zone2/VolumeScale
+Zone 2	type_12	volume_limit_raw	type 12 XML / Zone2/VolumeLimit
 Zone 2	type_12	muted	type 12 XML / Zone2/Mute
 Sources	type_7	main_zone_sources	type 7 XML / Zone zone=1 source list
 Sources	type_7	zone2_sources	type 7 XML / Zone zone=2 source list
@@ -1672,6 +1678,16 @@ Tone / Audyssey	telnet_ps	subwoofer_level_db	telnet PSSWL ? (converted to dB)
 Tone / Audyssey	telnet_ps	loudness_management	telnet PSLOM ?
 Tone / Audyssey	telnet_cv	channel_levels	telnet CV? per-channel trims
 Network / HEOS	heos_players	heos_volume_level	HEOS player/get_volume (main player)
+System	type_8	setup_lock	type 8 XML / SetupLock raw code
+System	type_9	bt_headphones_single_used	type 9 XML / BtHeadphonesSingleUsed raw code
+System	type_10	speaker_preset	type 10 XML / SpeakerPreset raw code
+System	type_11	advanced_mode	type 11 XML / System/AdvancedMode raw code
+System	type_11	ci_mode	type 11 XML / System/CIMode raw code
+System	type_11	menu_lock	type 11 XML / System/MenuLock raw code
+System	type_11	gui_type	type 11 XML / System/GuiType raw code
+System	type_11	heos_sign_in	type 11 XML / System/HEOSSignIn raw code
+System	type_11	webui_type	type 11 XML / System/WebUIType raw code
+System	type_11	product_type	type 11 XML / System/ProductType raw code
 UPnP / Device Identity	upnp_deviceinfo	upnp_model	:8080/goform/Deviceinfo.xml / ModelName
 UPnP / Device Identity	upnp_deviceinfo	upnp_mac	:8080/goform/Deviceinfo.xml / MacAddress
 UPnP / Device Identity	upnp_deviceinfo	pending_upgrade_version	:8080/goform/Deviceinfo.xml / UpgradeVersion (pending update metadata, not installed firmware)
@@ -1739,10 +1755,17 @@ EOF
     printf -v "$var" '%s' "$body"
     data_get_config_types="${data_get_config_types}${type}"$'\n'
     case "$type" in
+      1) data_raw_type_1="$body" ;;
+      2) data_raw_type_2="$body" ;;
       3) data_raw_type_3="$body" ;;
       4) data_raw_type_4="$body" ;;
+      5) data_raw_type_5="$body" ;;
       6) data_raw_type_6="$body" ;;
       7) data_raw_type_7="$body" ;;
+      8) data_raw_type_8="$body" ;;
+      9) data_raw_type_9="$body" ;;
+      10) data_raw_type_10="$body" ;;
+      11) data_raw_type_11="$body" ;;
       12) data_raw_type_12="$body" ;;
     esac
   }
@@ -1803,6 +1826,43 @@ EOF
       '
   }
 
+  _denon_data_xml_leaf_first() {
+    local xml="$1"
+    local wanted_path="$2"
+
+    _denon_data_xml_leaf_paths "$xml" |
+      awk -F '\t' -v wanted="$wanted_path" '$1 == wanted { print $2; found=1; exit } END { exit found ? 0 : 1 }'
+  }
+
+  _denon_data_is_promoted_xml_leaf() {
+    local type="$1"
+    local path="$2"
+
+    case "${type}:${path}" in
+      1:Brand|3:FriendlyName|4:listGlobals.MainZone.Power|4:listGlobals.Zone2.Power|5:ModelType|6:ZoneRename.MainZone|6:ZoneRename.Zone2)
+        return 0
+        ;;
+      7:SourceList.Zone.Source.Name)
+        return 0
+        ;;
+      8:SetupLock|9:BtHeadphonesSingleUsed|10:SpeakerPreset)
+        return 0
+        ;;
+      11:System.AdvancedMode|11:System.CIMode|11:System.MenuLock|11:System.GuiType|11:System.HEOSSignIn|11:System.WebUIType|11:System.ProductType)
+        return 0
+        ;;
+      12:listGlobals.MainZone.Volume|12:listGlobals.MainZone.VolumeScale|12:listGlobals.MainZone.VolumeLimit|12:listGlobals.MainZone.Mute|12:listGlobals.MainZone.Max)
+        return 0
+        ;;
+      12:listGlobals.Zone2.Volume|12:listGlobals.Zone2.VolumeScale|12:listGlobals.Zone2.VolumeLimit|12:listGlobals.Zone2.Mute)
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
   _denon_data_add_xml_leaves() {
     local type="$1"
     local xml="$2"
@@ -1811,6 +1871,7 @@ EOF
     while IFS=$'\t' read -r path value; do
       [[ -n "$path$value" ]] || continue
       data_get_config_leaf_records+="${type}"$'\t'"${path}"$'\t'"${value}"$'\n'
+      _denon_data_is_promoted_xml_leaf "$type" "$path" && continue
       field="type_${type}.${path}"
       _denon_data_add_value "xml_leaves" "Unhandled parsed XML leaves" "$field" "$value"
     done < <(_denon_data_xml_leaf_paths "$xml")
@@ -2061,6 +2122,8 @@ EOF
     _denon_data_print_json_section "sleep_timer"
     printf ',"tone_audyssey":'
     _denon_data_print_json_section "tone_audyssey"
+    printf ',"system":'
+    _denon_data_print_json_section "system"
     printf ',"now_playing":'
     _denon_data_print_json_section "now_playing"
     printf ',"web_information":'
@@ -2121,10 +2184,17 @@ EOF
     max_type=$(_denon_data_discovery_max_type) || return 1
     data_get_config_types=""
     data_get_config_leaf_records=""
+    data_raw_type_1=""
+    data_raw_type_2=""
     data_raw_type_3=""
     data_raw_type_4=""
+    data_raw_type_5=""
     data_raw_type_6=""
     data_raw_type_7=""
+    data_raw_type_8=""
+    data_raw_type_9=""
+    data_raw_type_10=""
+    data_raw_type_11=""
     data_raw_type_12=""
 
     for ((type=0; type<=max_type; type++)); do
@@ -2144,8 +2214,10 @@ EOF
 
   _denon_data_collect_available() {
     local identity_xml power_xml source_xml vol_xml zone_names_xml
+    local brand_xml model_type_xml setup_lock_xml bt_headphones_xml speaker_preset_xml system_xml
     local friendly_name main_source_idx zone2_source_idx main_source_name zone2_source_name
     local main_power zone2_power main_mute zone2_mute main_vol_raw zone2_vol_raw
+    local main_vol_scale main_vol_limit zone2_vol_scale zone2_vol_limit
     local sound_mode_text sleep_line heos_text track_text track_rc
     local dynamic_eq_line dynamic_volume_line cinema_eq_line multeq_line bass_line treble_line
     local dash_main_zone_name="Main Zone" dash_zone2_name="Zone 2"
@@ -2157,17 +2229,30 @@ EOF
     data_available_records=""
     data_source_rows_main=""
     data_source_rows_zone2=""
+    data_raw_type_1=""
+    data_raw_type_2=""
     data_raw_type_3=""
     data_raw_type_4=""
+    data_raw_type_5=""
     data_raw_type_6=""
     data_raw_type_7=""
+    data_raw_type_8=""
+    data_raw_type_9=""
+    data_raw_type_10=""
+    data_raw_type_11=""
     data_raw_type_12=""
 
     _denon_data_collect_raw_endpoints || return 1
+    brand_xml="$data_raw_type_1"
     identity_xml="$data_raw_type_3"
     power_xml="$data_raw_type_4"
+    model_type_xml="$data_raw_type_5"
     zone_names_xml="$data_raw_type_6"
     source_xml="$data_raw_type_7"
+    setup_lock_xml="$data_raw_type_8"
+    bt_headphones_xml="$data_raw_type_9"
+    speaker_preset_xml="$data_raw_type_10"
+    system_xml="$data_raw_type_11"
     vol_xml="$data_raw_type_12"
 
     friendly_name=$(printf '%s' "$identity_xml" | sed -n 's:.*<FriendlyName>\([^<]*\)</FriendlyName>.*:\1:p' | sed -n '1p')
@@ -2181,6 +2266,10 @@ EOF
     zone2_mute=$(_denon_bool_name "$(_denon_extract_zone2_mute "$vol_xml")")
     main_vol_raw=$(_denon_extract_main_volume_raw "$vol_xml")
     zone2_vol_raw=$(_denon_extract_zone2_volume_raw "$vol_xml")
+    main_vol_scale=$(_denon_data_xml_leaf_first "$vol_xml" "listGlobals.MainZone.VolumeScale" 2>/dev/null || printf '')
+    main_vol_limit=$(_denon_data_xml_leaf_first "$vol_xml" "listGlobals.MainZone.VolumeLimit" 2>/dev/null || printf '')
+    zone2_vol_scale=$(_denon_data_xml_leaf_first "$vol_xml" "listGlobals.Zone2.VolumeScale" 2>/dev/null || printf '')
+    zone2_vol_limit=$(_denon_data_xml_leaf_first "$vol_xml" "listGlobals.Zone2.VolumeLimit" 2>/dev/null || printf '')
 
     if [[ -n "$zone_names_xml" ]]; then
       _denon_dashboard_parse_zone_names "$zone_names_xml"
@@ -2192,12 +2281,16 @@ EOF
 
     _denon_data_add_value "receiver" "Receiver" "name" "$friendly_name"
     _denon_data_add_value "receiver" "Receiver" "ip" "${IP:-}"
+    _denon_data_add_value "receiver" "Receiver" "brand_code" "$(_denon_data_xml_leaf_first "$brand_xml" "Brand" 2>/dev/null || printf '')"
+    _denon_data_add_value "receiver" "Receiver" "model_type" "$(_denon_data_xml_leaf_first "$model_type_xml" "ModelType" 2>/dev/null || printf '')"
     _denon_data_add_value "main_zone" "Main Zone" "zone_name" "$dash_main_zone_name"
     _denon_data_add_value "main_zone" "Main Zone" "power" "$main_power"
     _denon_data_add_value "main_zone" "Main Zone" "source_index" "$main_source_idx"
     _denon_data_add_value "main_zone" "Main Zone" "source_name" "$main_source_name"
     _denon_data_add_value "main_zone" "Main Zone" "volume_raw" "$main_vol_raw"
     [[ -n "$main_vol_raw" ]] && _denon_data_add_value "main_zone" "Main Zone" "volume_db" "$(_denon_raw_to_db "$main_vol_raw")"
+    _denon_data_add_value "main_zone" "Main Zone" "volume_scale" "$main_vol_scale"
+    _denon_data_add_value "main_zone" "Main Zone" "volume_limit_raw" "$main_vol_limit"
     _denon_data_add_value "main_zone" "Main Zone" "volume_max_db" "$dash_main_max_volume_db"
     _denon_data_add_value "main_zone" "Main Zone" "muted" "$main_mute"
     _denon_data_add_value "zone2" "Zone 2" "zone_name" "$dash_zone2_name"
@@ -2206,9 +2299,22 @@ EOF
     _denon_data_add_value "zone2" "Zone 2" "source_name" "$zone2_source_name"
     _denon_data_add_value "zone2" "Zone 2" "volume_raw" "$zone2_vol_raw"
     _denon_data_add_value "zone2" "Zone 2" "volume_db" "$dash_zone2_volume_db"
+    _denon_data_add_value "zone2" "Zone 2" "volume_scale" "$zone2_vol_scale"
+    _denon_data_add_value "zone2" "Zone 2" "volume_limit_raw" "$zone2_vol_limit"
     _denon_data_add_value "zone2" "Zone 2" "muted" "$zone2_mute"
     _denon_data_add_value "sources" "Sources" "main_zone_sources" "$(printf '%s\n' "$data_source_rows_main" | awk -F '\t' '{ printf "%s%s:%s", (NR>1 ? ", " : ""), $1, $3 }')"
     _denon_data_add_value "sources" "Sources" "zone2_sources" "$(printf '%s\n' "$data_source_rows_zone2" | awk -F '\t' '{ printf "%s%s:%s", (NR>1 ? ", " : ""), $1, $3 }')"
+
+    _denon_data_add_value "system" "System" "setup_lock" "$(_denon_data_xml_leaf_first "$setup_lock_xml" "SetupLock" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "bt_headphones_single_used" "$(_denon_data_xml_leaf_first "$bt_headphones_xml" "BtHeadphonesSingleUsed" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "speaker_preset" "$(_denon_data_xml_leaf_first "$speaker_preset_xml" "SpeakerPreset" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "advanced_mode" "$(_denon_data_xml_leaf_first "$system_xml" "System.AdvancedMode" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "ci_mode" "$(_denon_data_xml_leaf_first "$system_xml" "System.CIMode" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "menu_lock" "$(_denon_data_xml_leaf_first "$system_xml" "System.MenuLock" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "gui_type" "$(_denon_data_xml_leaf_first "$system_xml" "System.GuiType" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "heos_sign_in" "$(_denon_data_xml_leaf_first "$system_xml" "System.HEOSSignIn" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "webui_type" "$(_denon_data_xml_leaf_first "$system_xml" "System.WebUIType" 2>/dev/null || printf '')"
+    _denon_data_add_value "system" "System" "product_type" "$(_denon_data_xml_leaf_first "$system_xml" "System.ProductType" 2>/dev/null || printf '')"
 
     sound_mode_text=$(_denon_dashboard_telnet_status 2>/dev/null || printf '')
     if [[ -n "$sound_mode_text" ]]; then
@@ -2582,16 +2688,10 @@ EOF
     printf '%s\t%s' "$status" "$summary"
   }
 
-  _denon_data_probe_appcommand_safe() {
-    local verb="$1"
-    local request response summary status
+  _denon_data_appcommand_response_status_summary() {
+    local response="$1"
+    local summary status
 
-    _denon_data_capability_is_known_safe "$verb" || {
-      printf 'not_probed\tnot in exact live-probe allowlist'
-      return 0
-    }
-    request="<tx><cmd id=\"1\">${verb}</cmd></tx>"
-    response=$(_denon_curl -X POST -H 'Content-Type: text/xml' --data-binary "$request" "$BASE/goform/AppCommand.xml" 2>/dev/null || printf '')
     summary=$(printf '%s' "$response" | sed 's/<[^>]*>/ /g' | tr '\n\r' '  ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^[[:space:]]*//; s/[[:space:]]*$//' | cut -c 1-160)
     [[ -n "$summary" ]] || summary="none"
     if printf '%s' "$response" | grep -q '<rx>.*[^[:space:]].*</rx>'; then
@@ -2602,6 +2702,19 @@ EOF
       status="no_response"
     fi
     printf '%s\t%s' "$status" "$summary"
+  }
+
+  _denon_data_probe_appcommand_safe() {
+    local verb="$1"
+    local request response
+
+    _denon_data_capability_is_known_safe "$verb" || {
+      printf 'not_probed\tnot in exact live-probe allowlist'
+      return 0
+    }
+    request="<tx><cmd id=\"1\">${verb}</cmd></tx>"
+    response=$(_denon_curl -X POST -H 'Content-Type: text/xml' --data-binary "$request" "$BASE/goform/AppCommand.xml" 2>/dev/null || printf '')
+    _denon_data_appcommand_response_status_summary "$response"
   }
 
   _denon_data_capability_prepare_records() {

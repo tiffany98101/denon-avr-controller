@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<listGlobals>
+  <MainZone>
+    <Volume>535</Volume>
+    <VolumeScale>1</VolumeScale>
+    <VolumeLimit>99</VolumeLimit>
+    <Mute>2</Mute>
+    <Max>980</Max>
+  </MainZone>
+  <Zone2>
+    <Volume>650</Volume>
+    <VolumeScale>1</VolumeScale>
+    <VolumeLimit>70</VolumeLimit>
+    <Mute>2</Mute>
+  </Zone2>
+</listGlobals>
