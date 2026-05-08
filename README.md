@@ -190,10 +190,12 @@ Show current status:
 ./denon_release_candidate.sh status
 ./denon_release_candidate.sh info --json
 ./denon_release_candidate.sh dashboard --ascii
+./denon_release_candidate.sh dashboard --diagnostics
 ./denon_release_candidate.sh dashboard --watch --interval 5 --color auto
+./denon_release_candidate.sh dashboard --diagnostics --watch --interval 5 --color always --unicode
 ```
 
-In dashboard watch mode, press `q` to quit, `r` to force a redraw, or `Ctrl-C` to exit cleanly.
+Normal dashboard output stays concise. Add `--diagnostics` when you want receiver identity, volume scale/limit, lock/mode, HEOS sign-in, and firmware-limitation details alongside the live view. In dashboard watch mode, press `q` to quit, `r` to force a redraw, or `Ctrl-C` to exit cleanly.
 
 List sources:
 
@@ -321,7 +323,7 @@ denon raw get <type>
 denon raw set <type> '<xml>'
 denon snapshot [dir]
 denon doctor
-denon dashboard [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
+denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
 ```
 
 In watch mode, `q` quits, `r` redraws, and `Ctrl-C` exits cleanly.
@@ -603,7 +605,7 @@ shellcheck -s bash denon_release_candidate.sh
 
 Most AVR features are implemented directly in `denon_release_candidate.sh` using the Denon AVR control protocol over the existing telnet helper. HEOS queue, group, browse/search, stream, repeat, and shuffle commands use `denon_heos_helper.py` because those commands require socket I/O plus structured JSON array parsing and URL encoding. The public command surface remains the existing `denon` command.
 
-The dashboard renderer keeps the existing cards and data collection path. It recomputes terminal width on every render, uses stacked / compact / ultrawide layouts based on the current width, and redraws on `SIGWINCH` in watch mode. Color is optional and semantic only: `--color auto` uses color only on capable terminals, `--color always` forces color unless `NO_COLOR` is set, and `--color never` disables ANSI output.
+The dashboard renderer keeps the existing cards and data collection path. It recomputes terminal width on every render, uses stacked / compact / ultrawide layouts based on the current width, and redraws on `SIGWINCH` in watch mode. Color is optional and semantic only: `--color auto` uses color only on capable terminals, `--color always` forces color unless `NO_COLOR` is set, and `--color never` disables ANSI output. `dashboard --diagnostics` adds a separate diagnostics card that reuses `data summary` fields without cluttering normal status or normal dashboard output. AppCommand advertised capabilities are still inventory-only on the tested AVR-X1600H because safe allowlisted probes return `no_response`.
 
 `denon signal-debug` is intentionally diagnostic. Local testing on the AVR-X1600H showed `OPINFINS` / `OPINFASP` vary by selected input family, but did not prove a safe mapping for connected devices or live signal on every configured source. The normal dashboard therefore does not display a connected-input indicator.
 

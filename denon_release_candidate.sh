@@ -212,7 +212,7 @@ Receiver status:
   denon diff <snap-a> <snap-b>
                              Compare two snapshot directories
   denon doctor               Check dependencies, route, cache, and receiver reachability
-  denon dashboard [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
+  denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
 
 Sources:
@@ -2707,6 +2707,11 @@ print(d.decode('utf-8','replace'))
   }
 
   _denon_data_collect_full() {
+    _denon_data_collect_summary || return 1
+    _denon_data_collect_web_information || true
+  }
+
+  _denon_data_collect_summary() {
     _denon_data_collect_available || return 1
     if _denon_data_collect_upnp; then
       [[ -n "$data_upnp_model"    ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "upnp_model"       "$data_upnp_model"
@@ -2718,7 +2723,6 @@ print(d.decode('utf-8','replace'))
       [[ -n "$data_upnp_aios_fw"  ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "aios_firmware"    "$data_upnp_aios_fw"
       [[ -n "$data_upnp_udn"      ]] && _denon_data_add_value "upnp" "UPnP / Device Identity" "udn"              "$data_upnp_udn"
     fi
-    _denon_data_collect_web_information || true
   }
 
   _denon_data_print_discovery_readable() {
@@ -3160,7 +3164,7 @@ EOF
       summary)
         case "$mode" in
           ""|--json)
-            _denon_data_collect_full || return 1
+            _denon_data_collect_summary || return 1
             if [[ "$mode" == "--json" ]]; then
               _denon_data_print_summary_json
             else
@@ -3737,6 +3741,65 @@ EOF
     fi
   }
 
+  _denon_dashboard_summary_value() {
+    local json="$1"
+    local path="$2"
+
+    if command -v jq >/dev/null 2>&1; then
+      jq -r ".$path | if . == null then empty else . end" 2>/dev/null <<<"$json" | sed 's/^null$//'
+      return 0
+    fi
+    return 1
+  }
+
+  _denon_dashboard_collect_diagnostics() {
+    local summary_json value
+
+    dash_diag_brand_code=""
+    dash_diag_model_type=""
+    dash_diag_main_volume_scale=""
+    dash_diag_main_volume_limit=""
+    dash_diag_zone2_volume_scale=""
+    dash_diag_zone2_volume_limit=""
+    dash_diag_setup_lock=""
+    dash_diag_menu_lock=""
+    dash_diag_speaker_preset=""
+    dash_diag_advanced_mode=""
+    dash_diag_ci_mode=""
+    dash_diag_heos_sign_in=""
+    dash_diag_gui_type=""
+    dash_diag_webui_type=""
+    dash_diag_avr_firmware="unavailable"
+    dash_diag_heos_firmware=""
+
+    _denon_data_collect_summary >/dev/null 2>&1 || {
+      dash_errors="${dash_errors}diagnostics unavailable; "
+      return 0
+    }
+    summary_json=$(_denon_data_print_summary_json 2>/dev/null || printf '')
+    [[ -n "$summary_json" ]] || {
+      dash_errors="${dash_errors}diagnostics unavailable; "
+      return 0
+    }
+
+    value=$(_denon_dashboard_summary_value "$summary_json" "receiver.brand_code.raw"); [[ -n "$value" ]] && dash_diag_brand_code="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "receiver.model_type.raw"); [[ -n "$value" ]] && dash_diag_model_type="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "volume.main_zone.volume_scale.raw"); [[ -n "$value" ]] && dash_diag_main_volume_scale="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "volume.main_zone.volume_limit_raw"); [[ -n "$value" ]] && dash_diag_main_volume_limit="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "volume.zone2.volume_scale.raw"); [[ -n "$value" ]] && dash_diag_zone2_volume_scale="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "volume.zone2.volume_limit_raw"); [[ -n "$value" ]] && dash_diag_zone2_volume_limit="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "system.setup_lock.raw"); [[ -n "$value" ]] && dash_diag_setup_lock="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "system.menu_lock.raw"); [[ -n "$value" ]] && dash_diag_menu_lock="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "system.speaker_preset.raw"); [[ -n "$value" ]] && dash_diag_speaker_preset="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "system.advanced_mode.raw"); [[ -n "$value" ]] && dash_diag_advanced_mode="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "system.ci_mode.raw"); [[ -n "$value" ]] && dash_diag_ci_mode="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "system.heos_sign_in.raw"); [[ -n "$value" ]] && dash_diag_heos_sign_in="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "system.gui_type.raw"); [[ -n "$value" ]] && dash_diag_gui_type="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "system.webui_type.raw"); [[ -n "$value" ]] && dash_diag_webui_type="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "firmware.installed_avr_mainboard_firmware"); [[ -n "$value" ]] && dash_diag_avr_firmware="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "firmware.heos_version.value"); [[ -n "$value" ]] && dash_diag_heos_firmware="$value"
+  }
+
   _denon_dashboard_collect() {
     local info_json info_rc info_ok=0 info_text status_text zone2_text sources_text zone2_sources_text now_text now_rc
     local zone_names_xml vol_xml telnet_text
@@ -3778,6 +3841,7 @@ EOF
     dash_now_available=0
     dash_errors=""
     dash_main_sources="Sources unavailable"
+    dash_diag_body=""
 
     info_json=$(_denon_info --json 2>/dev/null)
     info_rc=$?
@@ -3870,6 +3934,10 @@ EOF
       if [[ -n "$heos_text" ]]; then
         _denon_dashboard_parse_heos_status "$heos_text"
       fi
+    fi
+
+    if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
+      _denon_dashboard_collect_diagnostics
     fi
   }
 
@@ -4302,6 +4370,20 @@ EOF
       "$dash_receiver" "$dash_ip" "${dash_heos_version:-Unknown}" "${dash_heos_network:-}" \
       "$dash_zone2_name" "$dash_zone2_power" "$dash_zone2_source_label" "$dash_zone2_volume_label" "$dash_zone2_muted")
 
+    if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
+      dash_diag_body=$(printf 'Brand:  raw=%s label=%s\nModel:  raw=%s label=%s\nMain volume: scale %s / limit %s\nZone2 volume: scale %s / limit %s\nLocks: setup %s / menu %s\nPreset: raw=%s label=%s\nModes: advanced %s / CI %s\nHEOS sign-in: raw=%s label=%s\nUI: gui %s / web %s\nAVR FW: %s\nHEOS FW: %s separate' \
+        "${dash_diag_brand_code:-unknown}" "$(_denon_data_raw_label "${dash_diag_brand_code:-}")" \
+        "${dash_diag_model_type:-unknown}" "$(_denon_data_raw_label "${dash_diag_model_type:-}")" \
+        "${dash_diag_main_volume_scale:-unknown}" "${dash_diag_main_volume_limit:-unknown}" \
+        "${dash_diag_zone2_volume_scale:-unknown}" "${dash_diag_zone2_volume_limit:-unknown}" \
+        "${dash_diag_setup_lock:-unknown}" "${dash_diag_menu_lock:-unknown}" \
+        "${dash_diag_speaker_preset:-unknown}" "$(_denon_data_raw_label "${dash_diag_speaker_preset:-}")" \
+        "${dash_diag_advanced_mode:-unknown}" "${dash_diag_ci_mode:-unknown}" \
+        "${dash_diag_heos_sign_in:-unknown}" "$(_denon_data_raw_label "${dash_diag_heos_sign_in:-}")" \
+        "${dash_diag_gui_type:-unknown}" "${dash_diag_webui_type:-unknown}" \
+        "${dash_diag_avr_firmware:-unavailable}" "${dash_diag_heos_firmware:-unknown}")
+    fi
+
     dash_events_body="${dashboard_events:-No state changes yet}"
   }
 
@@ -4326,6 +4408,9 @@ EOF
     _denon_dashboard_render_card "Main Zone" "$dash_main_body" "$width" 10
     _denon_dashboard_render_card "Now Playing / Audio" "$dash_now_body" "$width" 10
     _denon_dashboard_render_card "Receiver / Zone 2" "$dash_receiver_body" "$width" 11
+    if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
+      _denon_dashboard_render_card "Diagnostics" "$dash_diag_body" "$width" 15
+    fi
     _denon_dashboard_render_card "Main Zone Sources" "$dash_main_sources" "$width" 12
     _denon_dashboard_render_card "Recent Events" "$dash_events_body" "$width" 12
   }
@@ -4355,6 +4440,10 @@ EOF
     printf '\n'
 
     _denon_dashboard_render_card "Main Zone Sources" "$dash_main_sources" "$width" 12
+    if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
+      printf '\n'
+      _denon_dashboard_render_card "Diagnostics" "$dash_diag_body" "$width" 15
+    fi
   }
 
   _denon_dashboard_render_ultrawide() {
@@ -4387,6 +4476,10 @@ EOF
     col2_body="$dash_events_body"
     col2_width="$bottom_right"
     _denon_dashboard_render_columns 2 13
+    if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
+      printf '\n'
+      _denon_dashboard_render_card "Diagnostics" "$dash_diag_body" "$width" 15
+    fi
   }
 
   _denon_dashboard_render() {
@@ -4468,6 +4561,7 @@ EOF
     local dashboard_resize_pending=0
     local dashboard_stop_pending=0
     local dashboard_exit_status=0
+    local dashboard_diagnostics=0
 
     dashboard_ascii=0
     case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
@@ -4493,7 +4587,7 @@ EOF
           ;;
         --interval|-n)
           if [[ -z "${2:-}" || ! "$2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-            echo "Usage: denon dashboard [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]" >&2
+            echo "Usage: denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]" >&2
             return 1
           fi
           interval="$2"
@@ -4507,6 +4601,10 @@ EOF
           dashboard_ascii=0
           shift
           ;;
+        --diagnostics|--verbose|--details)
+          dashboard_diagnostics=1
+          shift
+          ;;
         --color)
           case "$(_denon_lower "${2:-}")" in
             auto|always|never)
@@ -4514,7 +4612,7 @@ EOF
               shift 2
               ;;
             *)
-              echo "Usage: denon dashboard [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]" >&2
+              echo "Usage: denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]" >&2
               return 1
               ;;
           esac
@@ -4525,7 +4623,7 @@ EOF
           shift
           ;;
         *)
-          echo "Usage: denon dashboard [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]" >&2
+          echo "Usage: denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]" >&2
           return 1
           ;;
       esac

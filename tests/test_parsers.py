@@ -460,6 +460,118 @@ class TestDataSummaryOutput:
             assert noisy not in r.stdout
 
 
+class TestDashboardDiagnostics:
+    DASHBOARD_STATE = """\
+        dash_receiver="Denon AVR-X1600H"
+        dash_ip="192.0.2.10"
+        dash_main_zone_name="LivingRoom"
+        dash_main_power="ON"
+        dash_main_source="TV Audio"
+        dash_sound_mode="Multi Ch Stereo"
+        dash_main_volume="-31.0"
+        dash_main_max_volume_db="18.0"
+        dash_main_muted="no"
+        dash_now_available=0
+        dash_now_message="No metadata for current source"
+        dash_zone2_name="ZONE2"
+        dash_zone2_power="OFF"
+        dash_zone2_source="Phono"
+        dash_zone2_volume_db="-15.0"
+        dash_zone2_volume_raw="650"
+        dash_zone2_muted="no"
+        dash_heos_version="3.88.614"
+        dash_heos_network="wifi"
+        dash_main_sources=$'  1  Xfinity X1\\n* 6  TV Audio\\n  13 HEOS Music'
+        dashboard_events=""
+        dash_errors=""
+        dashboard_color_mode="never"
+        dashboard_use_color=0
+        dashboard_ascii=1
+        watch=0
+        DENON_DASHBOARD_WIDTH=72
+    """
+
+    DASHBOARD_DIAG = """\
+        dash_diag_brand_code="1"
+        dash_diag_model_type="1"
+        dash_diag_main_volume_scale="1"
+        dash_diag_main_volume_limit="99"
+        dash_diag_zone2_volume_scale="1"
+        dash_diag_zone2_volume_limit="70"
+        dash_diag_setup_lock="2"
+        dash_diag_menu_lock="2"
+        dash_diag_speaker_preset="0"
+        dash_diag_advanced_mode="1"
+        dash_diag_ci_mode="2"
+        dash_diag_heos_sign_in="3"
+        dash_diag_gui_type="1"
+        dash_diag_webui_type="3"
+        dash_diag_avr_firmware="unavailable_on_tested_read_only_surfaces"
+        dash_diag_heos_firmware="3.88.614"
+    """
+
+    def test_normal_dashboard_does_not_include_diagnostics(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Main Zone" in r.stdout
+        assert "Diagnostics" not in r.stdout
+        assert "Brand:" not in r.stdout
+        assert "AVR FW:" not in r.stdout
+
+    def test_dashboard_diagnostics_includes_promoted_fields(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + self.DASHBOARD_DIAG + """\
+            dashboard_diagnostics=1
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Diagnostics" in r.stdout
+        assert "Brand:  raw=1 label=unknown" in r.stdout
+        assert "Main volume: scale 1 / limit 99" in r.stdout
+        assert "Locks: setup 2 / menu 2" in r.stdout
+        assert "HEOS sign-in: raw=3 label=unknown" in r.stdout
+
+    def test_dashboard_diagnostics_narrow_width_does_not_crash(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + self.DASHBOARD_DIAG + """\
+            dashboard_diagnostics=1
+            DENON_DASHBOARD_WIDTH=50
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Diagnostics" in r.stdout
+        assert "Main Zone" in r.stdout
+
+    def test_dashboard_diagnostics_firmware_text_is_not_misleading(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + self.DASHBOARD_DIAG + """\
+            dashboard_diagnostics=1
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "AVR FW: unavailable_on_tested_read_only_surfaces" in r.stdout
+        assert "HEOS FW: 3.88.614 separate" in r.stdout
+        assert "AVR FW: 3.88.614" not in r.stdout
+
+    def test_dashboard_color_and_unicode_paths_render(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + self.DASHBOARD_DIAG + """\
+            dashboard_diagnostics=1
+            dashboard_color_mode="always"
+            dashboard_ascii=0
+            DENON_DASHBOARD_WIDTH=120
+            _denon_dashboard_render
+        """)
+        r = _bash(code, env_extra={"NO_COLOR": ""})
+        assert r.returncode == 0
+        assert "\x1b[" in r.stdout
+        assert "┌" in r.stdout
+        assert "Diagnostics" in r.stdout
+
+
 # ---------------------------------------------------------------------------
 # Telnet fixture sanity checks
 # ---------------------------------------------------------------------------
