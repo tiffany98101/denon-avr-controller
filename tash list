@@ -1,3 +1,0 @@
-[33m690ba49[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mfeature/receiver-data-inventory[m[33m, [m[1;31morigin/main[m[33m, [m[1;32mmain[m[33m, [m[1;32mfeature/dashboard-polish-fix[m[33m)[m Document native PowerShell module
-[33mf17ec67[m[33m ([m[1;33mtag: [m[1;33mv1.1.0-beta.1[m[33m)[m Merge experimental native PowerShell module
-[33mf4bfd95[m[33m ([m[1;31morigin/feature/native-powershell-module[m[33m, [m[1;32mfeature/native-powershell-module[m[33m)[m Apply review fixes for Bash and PowerShell controllers

@@ -18,3 +18,8 @@ dashboard_research_report.md
 
 docs/denon-demo.cast
 docs/denon-demo.gif
+
+# local receiver dumps
+denondata*.txt
+*_dump*.txt
+data-dump*.json
