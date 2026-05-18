@@ -633,6 +633,146 @@ class TestDataSummaryOutput:
         assert "Muted:  yes" not in r.stdout
 
 
+class TestDashboardRecentEvents:
+    EVENT_STATE = """\
+        dashboard_initialized=0
+        previous_dashboard_key=""
+        dashboard_events=""
+        last_dashboard_event=""
+        dash_main_power="ON"
+        dash_main_source="HEOS Music"
+        dash_main_source_index="13"
+        dash_main_muted="no"
+        dash_main_volume="-35.0"
+        dash_sound_mode="Stereo"
+        dash_zone2_power="ON"
+        dash_zone2_source="HEOS Music"
+        dash_zone2_source_index="13"
+        dash_zone2_muted="no"
+        dash_zone2_volume_db="-15.0"
+        dash_transport_state="Playing"
+        dash_now_title="Song One"
+        dash_now_artist="Artist One"
+        dash_now_album="Album One"
+        dash_now_station="Station One"
+        dash_now_service="Spotify"
+    """
+
+    def test_recent_events_logs_now_playing_title_change_once(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            _denon_dashboard_update_events
+            dash_now_title="Song Two"
+            _denon_dashboard_update_events
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.count("Now Playing: Song Two — Artist One") == 1
+
+    def test_recent_events_ignores_unknown_now_playing_changes(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            dash_now_title="Unknown"
+            dash_now_artist="Unknown"
+            dash_now_album=""
+            dash_now_station=""
+            dash_now_service=""
+            _denon_dashboard_update_events
+            dash_now_title=""
+            dash_now_artist=""
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Now Playing:" not in r.stdout
+
+    def test_recent_events_preserves_now_playing_capitalization(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            _denon_dashboard_update_events
+            dash_now_title="iT'S a Long Way"
+            dash_now_artist="AC/DC"
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Now Playing: iT'S a Long Way — AC/DC" in r.stdout
+
+    def test_recent_events_logs_main_volume_change_once(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            _denon_dashboard_update_events
+            dash_main_volume="-34.0"
+            _denon_dashboard_update_events
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.count("Main Volume: -35.0 dB -> -34.0 dB") == 1
+
+    def test_recent_events_logs_zone2_volume_change(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            _denon_dashboard_update_events
+            dash_zone2_volume_db="-14.0"
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Zone 2 Volume: -15.0 dB -> -14.0 dB" in r.stdout
+
+    def test_recent_events_ignores_missing_volume_on_both_refreshes(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            dash_main_volume="Unknown"
+            dash_zone2_volume_db=""
+            _denon_dashboard_update_events
+            dash_main_volume=""
+            dash_zone2_volume_db="Unknown"
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Volume:" not in r.stdout
+
+    def test_recent_events_logs_main_mute_with_display_values(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            _denon_dashboard_update_events
+            dash_main_muted="yes"
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Main Mute: No -> Yes" in r.stdout
+        assert "no -> yes" not in r.stdout
+
+    def test_recent_events_logs_zone2_mute_with_display_values(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            _denon_dashboard_update_events
+            dash_zone2_muted="yes"
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Zone 2 Mute: No -> Yes" in r.stdout
+        assert "no -> yes" not in r.stdout
+
+    def test_recent_events_renames_heos_playback_state_event(self):
+        code = textwrap.dedent(self.EVENT_STATE + """\
+            _denon_dashboard_update_events
+            dash_transport_state="Paused"
+            _denon_dashboard_update_events
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "HEOS Playback: Playing -> Paused" in r.stdout
+        assert "HEOS: Playing -> Paused" not in r.stdout
+
+
 class TestDashboardDiagnostics:
     DASHBOARD_STATE = """\
         dash_receiver="Denon AVR-X1600H"

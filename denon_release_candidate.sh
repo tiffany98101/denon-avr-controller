@@ -3752,6 +3752,46 @@ EOF
     return 0
   }
 
+  _denon_dashboard_event_volume_display() {
+    local value
+
+    value=$(_denon_dashboard_clean_field "$1")
+    [[ -n "$value" ]] || return 0
+    case "$value" in
+      *" dB") printf '%s\n' "$value" ;;
+      *) printf '%s dB\n' "$value" ;;
+    esac
+  }
+
+  _denon_dashboard_event_mute_display() {
+    local value
+
+    value=$(_denon_mute_display_name "$1")
+    [[ "$value" != "Unknown" ]] || return 0
+    printf '%s\n' "$value"
+  }
+
+  _denon_dashboard_now_playing_event_text() {
+    local title artist station service
+
+    title=$(_denon_dashboard_clean_field "$dash_now_title")
+    artist=$(_denon_dashboard_clean_field "$dash_now_artist")
+    station=$(_denon_dashboard_clean_field "$dash_now_station")
+    service=$(_denon_dashboard_clean_field "$dash_now_service")
+
+    if [[ -n "$title" ]]; then
+      if [[ -n "$artist" ]]; then
+        printf 'Now Playing: %s — %s\n' "$title" "$artist"
+      else
+        printf 'Now Playing: %s\n' "$title"
+      fi
+    elif [[ -n "$station" ]]; then
+      printf 'Now Playing: %s\n' "$station"
+    elif [[ -n "$service" ]]; then
+      printf 'Now Playing: %s\n' "$service"
+    fi
+  }
+
   _denon_dashboard_heos_service_name() {
     local sid="$1"
     local mid="$2"
@@ -4110,10 +4150,10 @@ EOF
   }
 
   _denon_dashboard_event_key() {
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$dash_main_power" "$dash_main_source_index:$dash_main_source" "$dash_main_muted" "$dash_main_volume" "$dash_sound_mode" \
       "$dash_zone2_power" "$dash_zone2_source_index:$dash_zone2_source" "$dash_zone2_muted" "$dash_transport_state" \
-      "$dash_now_title" "$dash_now_artist"
+      "$dash_zone2_volume_db" "$dash_now_title" "$dash_now_artist" "$dash_now_album" "$dash_now_station" "$dash_now_service"
   }
 
   _denon_dashboard_add_event() {
@@ -4157,6 +4197,9 @@ EOF
 
   _denon_dashboard_update_events() {
     local current_key cycle_events zone2_parts zone2_changed source_changed
+    local prev_main_volume_display dash_main_volume_display prev_zone2_volume_display dash_zone2_volume_display
+    local prev_main_mute_display dash_main_mute_display prev_zone2_mute_display dash_zone2_mute_display
+    local now_playing_changed now_playing_event dash_now_title_clean dash_now_station_clean
     current_key=$(_denon_dashboard_event_key)
 
     if [[ "$dashboard_initialized" != "1" ]]; then
@@ -4172,8 +4215,13 @@ EOF
       prev_zone2_source="$dash_zone2_source"
       prev_zone2_source_index="$dash_zone2_source_index"
       prev_zone2_muted="$dash_zone2_muted"
+      prev_zone2_volume_db="$dash_zone2_volume_db"
       prev_transport_state="$dash_transport_state"
       prev_now_title="$dash_now_title"
+      prev_now_artist="$dash_now_artist"
+      prev_now_album="$dash_now_album"
+      prev_now_station="$dash_now_station"
+      prev_now_service="$dash_now_service"
       return 0
     fi
 
@@ -4193,11 +4241,54 @@ EOF
 
     if (( source_changed == 0 )) && _denon_dashboard_is_heos_source &&
       _denon_dashboard_event_changed_known "$prev_transport_state" "$dash_transport_state"; then
-      _denon_dashboard_queue_event "HEOS: ${prev_transport_state} -> ${dash_transport_state}"
+      _denon_dashboard_queue_event "HEOS Playback: ${prev_transport_state} -> ${dash_transport_state}"
     fi
 
+    now_playing_changed=0
+    dash_now_title_clean=$(_denon_dashboard_clean_field "$dash_now_title")
+    dash_now_station_clean=$(_denon_dashboard_clean_field "$dash_now_station")
     if _denon_dashboard_event_changed_known "$prev_now_title" "$dash_now_title"; then
-      _denon_dashboard_queue_event "Title: ${dash_now_title}"
+      now_playing_changed=1
+    elif [[ -z "$dash_now_title_clean" ]] &&
+      _denon_dashboard_event_changed_known "$prev_now_station" "$dash_now_station"; then
+      now_playing_changed=1
+    elif [[ -z "$dash_now_title_clean" && -z "$dash_now_station_clean" ]] &&
+      _denon_dashboard_event_changed_known "$prev_now_service" "$dash_now_service"; then
+      now_playing_changed=1
+    elif [[ "$dash_now_title" == "$prev_now_title" ]] &&
+      _denon_dashboard_event_changed_known "$prev_now_artist" "$dash_now_artist"; then
+      now_playing_changed=1
+    elif [[ "$dash_now_title" == "$prev_now_title" ]] &&
+      _denon_dashboard_event_changed_known "$prev_now_album" "$dash_now_album"; then
+      now_playing_changed=1
+    fi
+    if (( now_playing_changed )); then
+      now_playing_event=$(_denon_dashboard_now_playing_event_text)
+      [[ -n "$now_playing_event" ]] && _denon_dashboard_queue_event "$now_playing_event"
+    fi
+
+    prev_main_volume_display=$(_denon_dashboard_event_volume_display "$prev_main_volume")
+    dash_main_volume_display=$(_denon_dashboard_event_volume_display "$dash_main_volume")
+    if _denon_dashboard_event_changed_known "$prev_main_volume_display" "$dash_main_volume_display"; then
+      _denon_dashboard_queue_event "Main Volume: ${prev_main_volume_display} -> ${dash_main_volume_display}"
+    fi
+
+    prev_zone2_volume_display=$(_denon_dashboard_event_volume_display "$prev_zone2_volume_db")
+    dash_zone2_volume_display=$(_denon_dashboard_event_volume_display "$dash_zone2_volume_db")
+    if _denon_dashboard_event_changed_known "$prev_zone2_volume_display" "$dash_zone2_volume_display"; then
+      _denon_dashboard_queue_event "Zone 2 Volume: ${prev_zone2_volume_display} -> ${dash_zone2_volume_display}"
+    fi
+
+    prev_main_mute_display=$(_denon_dashboard_event_mute_display "$prev_main_muted")
+    dash_main_mute_display=$(_denon_dashboard_event_mute_display "$dash_main_muted")
+    if _denon_dashboard_event_changed_known "$prev_main_mute_display" "$dash_main_mute_display"; then
+      _denon_dashboard_queue_event "Main Mute: ${prev_main_mute_display} -> ${dash_main_mute_display}"
+    fi
+
+    prev_zone2_mute_display=$(_denon_dashboard_event_mute_display "$prev_zone2_muted")
+    dash_zone2_mute_display=$(_denon_dashboard_event_mute_display "$dash_zone2_muted")
+    if _denon_dashboard_event_changed_known "$prev_zone2_mute_display" "$dash_zone2_mute_display"; then
+      _denon_dashboard_queue_event "Zone 2 Mute: ${prev_zone2_mute_display} -> ${dash_zone2_mute_display}"
     fi
 
     zone2_parts=""
@@ -4232,8 +4323,13 @@ EOF
     prev_zone2_source="$dash_zone2_source"
     prev_zone2_source_index="$dash_zone2_source_index"
     prev_zone2_muted="$dash_zone2_muted"
+    prev_zone2_volume_db="$dash_zone2_volume_db"
     prev_transport_state="$dash_transport_state"
     prev_now_title="$dash_now_title"
+    prev_now_artist="$dash_now_artist"
+    prev_now_album="$dash_now_album"
+    prev_now_station="$dash_now_station"
+    prev_now_service="$dash_now_service"
   }
 
   _denon_dashboard_fit() {
