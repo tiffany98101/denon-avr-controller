@@ -51,6 +51,12 @@ cd denon-avr-controller
 chmod +x denon_release_candidate.sh denon_automated_test.sh denon_heos_helper.py
 ```
 
+For local development in this workspace, the active repository path is:
+
+```text
+/home/administrator/organized_projects/denon/denon_main
+```
+
 Run the script directly:
 
 ```bash
@@ -58,7 +64,23 @@ Run the script directly:
 ./denon_release_candidate.sh status
 ```
 
-Optional wrapper install:
+Optional per-user wrapper install:
+
+```bash
+mkdir -p "$HOME/.local/lib/denon" "$HOME/.local/bin"
+cp -a . "$HOME/.local/lib/denon/"
+cat >"$HOME/.local/bin/denon" <<'EOF'
+#!/usr/bin/env bash
+source "$HOME/.local/lib/denon/denon_release_candidate.sh"
+denon "$@"
+EOF
+chmod +x "$HOME/.local/bin/denon"
+```
+
+Make sure `$HOME/.local/bin` is on `PATH`, then use `denon status` instead of
+`./denon_release_candidate.sh status`.
+
+Optional system-wide wrapper install:
 
 ```bash
 sudo mkdir -p /usr/local/lib/denon
@@ -71,17 +93,58 @@ EOF
 sudo chmod +x /usr/local/bin/denon
 ```
 
-After that, use `denon status` instead of `./denon_release_candidate.sh status`.
+If both `$HOME/.local/bin/denon` and `/usr/local/bin/denon` exist, the one that
+appears first in `PATH` wins. On many systems, `$HOME/.local/bin` shadows
+`/usr/local/bin`, so an older per-user wrapper can keep running an older checkout
+even after the system-wide wrapper is updated.
+
+Check the active wrapper:
+
+```bash
+type -a denon
+command -v denon
+sed -n '1,20p' "$(command -v denon)"
+hash -r
+denon --version
+```
+
+If `type -a denon` shows a stale wrapper first, update that wrapper to point at
+the intended checkout or remove it:
+
+```bash
+rm "$HOME/.local/bin/denon"
+hash -r
+```
 
 ## Configuration
 
-The Bash CLI resolves the receiver IP from these sources:
+The receiver must be reachable on the same local network as the machine running
+the tool. Most commands use the Bash CLI's normal receiver lookup order:
 
-- `DENON_IP`: explicit receiver IP for the current command/session.
-- `DENON_DEFAULT_IP`: fallback IP.
-- `denon setip <ip>`: stores a cached receiver IP for later commands.
-- `denon discover`: attempts local discovery.
-- `DENON_SCAN_LAN=1`: enables LAN scanning behavior where supported.
+1. `DENON_IP`: explicit receiver IP for the current command/session.
+2. Cached IP from `denon setip <ip>` or a previous successful discovery.
+3. `DENON_DEFAULT_IP`: fallback IP.
+4. SSDP and known local hosts.
+5. LAN scanning when `DENON_SCAN_LAN=1` is set.
+
+Recommended setup:
+
+```bash
+export DENON_IP=192.168.1.162
+./denon_release_candidate.sh doctor
+./denon_release_candidate.sh status
+```
+
+To store a local cached IP instead:
+
+```bash
+./denon_release_candidate.sh setip 192.168.1.162
+./denon_release_candidate.sh status
+```
+
+`denon discover` clears the cached IP and attempts discovery again. Live `data`
+modes do not run a network scan; they require `DENON_IP`, `DENON_DEFAULT_IP`, or
+a cached IP.
 
 Common configuration variables:
 

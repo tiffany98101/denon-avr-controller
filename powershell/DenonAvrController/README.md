@@ -30,6 +30,14 @@ From the repository root:
 Import-Module .\powershell\DenonAvrController\DenonAvrController.psd1
 ```
 
+Validate the manifest and exported commands:
+
+```powershell
+Test-ModuleManifest .\powershell\DenonAvrController\DenonAvrController.psd1
+Import-Module .\powershell\DenonAvrController\DenonAvrController.psd1 -Force
+Get-Command -Module DenonAvrController
+```
+
 ## Configure the receiver
 
 Configuration is stored in memory for the current PowerShell session:
@@ -163,7 +171,8 @@ parameter behavior.
 ## Network behavior
 
 This first PowerShell pass prefers explicit IP configuration. It does not
-attempt full SSDP discovery.
+attempt full SSDP discovery. The receiver must be reachable on the same local
+network as the PowerShell host.
 
 The HTTP/XML implementation follows the existing Bash CLI behavior reference:
 
