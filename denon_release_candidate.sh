@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # denon_release_candidate.sh — Denon AVR controller
-# Version: 1.1.0-beta.1
+# Version: 1.2.0-beta.1
+DENON_CONTROLLER_NAME="${DENON_CONTROLLER_NAME:-denon-avr-controller}"
+DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.1}"
 # Source this from ~/.zshrc or ~/.bashrc:
 #   source ~/denon_release_candidate.sh
 #
@@ -384,6 +386,13 @@ EOF
   _denon_get_vol_xml() { _denon_get_config 12; }
   _denon_get_identity_xml() { _denon_get_config 3; }
 
+  _denon_get_receiver_name() {
+    local xml name
+    xml=$(_denon_get_identity_xml) || return 1
+    name=$(printf '%s' "$xml" | sed -n 's:.*<FriendlyName>\([^<]*\)</FriendlyName>.*:\1:p' | head -1)
+    printf '%s' "${name:-Unknown}"
+  }
+
   _denon_json_escape() {
     LC_ALL=C awk '
       BEGIN {
@@ -397,10 +406,10 @@ EOF
         if (NR > 1) {
           printf "\\n"
         }
-        gsub(backslash, backslash backslash)
-        gsub(quote, backslash quote)
-        gsub(tab, "\\t")
-        gsub(carriage_return, "")
+        gsub(/\\/, "\\\\")
+        gsub(/"/, "\\\"")
+        gsub(/\t/, "\\t")
+        gsub(/\r/, "")
         gsub(/[[:cntrl:]]/, "")
         printf "%s", $0
       }
@@ -482,11 +491,11 @@ EOF
   }
 
   _denon_extract_main_mute() {
-    printf '%s' "$1" | sed -n 's:.*<MainZone>.*<Mute>\([0-9]*\)</Mute>.*</MainZone>.*:\1:p'
+    printf '%s' "$1" | sed -n 's:.*<MainZone>.*<Mute>\([^<]*\)</Mute>.*</MainZone>.*:\1:p'
   }
 
   _denon_extract_zone2_mute() {
-    printf '%s' "$1" | sed -n 's:.*<Zone2>.*<Mute>\([0-9]*\)</Mute>.*</Zone2>.*:\1:p'
+    printf '%s' "$1" | sed -n 's:.*<Zone2>.*<Mute>\([^<]*\)</Mute>.*</Zone2>.*:\1:p'
   }
 
   _denon_main_volume_raw() {
@@ -927,6 +936,40 @@ EOF
     } | nc -w 2 "$IP" 23 2>/dev/null
   }
 
+  _denon_query_main_mute_raw() {
+    local text line
+
+    text=$(_denon_telnet_query "MU?" 2>/dev/null) || return 1
+    text=${text//$'\r'/$'\n'}
+    while IFS= read -r line; do
+      line=$(_denon_trim "$line")
+      case "$line" in
+        MUON|MUOFF)
+          printf '%s' "$line"
+          return 0
+          ;;
+      esac
+    done <<<"$text"
+    return 1
+  }
+
+  _denon_query_zone2_mute_raw() {
+    local text line
+
+    text=$(_denon_telnet_query "Z2MU?" 2>/dev/null) || return 1
+    text=${text//$'\r'/$'\n'}
+    while IFS= read -r line; do
+      line=$(_denon_trim "$line")
+      case "$line" in
+        Z2MUON|Z2MUOFF)
+          printf '%s' "$line"
+          return 0
+          ;;
+      esac
+    done <<<"$text"
+    return 1
+  }
+
   _denon_pad_sleep_minutes() {
     local minutes="$1"
     if ! _denon_is_unsigned_integer "$minutes" || (( minutes < 1 || minutes > 120 )); then
@@ -1249,7 +1292,26 @@ EOF
   }
 
   _denon_bool_name() {
-    [[ "$1" == "1" ]] && echo "yes" || echo "no"
+    _denon_normalize_mute "$1"
+  }
+
+  _denon_normalize_mute() {
+    local value
+
+    value=$(_denon_trim "${1:-}")
+    case "$(_denon_lower "$value")" in
+      1|on|yes|true|muon|z2muon) echo "yes" ;;
+      0|2|off|no|false|muoff|z2muoff) echo "no" ;;
+      *) echo "Unknown" ;;
+    esac
+  }
+
+  _denon_mute_json_value() {
+    case "$(_denon_normalize_mute "$1")" in
+      yes) echo "true" ;;
+      no) echo "false" ;;
+      *) echo "null" ;;
+    esac
   }
 
   _denon_zone_status_pretty() {
@@ -1287,7 +1349,7 @@ EOF
     local identity_xml power_xml source_xml vol_xml
     local friendly_name power_code zone2_power_code power zone2_power
     local main_source_idx zone2_source_idx main_source_name zone2_source_name
-    local raw_vol raw_zone2_vol mute zone2_mute muted zone2_muted
+    local raw_vol raw_zone2_vol mute zone2_mute muted zone2_muted telnet_mute telnet_zone2_mute
     local pretty_db json_db friendly_json main_source_json zone2_source_json
 
     identity_xml="$(_denon_get_identity_xml)" || return 1
@@ -1304,6 +1366,10 @@ EOF
     raw_zone2_vol=$(_denon_extract_zone2_volume_raw "$vol_xml")
     mute=$(_denon_extract_main_mute "$vol_xml")
     zone2_mute=$(_denon_extract_zone2_mute "$vol_xml")
+    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
+    [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && mute="$telnet_mute"
+    telnet_zone2_mute=$(_denon_query_zone2_mute_raw 2>/dev/null || printf '')
+    [[ "$(_denon_normalize_mute "$telnet_zone2_mute")" != "Unknown" ]] && zone2_mute="$telnet_zone2_mute"
 
     main_source_name=$(_denon_alias_for_source "1" "$main_source_idx" || _denon_source_name_by_idx "1" "$main_source_idx")
     zone2_source_name=$(_denon_alias_for_source "2" "$zone2_source_idx" || _denon_source_name_by_idx "2" "$zone2_source_idx")
@@ -1326,8 +1392,8 @@ EOF
       main_source_json=$(printf '%s' "${main_source_name:-Unknown}" | _denon_json_escape)
       zone2_source_json=$(printf '%s' "${zone2_source_name:-Unknown}" | _denon_json_escape)
       printf '{"receiver":"%s","ip":"%s","mainZone":{"power":"%s","sourceIndex":%s,"sourceName":"%s","volumeDb":%s,"muted":%s},"zone2":{"power":"%s","sourceIndex":%s,"sourceName":"%s","volumeRaw":%s,"muted":%s}}\n' \
-        "$friendly_json" "$IP" "$power" "${main_source_idx:-null}" "$main_source_json" "$json_db" "$([[ "$muted" == "yes" ]] && echo true || echo false)" \
-        "$zone2_power" "${zone2_source_idx:-null}" "$zone2_source_json" "${raw_zone2_vol:-null}" "$([[ "$zone2_muted" == "yes" ]] && echo true || echo false)"
+        "$friendly_json" "$IP" "$power" "${main_source_idx:-null}" "$main_source_json" "$json_db" "$(_denon_mute_json_value "$mute")" \
+        "$zone2_power" "${zone2_source_idx:-null}" "$zone2_source_json" "${raw_zone2_vol:-null}" "$(_denon_mute_json_value "$zone2_mute")"
       return 0
     fi
 
@@ -1349,7 +1415,7 @@ EOF
 
   _denon_status_pretty() {
     local power_xml source_xml vol_xml
-    local power_code power source_idx source_name raw_vol mute db mute_str
+    local power_code power source_idx source_name raw_vol mute db mute_str telnet_mute
 
     power_xml="$(_denon_get_power_xml)" || return 1
     source_xml="$(_denon_get_source_xml)" || return 1
@@ -1359,6 +1425,8 @@ EOF
     source_idx=$(printf '%s' "$source_xml" | sed -n 's:.*<Zone zone="1" index="\([0-9]\+\)".*:\1:p')
     raw_vol=$(_denon_extract_main_volume_raw "$vol_xml")
     mute=$(_denon_extract_main_mute "$vol_xml")
+    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
+    [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && mute="$telnet_mute"
     source_name=$(_denon_alias_for_source "1" "$source_idx" || _denon_source_name_by_idx "1" "$source_idx")
 
     case "$power_code" in
@@ -1373,7 +1441,7 @@ EOF
     else
       db="Unknown"
     fi
-    mute_str=$([[ "$mute" == "1" ]] && echo " [MUTED]" || echo "")
+    mute_str=$([[ "$(_denon_normalize_mute "$mute")" == "yes" ]] && echo " [MUTED]" || echo "")
 
     printf 'Power: %s | Source: %s | Volume: %s dB%s\n' \
       "$power" "${source_name:-Unknown}" "$db" "$mute_str"
@@ -1381,7 +1449,7 @@ EOF
 
   _denon_status_json() {
     local power_xml source_xml vol_xml
-    local power_code power source_idx source_name raw_vol mute db muted_json source_json
+    local power_code power source_idx source_name raw_vol mute db muted_json source_json telnet_mute
 
     power_xml="$(_denon_get_power_xml)" || return 1
     source_xml="$(_denon_get_source_xml)" || return 1
@@ -1391,6 +1459,8 @@ EOF
     source_idx=$(printf '%s' "$source_xml" | sed -n 's:.*<Zone zone="1" index="\([0-9]\+\)".*:\1:p')
     raw_vol=$(_denon_extract_main_volume_raw "$vol_xml")
     mute=$(_denon_extract_main_mute "$vol_xml")
+    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
+    [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && mute="$telnet_mute"
     source_name=$(_denon_alias_for_source "1" "$source_idx" || _denon_source_name_by_idx "1" "$source_idx")
 
     case "$power_code" in
@@ -1406,7 +1476,7 @@ EOF
       db="null"
     fi
 
-    muted_json=$([[ "$mute" == "1" ]] && echo "true" || echo "false")
+    muted_json=$(_denon_mute_json_value "$mute")
     source_json=$(printf '%s' "${source_name:-Unknown}" | _denon_json_escape)
 
     printf '{"ip":"%s","power":"%s","sourceIndex":%s,"sourceName":"%s","volumeDb":%s,"muted":%s}\n' \
@@ -1797,7 +1867,7 @@ EOF
           out=line
           sub(/^<\//, "", out)
           sub(/^</, "", out)
-          sub(/[ >\/].*$/, "", out)
+          sub("[ >/].*$", "", out)
           return out
         }
         function path(  i, out) {
@@ -2418,6 +2488,7 @@ EOF
     local brand_xml model_type_xml setup_lock_xml bt_headphones_xml speaker_preset_xml system_xml
     local friendly_name main_source_idx zone2_source_idx main_source_name zone2_source_name
     local main_power zone2_power main_mute zone2_mute main_vol_raw zone2_vol_raw
+    local telnet_mute telnet_zone2_mute
     local main_vol_scale main_vol_limit zone2_vol_scale zone2_vol_limit
     local sound_mode_text sleep_line heos_text track_text track_rc
     local dynamic_eq_line dynamic_volume_line cinema_eq_line multeq_line bass_line treble_line
@@ -2463,8 +2534,18 @@ EOF
     zone2_source_name=$(_denon_source_rows_with_aliases_from_xml "2" "$source_xml" | awk -F '\t' -v idx="$zone2_source_idx" '$1 == idx { print $3; exit }')
     main_power=$(_denon_power_name "$(_denon_extract_main_power "$power_xml")")
     zone2_power=$(_denon_power_name "$(_denon_extract_zone2_power "$power_xml")")
-    main_mute=$(_denon_bool_name "$(_denon_extract_main_mute "$vol_xml")")
-    zone2_mute=$(_denon_bool_name "$(_denon_extract_zone2_mute "$vol_xml")")
+    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
+    if [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]]; then
+      main_mute=$(_denon_normalize_mute "$telnet_mute")
+    else
+      main_mute=$(_denon_bool_name "$(_denon_extract_main_mute "$vol_xml")")
+    fi
+    telnet_zone2_mute=$(_denon_query_zone2_mute_raw 2>/dev/null || printf '')
+    if [[ "$(_denon_normalize_mute "$telnet_zone2_mute")" != "Unknown" ]]; then
+      zone2_mute=$(_denon_normalize_mute "$telnet_zone2_mute")
+    else
+      zone2_mute=$(_denon_bool_name "$(_denon_extract_zone2_mute "$vol_xml")")
+    fi
     main_vol_raw=$(_denon_extract_main_volume_raw "$vol_xml")
     zone2_vol_raw=$(_denon_extract_zone2_volume_raw "$vol_xml")
     main_vol_scale=$(_denon_data_xml_leaf_first "$vol_xml" "listGlobals.MainZone.VolumeScale" 2>/dev/null || printf '')
@@ -3395,14 +3476,14 @@ EOF
           dash_main_source_index=$(printf '%s' "$value" | sed -n 's/^.*(\([0-9][0-9]*\))[[:space:]]*$/\1/p')
           ;;
         "Main Zone Volume") dash_main_volume=${value% dB} ;;
-        "Main Zone Muted") dash_main_muted="$value" ;;
+        "Main Zone Muted") dash_main_muted=$(_denon_normalize_mute "$value") ;;
         "Zone 2 Power") dash_zone2_power="$value" ;;
         "Zone 2 Source")
           dash_zone2_source=$(_denon_clean_source_name "$value")
           dash_zone2_source_index=$(printf '%s' "$value" | sed -n 's/^.*(\([0-9][0-9]*\))[[:space:]]*$/\1/p')
           ;;
         "Zone 2 Volume Raw") dash_zone2_volume="$value" ;;
-        "Zone 2 Muted") dash_zone2_muted="$value" ;;
+        "Zone 2 Muted") dash_zone2_muted=$(_denon_normalize_mute "$value") ;;
       esac
     done <<<"$text"
   }
@@ -3423,7 +3504,7 @@ EOF
     if [[ "$line" == *"[MUTED]"* ]]; then
       dash_main_muted="yes"
     elif [[ -z "$dash_main_muted" || "$dash_main_muted" == "Unknown" ]]; then
-      dash_main_muted="no"
+      dash_main_muted="Unknown"
     fi
   }
 
@@ -3441,7 +3522,7 @@ EOF
     rest=${rest#* | Volume: }
     dash_zone2_volume=$(_denon_trim "${rest%% | Muted:*}")
     value=${rest#* | Muted:}
-    dash_zone2_muted=$(_denon_trim "$value")
+    dash_zone2_muted=$(_denon_normalize_mute "$value")
   }
 
   _denon_dashboard_parse_sources() {
@@ -3517,10 +3598,7 @@ EOF
   }
 
   _denon_dashboard_telnet_status() {
-    command -v nc >/dev/null 2>&1 || return 1
-    command -v timeout >/dev/null 2>&1 || return 1
-
-    printf 'MS?\r' | timeout 2 nc "$IP" 23 2>/dev/null
+    _denon_telnet_query "MS?" 2>/dev/null
   }
 
   _denon_dashboard_parse_telnet_status() {
@@ -3854,13 +3932,13 @@ EOF
       value=$(_denon_dashboard_json_value "$info_json" "mainZone.sourceName"); [[ -n "$value" ]] && dash_main_source=$(_denon_clean_source_name "$value")
       value=$(_denon_dashboard_json_value "$info_json" "mainZone.volumeDb"); [[ -n "$value" ]] && dash_main_volume="$value"
       value=$(_denon_dashboard_json_value "$info_json" "mainZone.muted")
-      case "$value" in true) dash_main_muted="yes" ;; false) dash_main_muted="no" ;; esac
+      dash_main_muted=$(_denon_normalize_mute "$value")
       value=$(_denon_dashboard_json_value "$info_json" "zone2.power"); [[ -n "$value" ]] && dash_zone2_power="$value"
       value=$(_denon_dashboard_json_value "$info_json" "zone2.sourceIndex"); [[ -n "$value" ]] && dash_zone2_source_index="$value"
       value=$(_denon_dashboard_json_value "$info_json" "zone2.sourceName"); [[ -n "$value" ]] && dash_zone2_source=$(_denon_clean_source_name "$value")
       value=$(_denon_dashboard_json_value "$info_json" "zone2.volumeRaw"); [[ -n "$value" ]] && dash_zone2_volume="$value"
       value=$(_denon_dashboard_json_value "$info_json" "zone2.muted")
-      case "$value" in true) dash_zone2_muted="yes" ;; false) dash_zone2_muted="no" ;; esac
+      dash_zone2_muted=$(_denon_normalize_mute "$value")
     else
       info_text=$(_denon_info 2>/dev/null)
       if [[ -n "$info_text" ]]; then
@@ -3915,6 +3993,17 @@ EOF
     vol_xml=$(_denon_get_vol_xml 2>/dev/null)
     if [[ -n "$vol_xml" ]]; then
       _denon_dashboard_parse_volume_details "$vol_xml"
+      local raw_mute telnet_mute
+      raw_mute=$(_denon_extract_main_mute "$vol_xml")
+      telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
+      [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && raw_mute="$telnet_mute"
+      dash_main_muted=$(_denon_normalize_mute "$raw_mute")
+    fi
+
+    if [[ "$dash_receiver" == "Unknown" ]]; then
+      local receiver_name
+      receiver_name=$(_denon_get_receiver_name 2>/dev/null)
+      [[ -n "$receiver_name" && "$receiver_name" != "Unknown" ]] && dash_receiver="$receiver_name"
     fi
 
     telnet_text=$(_denon_dashboard_telnet_status)
@@ -3960,7 +4049,7 @@ EOF
     else
       dashboard_events="$stamped"
     fi
-    dashboard_events=$(printf '%s\n' "$dashboard_events" | sed '/^[[:space:]]*$/d' | awk 'NR <= 8')
+    dashboard_events=$(printf '%s\n' "$dashboard_events" | sed '/^[[:space:]]*$/d' | awk 'NR <= 100')
   }
 
   _denon_dashboard_queue_event() {
@@ -3984,7 +4073,7 @@ EOF
     else
       dashboard_events="$stamped"
     fi
-    dashboard_events=$(printf '%s\n' "$dashboard_events" | sed '/^[[:space:]]*$/d' | awk 'NR <= 8')
+    dashboard_events=$(printf '%s\n' "$dashboard_events" | sed '/^[[:space:]]*$/d' | awk 'NR <= 100')
   }
 
   _denon_dashboard_update_events() {
@@ -4084,6 +4173,46 @@ EOF
     printf "%-${width}s" "$text"
   }
 
+  _denon_dashboard_strip_ansi() {
+    local text="$1"
+    local sgr_regex match prefix suffix
+
+    sgr_regex=$'\033\\[[0-9;]*m'
+    while [[ "$text" =~ $sgr_regex ]]; do
+      match="${BASH_REMATCH[0]}"
+      prefix="${text%%"$match"*}"
+      suffix="${text#*"$match"}"
+      text="${prefix}${suffix}"
+    done
+    printf '%s' "$text"
+  }
+
+  _denon_dashboard_visible_width() {
+    local text="$1"
+
+    text=$(_denon_dashboard_strip_ansi "$text")
+    text=${text//$'\n'/ }
+    text=${text//$'\r'/ }
+    printf '%s' "${#text}"
+  }
+
+  _denon_dashboard_truncate_visible() {
+    local text="$1"
+    local width="$2"
+    local max=$((width - 3))
+
+    (( width > 0 )) || return 0
+    text=$(_denon_dashboard_strip_ansi "$text")
+    text=${text//$'\n'/ }
+    text=${text//$'\r'/ }
+    if (( ${#text} > width && width > 3 )); then
+      text="${text:0:max}..."
+    elif (( ${#text} > width )); then
+      text="${text:0:width}"
+    fi
+    printf '%s' "$text"
+  }
+
   _denon_dashboard_color_capable() {
     [[ -t 1 ]] || return 1
     [[ -z "${NO_COLOR:-}" ]] || return 1
@@ -4151,6 +4280,11 @@ EOF
     local value="$2"
     local lower
     lower=$(_denon_lower "$value")
+
+    if [[ "$value" == \** ]]; then
+      echo "green"
+      return
+    fi
 
     if [[ -n "$dash_errors" && "$label" == "Notes" ]]; then
       echo "red"
@@ -4230,13 +4364,161 @@ EOF
       cols=80
     fi
 
-    if (( cols < 76 )); then
-      printf '72'
+    if (( cols < 20 )); then
+      printf '20'
     elif [[ -n "${DENON_DASHBOARD_WIDTH:-}" ]]; then
       printf '%s' "$cols"
     else
       printf '%s' $((cols - 1))
     fi
+  }
+
+  _denon_dashboard_height() {
+    local rows=""
+
+    if [[ -n "${DENON_DASHBOARD_HEIGHT:-}" ]]; then
+      rows="$DENON_DASHBOARD_HEIGHT"
+    elif [[ -t 1 ]]; then
+      rows=$(tput lines 2>/dev/null || printf '')
+      [[ -n "$rows" ]] || rows="${LINES:-}"
+    else
+      rows="${LINES:-}"
+    fi
+
+    if ! _denon_is_unsigned_integer "$rows"; then
+      rows=$(tput lines 2>/dev/null || printf '30')
+    fi
+    if ! _denon_is_unsigned_integer "$rows"; then
+      rows=30
+    fi
+
+    if (( rows < 8 )); then
+      printf '8'
+    else
+      printf '%s' "$rows"
+    fi
+  }
+
+  _denon_dashboard_line_count() {
+    local body="$1"
+
+    [[ -n "$body" ]] || {
+      printf '0'
+      return 0
+    }
+    printf '%s\n' "$body" | awk 'END { print NR }'
+  }
+
+  _denon_dashboard_clamp() {
+    local value="$1"
+    local min="$2"
+    local max="$3"
+
+    (( value < min )) && value="$min"
+    (( value > max )) && value="$max"
+    printf '%s' "$value"
+  }
+
+  _denon_dashboard_layout() {
+    local cols="$1"
+    local rows="$2"
+    local gap=2 footer_height=1
+    local top_available bottom_available available usable
+    local min_top min_now min_bottom min_total deficit
+
+    dash_layout_width="$cols"
+    dash_layout_height="$rows"
+    dash_layout_gap="$gap"
+    dash_layout_footer_height="$footer_height"
+
+    if (( cols >= 100 )); then
+      dash_layout_mode="wide"
+      top_available=$((cols - (gap * 2)))
+      dash_layout_top_w1=$((top_available / 3))
+      dash_layout_top_w2="$dash_layout_top_w1"
+      dash_layout_top_w3=$((top_available - dash_layout_top_w1 - dash_layout_top_w2))
+
+      bottom_available=$((cols - gap))
+      dash_layout_sources_w=$((bottom_available / 2))
+      dash_layout_events_w=$((bottom_available - dash_layout_sources_w))
+
+      available=$((rows - footer_height - 2))
+      (( available < 3 )) && available=3
+
+      dash_layout_top_h=$(((available * 25) / 100))
+      dash_layout_now_h=$(((available * 20) / 100))
+      dash_layout_bottom_h=$((available - dash_layout_top_h - dash_layout_now_h))
+
+      if (( available >= 27 )); then
+        min_top=10
+        min_now=10
+        min_bottom=7
+      elif (( available >= 12 )); then
+        min_top=4
+        min_now=4
+        min_bottom=4
+      else
+        min_top=1
+        min_now=1
+        min_bottom=1
+      fi
+      min_total=$((min_top + min_now + min_bottom))
+
+      if (( available >= min_total && dash_layout_top_h < min_top )); then
+        deficit=$((min_top - dash_layout_top_h))
+        dash_layout_top_h="$min_top"
+        dash_layout_bottom_h=$((dash_layout_bottom_h - deficit))
+      fi
+      if (( available >= min_total && dash_layout_now_h < min_now )); then
+        deficit=$((min_now - dash_layout_now_h))
+        dash_layout_now_h="$min_now"
+        dash_layout_bottom_h=$((dash_layout_bottom_h - deficit))
+      fi
+      if (( available >= min_total && dash_layout_bottom_h < min_bottom )); then
+        deficit=$((min_bottom - dash_layout_bottom_h))
+        dash_layout_bottom_h="$min_bottom"
+        while (( deficit > 0 && dash_layout_top_h > min_top )); do
+          dash_layout_top_h=$((dash_layout_top_h - 1))
+          deficit=$((deficit - 1))
+        done
+        while (( deficit > 0 && dash_layout_now_h > min_now )); do
+          dash_layout_now_h=$((dash_layout_now_h - 1))
+          deficit=$((deficit - 1))
+        done
+      fi
+
+      while (( dash_layout_top_h < min_top && dash_layout_bottom_h > min_bottom )); do
+        dash_layout_top_h=$((dash_layout_top_h + 1))
+        dash_layout_bottom_h=$((dash_layout_bottom_h - 1))
+      done
+      while (( dash_layout_now_h < min_now && dash_layout_bottom_h > min_bottom )); do
+        dash_layout_now_h=$((dash_layout_now_h + 1))
+        dash_layout_bottom_h=$((dash_layout_bottom_h - 1))
+      done
+      (( dash_layout_top_h < 1 )) && dash_layout_top_h=1
+      (( dash_layout_now_h < 1 )) && dash_layout_now_h=1
+      (( dash_layout_bottom_h < 1 )) && dash_layout_bottom_h=1
+      return 0
+    fi
+
+    dash_layout_mode="narrow"
+    usable=$((rows - footer_height))
+
+    dash_layout_top_w1="$cols"
+    dash_layout_top_w2="$cols"
+    dash_layout_top_w3="$cols"
+    dash_layout_sources_w="$cols"
+    dash_layout_events_w="$cols"
+    dash_layout_main_h=10
+    dash_layout_zone2_h=9
+    dash_layout_receiver_h=7
+    dash_layout_now_h=10
+    usable=$((usable - dash_layout_main_h - dash_layout_zone2_h - dash_layout_receiver_h - dash_layout_now_h))
+    (( usable < 12 )) && usable=12
+    dash_layout_sources_h=$(((usable * 60) / 100))
+    dash_layout_events_h=$((usable - dash_layout_sources_h))
+    (( dash_layout_sources_h < 6 )) && dash_layout_sources_h=6
+    (( dash_layout_events_h < 6 )) && dash_layout_events_h=6
   }
 
   _denon_dashboard_set_borders() {
@@ -4273,10 +4555,18 @@ EOF
     local inner=$((width - 4))
     local body_idx line fitted
 
+    (( height > 0 )) || return 0
+    (( width < 4 )) && width=4
+    inner=$((width - 4))
+
     if (( row == 0 )); then
       _denon_dashboard_c dim "$dash_tl"
       _denon_dashboard_c dim "$(_denon_dashboard_repeat "$dash_h" $((width - 2)))"
       _denon_dashboard_c dim "$dash_tr"
+    elif (( row == height - 1 )); then
+      _denon_dashboard_c dim "$dash_bl"
+      _denon_dashboard_c dim "$(_denon_dashboard_repeat "$dash_h" $((width - 2)))"
+      _denon_dashboard_c dim "$dash_br"
     elif (( row == 1 )); then
       fitted=$(_denon_dashboard_fit "$title" "$inner")
       _denon_dashboard_c dim "$dash_v"
@@ -4290,10 +4580,6 @@ EOF
       _denon_dashboard_c dim "$(_denon_dashboard_repeat "$dash_h" "$inner")"
       printf ' '
       _denon_dashboard_c dim "$dash_v"
-    elif (( row == height - 1 )); then
-      _denon_dashboard_c dim "$dash_bl"
-      _denon_dashboard_c dim "$(_denon_dashboard_repeat "$dash_h" $((width - 2)))"
-      _denon_dashboard_c dim "$dash_br"
     else
       body_idx=$((row - 2))
       line=$(_denon_dashboard_body_line "$body" "$body_idx")
@@ -4341,34 +4627,65 @@ EOF
     done
   }
 
+  _denon_dashboard_render_two_panel_row() {
+    local left_title="$1"
+    local left_body="$2"
+    local left_width="$3"
+    local right_title="$4"
+    local right_body="$5"
+    local right_width="$6"
+    local height="$7"
+    local gap="  "
+    local row
+
+    for ((row=0; row<height; row++)); do
+      _denon_dashboard_render_card_line "$left_title" "$left_body" "$left_width" "$height" "$row"
+      printf '%s' "$gap"
+      _denon_dashboard_render_card_line "$right_title" "$right_body" "$right_width" "$height" "$row"
+      printf '\n'
+    done
+  }
+
   _denon_dashboard_build_bodies() {
     dash_source_label="$dash_main_source"
     dash_zone2_source_label="$dash_zone2_source"
 
     if [[ -n "$dash_main_max_volume_db" ]]; then
-      dash_main_volume_label="${dash_main_volume} dB / max ${dash_main_max_volume_db} dB"
+      dash_main_volume_label="${dash_main_volume:-Unknown} dB / max ${dash_main_max_volume_db} dB"
     else
-      dash_main_volume_label="${dash_main_volume} dB"
+      dash_main_volume_label="${dash_main_volume:-Unknown} dB"
     fi
     dash_main_body=$(printf 'Zone:   %s\nPower:  %s\nSource: %s\nMode:   %s\nVolume: %s\nMuted:  %s' \
-      "$dash_main_zone_name" "$dash_main_power" "$dash_source_label" "$dash_sound_mode" "$dash_main_volume_label" "$dash_main_muted")
+      "${dash_main_zone_name:-Main Zone}" "${dash_main_power:-Unknown}" "${dash_source_label:-Unknown}" \
+      "${dash_sound_mode:-Unknown}" "$dash_main_volume_label" "${dash_main_muted:-Unknown}")
 
-    if [[ "$dash_now_available" == "1" ]]; then
-      dash_now_body=$(printf 'Title:   %s\nArtist:  %s\nAlbum:   %s\nStation: %s\nService: %s\nState:   %s' \
-        "${dash_now_title:-Unknown}" "${dash_now_artist:-Unknown}" "${dash_now_album:-Unknown}" \
-        "${dash_now_station:-}" "${dash_now_service:-Unknown}" "${dash_transport_state:-Unknown}")
-    else
-      dash_now_body=$(printf '%s\nAudio metadata is unavailable for this source.' "$dash_now_message")
-    fi
+    dash_now_body=$(printf 'Title:   %s\nArtist:  %s\nAlbum:   %s\nService: %s\nStation: %s\nState:   %s' \
+      "${dash_now_title:-${dash_now_message:-Unknown}}" "${dash_now_artist:-Unknown}" "${dash_now_album:-Unknown}" \
+      "${dash_now_service:-Unknown}" "${dash_now_station:-Unknown}" "${dash_transport_state:-Unknown}")
 
     if [[ -n "$dash_zone2_volume_db" && -n "$dash_zone2_volume_raw" ]]; then
       dash_zone2_volume_label="${dash_zone2_volume_db} dB (raw ${dash_zone2_volume_raw})"
     else
-      dash_zone2_volume_label="$dash_zone2_volume"
+      dash_zone2_volume_label="${dash_zone2_volume:-Unknown}"
     fi
-    dash_receiver_body=$(printf 'Receiver: %s\nIP:       %s\nHEOS:     %s %s\n%s: %s\nSource:   %s\nVolume:   %s\nMuted:    %s' \
-      "$dash_receiver" "$dash_ip" "${dash_heos_version:-Unknown}" "${dash_heos_network:-}" \
-      "$dash_zone2_name" "$dash_zone2_power" "$dash_zone2_source_label" "$dash_zone2_volume_label" "$dash_zone2_muted")
+    dash_zone2_body=$(printf 'Zone:   %s\nPower:  %s\nSource: %s\nVolume: %s\nMuted:  %s' \
+      "${dash_zone2_name:-Zone 2}" "${dash_zone2_power:-Unknown}" "${dash_zone2_source_label:-Unknown}" \
+      "$dash_zone2_volume_label" "${dash_zone2_muted:-Unknown}")
+
+    dash_receiver_body=$(printf 'Receiver: %s\nIP:       %s\nHEOS:     %s' \
+      "${dash_receiver:-Unknown}" "${dash_ip:-Unknown}" "${dash_heos_version:-Unknown}${dash_heos_network:+ $dash_heos_network}")
+    if [[ -n "${dash_diag_model_type:-}" ]]; then
+      dash_receiver_body="$dash_receiver_body"$'\n'"Model type: ${dash_diag_model_type}"
+    fi
+    if [[ -n "${dash_diag_brand_code:-}" ]]; then
+      dash_receiver_body="$dash_receiver_body"$'\n'"Brand code: ${dash_diag_brand_code}"
+    fi
+    if [[ -n "${dash_diag_avr_firmware:-}" ]]; then
+      dash_receiver_body="$dash_receiver_body"$'\n'"AVR FW:   ${dash_diag_avr_firmware}"
+    fi
+    if [[ -n "${dash_diag_heos_firmware:-}" ]]; then
+      dash_receiver_body="$dash_receiver_body"$'\n'"HEOS FW:  ${dash_diag_heos_firmware} (separate HEOS firmware)"
+    fi
 
     if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
       dash_diag_body=$(printf 'Brand:  raw=%s label=%s\nModel:  raw=%s label=%s\nMain volume: scale %s / limit %s\nZone2 volume: scale %s / limit %s\nLocks: setup %s / menu %s\nPreset: raw=%s label=%s\nModes: advanced %s / CI %s\nHEOS sign-in: raw=%s label=%s\nUI: gui %s / web %s\nAVR FW: %s\nHEOS FW: %s separate' \
@@ -4384,115 +4701,172 @@ EOF
         "${dash_diag_avr_firmware:-unavailable}" "${dash_diag_heos_firmware:-unknown}")
     fi
 
-    dash_events_body="${dashboard_events:-No state changes yet}"
+    local events_max=$(( ${dash_layout_bottom_h:-12} - 4 ))
+    (( events_max < 5 )) && events_max=5
+    if [[ -n "$dashboard_events" ]]; then
+      dash_events_body=$(printf '%s\n' "$dashboard_events" | head -n "$events_max")
+    else
+      dash_events_body="No state changes yet"
+    fi
+  }
+
+  _denon_tool_version_label() {
+    printf '%s v%s' "${DENON_CONTROLLER_NAME:-denon-avr-controller}" "${DENON_CONTROLLER_VERSION:-unknown}"
+  }
+
+  _denon_dashboard_compose_footer_line() {
+    local left_text="$1"
+    local right_text="$2"
+    local available_width="$3"
+    local padding=2
+    local right_width left_width left_visible space_count left_fit
+
+    (( available_width > 0 )) || return 0
+    right_width=$(_denon_dashboard_visible_width "$right_text")
+    if (( right_width <= 0 )); then
+      _denon_dashboard_truncate_visible "$left_text" "$available_width"
+      return 0
+    fi
+
+    if (( available_width <= right_width )); then
+      printf '%s' "$right_text"
+      return 0
+    fi
+
+    left_width=$((available_width - right_width - padding))
+    if (( left_width <= 0 )); then
+      space_count=$((available_width - right_width))
+      _denon_dashboard_repeat ' ' "$space_count"
+      printf '%s' "$right_text"
+      return 0
+    fi
+
+    left_fit=$(_denon_dashboard_truncate_visible "$left_text" "$left_width")
+    left_visible=$(_denon_dashboard_visible_width "$left_fit")
+    space_count=$((available_width - right_width - left_visible))
+    printf '%s' "$left_fit"
+    _denon_dashboard_repeat ' ' "$space_count"
+    printf '%s' "$right_text"
+  }
+
+  _denon_dashboard_footer_left_text() {
+    local max_width="$1"
+    local updated receiver ip receiver_info version_info notes candidate
+    local prefix suffix detail_width detail
+
+    updated="Updated $(date '+%H:%M:%S')"
+    receiver="${dash_receiver:-Unknown}"
+    ip="${dash_ip:-Unknown}"
+    receiver_info="$receiver @ $ip"
+    version_info="$(_denon_tool_version_label)"
+    notes=""
+    if [[ -n "$dash_errors" ]]; then
+      notes=" | Notes: ${dash_errors%; }"
+    fi
+
+    candidate="$updated | $receiver_info | $version_info$notes"
+    if (( max_width <= 0 || $(_denon_dashboard_visible_width "$candidate") <= max_width )); then
+      printf '%s' "$candidate"
+      return 0
+    fi
+
+    candidate="$updated | $receiver | $version_info$notes"
+    if (( $(_denon_dashboard_visible_width "$candidate") <= max_width )); then
+      printf '%s' "$candidate"
+      return 0
+    fi
+
+    prefix="$updated | "
+    suffix=" | $version_info$notes"
+    detail_width=$((max_width - $(_denon_dashboard_visible_width "$prefix") - $(_denon_dashboard_visible_width "$suffix")))
+    if (( detail_width >= 4 )); then
+      detail=$(_denon_dashboard_truncate_visible "$receiver_info" "$detail_width")
+      printf '%s%s%s' "$prefix" "$detail" "$suffix"
+      return 0
+    fi
+
+    printf '%s' "$updated | $version_info$notes"
   }
 
   _denon_dashboard_render_footer() {
     local width="$1"
-    local footer
+    local hints="" hint_width left_width left footer
 
-    footer="Updated $(date '+%H:%M:%S') | ${dash_receiver:-Unknown} @ ${dash_ip:-Unknown}"
     if [[ "${watch:-0}" == "1" ]]; then
-      footer="$footer | [q] quit | [r] redraw"
+      hints="[q] Quit | [r] Redraw"
+      hint_width=$(_denon_dashboard_visible_width "$hints")
+      left_width=$((width - hint_width - 2))
+      left=$(_denon_dashboard_footer_left_text "$left_width")
+      footer=$(_denon_dashboard_compose_footer_line "$left" "$hints" "$width")
+    else
+      left=$(_denon_dashboard_footer_left_text "$width")
+      footer=$(_denon_dashboard_compose_footer_line "$left" "" "$width")
     fi
-    if [[ -n "$dash_errors" ]]; then
-      footer="$footer | Notes: ${dash_errors%; }"
-    fi
-    _denon_dashboard_color_body_line "$(_denon_dashboard_fit "$footer" "$width")"
+    printf '%s' "$footer"
     printf '\n'
   }
 
   _denon_dashboard_render_narrow() {
-    local width="$1"
+    local width="${dash_layout_width:-$1}"
 
-    _denon_dashboard_render_card "Main Zone" "$dash_main_body" "$width" 10
-    _denon_dashboard_render_card "Now Playing / Audio" "$dash_now_body" "$width" 10
-    _denon_dashboard_render_card "Receiver / Zone 2" "$dash_receiver_body" "$width" 11
+    _denon_dashboard_render_card "Main Zone" "$dash_main_body" "$width" "${dash_layout_main_h:-10}"
+    _denon_dashboard_render_card "Zone 2" "$dash_zone2_body" "$width" "${dash_layout_zone2_h:-9}"
+    _denon_dashboard_render_card "Receiver Info" "$dash_receiver_body" "$width" "${dash_layout_receiver_h:-7}"
+    _denon_dashboard_render_card "Now Playing / Audio" "$dash_now_body" "$width" "${dash_layout_now_h:-10}"
     if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
       _denon_dashboard_render_card "Diagnostics" "$dash_diag_body" "$width" 15
     fi
-    _denon_dashboard_render_card "Main Zone Sources" "$dash_main_sources" "$width" 12
-    _denon_dashboard_render_card "Recent Events" "$dash_events_body" "$width" 12
+    _denon_dashboard_render_card "Main Zone Sources" "$dash_main_sources" "$width" "${dash_layout_sources_h:-12}"
+    _denon_dashboard_render_card "Recent Events" "$dash_events_body" "$width" "${dash_layout_events_h:-12}"
+  }
+
+  _denon_dashboard_render_wide() {
+    col1_title="Main Zone"
+    col1_body="$dash_main_body"
+    col1_width="$dash_layout_top_w1"
+    col2_title="Zone 2"
+    col2_body="$dash_zone2_body"
+    col2_width="$dash_layout_top_w2"
+    col3_title="Receiver Info"
+    col3_body="$dash_receiver_body"
+    col3_width="$dash_layout_top_w3"
+    _denon_dashboard_render_columns 3 "$dash_layout_top_h"
+    printf '\n'
+
+    _denon_dashboard_render_card "Now Playing / Audio" "$dash_now_body" "$dash_layout_width" "$dash_layout_now_h"
+    printf '\n'
+
+    _denon_dashboard_render_two_panel_row \
+      "Main Zone Sources" "$dash_main_sources" "$dash_layout_sources_w" \
+      "Recent Events" "$dash_events_body" "$dash_layout_events_w" \
+      "$dash_layout_bottom_h"
+    if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
+      printf '\n'
+      _denon_dashboard_render_card "Diagnostics" "$dash_diag_body" "$dash_layout_width" 15
+    fi
   }
 
   _denon_dashboard_render_medium() {
     local width="$1"
-    local gap=2
-    local left=$(((width - gap) / 2))
-    local right=$((width - gap - left))
-
-    col1_title="Main Zone"
-    col1_body="$dash_main_body"
-    col1_width="$left"
-    col2_title="Now Playing / Audio"
-    col2_body="$dash_now_body"
-    col2_width="$right"
-    _denon_dashboard_render_columns 2 10
-    printf '\n'
-
-    col1_title="Receiver / Zone 2"
-    col1_body="$dash_receiver_body"
-    col1_width="$left"
-    col2_title="Recent Events"
-    col2_body="$dash_events_body"
-    col2_width="$right"
-    _denon_dashboard_render_columns 2 13
-    printf '\n'
-
-    _denon_dashboard_render_card "Main Zone Sources" "$dash_main_sources" "$width" 12
-    if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
-      printf '\n'
-      _denon_dashboard_render_card "Diagnostics" "$dash_diag_body" "$width" 15
-    fi
+    _denon_dashboard_render_wide "$width"
   }
 
   _denon_dashboard_render_ultrawide() {
     local width="$1"
-    local gap=2
-    local top_available=$((width - (gap * 2)))
-    local top_w1=$((top_available / 3))
-    local top_w2="$top_w1"
-    local top_w3=$((top_available - top_w1 - top_w2))
-    local bottom_available=$((width - gap))
-    local bottom_left=$(((bottom_available * 3) / 5))
-    local bottom_right=$((bottom_available - bottom_left))
-
-    col1_title="Main Zone"
-    col1_body="$dash_main_body"
-    col1_width="$top_w1"
-    col2_title="Now Playing / Audio"
-    col2_body="$dash_now_body"
-    col2_width="$top_w2"
-    col3_title="Receiver / Zone 2"
-    col3_body="$dash_receiver_body"
-    col3_width="$top_w3"
-    _denon_dashboard_render_columns 3 11
-    printf '\n'
-
-    col1_title="Main Zone Sources"
-    col1_body="$dash_main_sources"
-    col1_width="$bottom_left"
-    col2_title="Recent Events"
-    col2_body="$dash_events_body"
-    col2_width="$bottom_right"
-    _denon_dashboard_render_columns 2 13
-    if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
-      printf '\n'
-      _denon_dashboard_render_card "Diagnostics" "$dash_diag_body" "$width" 15
-    fi
+    _denon_dashboard_render_wide "$width"
   }
 
   _denon_dashboard_render() {
-    local width
+    local width height
     width=$(_denon_dashboard_width)
+    height=$(_denon_dashboard_height)
     _denon_dashboard_setup_color
     _denon_dashboard_set_borders
+    _denon_dashboard_layout "$width" "$height"
     _denon_dashboard_build_bodies
 
-    if (( width >= 150 )); then
-      _denon_dashboard_render_ultrawide "$width"
-    elif (( width >= 100 )); then
-      _denon_dashboard_render_medium "$width"
+    if [[ "$dash_layout_mode" == "wide" ]]; then
+      _denon_dashboard_render_wide "$width"
     else
       _denon_dashboard_render_narrow "$width"
     fi
@@ -4500,19 +4874,55 @@ EOF
   }
 
   _denon_dashboard_redraw() {
-    local rendered line
+    local rendered
+
     rendered=$(_denon_dashboard_render)
-    printf '\033[H'
-    while IFS= read -r line; do
-      printf '%s\033[K\n' "$line"
-    done <<<"$rendered"
-    printf '\033[J'
+    printf '\033[H\033[J%s' "$rendered"
+  }
+
+  _denon_dashboard_restore_terminal() {
+    if [[ "${dashboard_terminal_active:-0}" == "1" && -n "${dashboard_saved_stty:-}" ]]; then
+      stty "$dashboard_saved_stty" 2>/dev/null || true
+      dashboard_terminal_active=0
+    fi
+    printf '\033[?25h'
+  }
+
+  _denon_dashboard_handle_key() {
+    local key="$1"
+
+    case "$key" in
+      q|Q)
+        dashboard_stop_pending=1
+        dashboard_exit_status=0
+        ;;
+      r|R)
+        dashboard_resize_pending=0
+        _denon_dashboard_redraw
+        ;;
+    esac
+  }
+
+  _denon_dashboard_poll_key() {
+    local timeout="$1"
+    local key=""
+
+    [[ -t 0 ]] || return 1
+    if read -rsn1 -t "$timeout" key 2>/dev/null; then
+      _denon_dashboard_handle_key "$key"
+      return 0
+    fi
+    return 1
   }
 
   _denon_dashboard_sleep_or_resize() {
     local remaining="$1"
-    local chunk key
+    local chunk
 
+    if ! awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'; then
+      _denon_dashboard_poll_key 0.200 || true
+      return 0
+    fi
     while [[ "${dashboard_stop_pending:-0}" != "1" ]] && awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'; do
       if [[ "${dashboard_resize_pending:-0}" == "1" ]]; then
         dashboard_resize_pending=0
@@ -4520,19 +4930,8 @@ EOF
       fi
       chunk=$(awk -v remaining="$remaining" 'BEGIN { if (remaining < 0.2) printf "%.3f", remaining; else printf "0.200" }')
       if [[ -t 0 ]]; then
-        key=""
-        if read -rsn1 -t "$chunk" key 2>/dev/null; then
-          case "$key" in
-            q|Q)
-              dashboard_stop_pending=1
-              break
-              ;;
-            r|R)
-              dashboard_resize_pending=0
-              _denon_dashboard_redraw
-              ;;
-          esac
-        fi
+        _denon_dashboard_poll_key "$chunk" || true
+        [[ "${dashboard_stop_pending:-0}" == "1" ]] && break
       else
         sleep "$chunk" 2>/dev/null || true
       fi
@@ -4562,6 +4961,8 @@ EOF
     local dashboard_stop_pending=0
     local dashboard_exit_status=0
     local dashboard_diagnostics=0
+    local dashboard_saved_stty=""
+    local dashboard_terminal_active=0
 
     dashboard_ascii=0
     case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
@@ -4590,6 +4991,7 @@ EOF
             echo "Usage: denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]" >&2
             return 1
           fi
+          watch=1
           interval="$2"
           shift 2
           ;;
@@ -4631,7 +5033,14 @@ EOF
 
     if [[ "$watch" == "1" ]]; then
       trap 'dashboard_resize_pending=1' WINCH
-      trap 'dashboard_stop_pending=1; dashboard_exit_status=130; printf "\033[?25h"' INT TERM HUP
+      trap 'dashboard_stop_pending=1; dashboard_exit_status=130; _denon_dashboard_restore_terminal' INT TERM HUP
+      if [[ -t 0 ]]; then
+        dashboard_saved_stty=$(stty -g 2>/dev/null || printf '')
+        if [[ -n "$dashboard_saved_stty" ]]; then
+          stty -echo -icanon min 0 time 0 2>/dev/null || true
+          dashboard_terminal_active=1
+        fi
+      fi
       printf '\033[?25l'
       while [[ "$dashboard_stop_pending" != "1" ]]; do
         local poll_start poll_end poll_elapsed poll_sleep
@@ -4646,7 +5055,7 @@ EOF
         poll_sleep=$(awk -v interval="$interval" -v elapsed="$poll_elapsed" 'BEGIN { sleep_for=interval-elapsed; if (sleep_for < 0) sleep_for=0; printf "%.3f", sleep_for }')
         _denon_dashboard_sleep_or_resize "$poll_sleep"
       done
-      printf '\033[?25h'
+      _denon_dashboard_restore_terminal
       trap - WINCH INT TERM HUP
       return "$dashboard_exit_status"
     fi
@@ -5316,12 +5725,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
       return 0
       ;;
     version|--version|-V)
-      local script_path
-      script_path=$(_denon_script_path) || {
-        echo "Error: could not resolve script path for version lookup" >&2
-        return 1
-      }
-      grep -m1 '^# Version:' "$script_path" | awk '{print $3}'
+      printf '%s\n' "${DENON_CONTROLLER_VERSION:-unknown}"
       return 0
       ;;
     setip)

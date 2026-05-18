@@ -8,6 +8,7 @@ fixture bodies captured during Phase 4 live probing.
 
 import json
 import os
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -31,6 +32,16 @@ def _bash(code: str, env_extra: dict | None = None) -> subprocess.CompletedProce
         env=env,
         timeout=15,
     )
+
+
+def _assert_no_dashboard_helper_errors(r: subprocess.CompletedProcess) -> None:
+    combined = r.stdout + r.stderr
+    assert "sed:" not in combined
+    assert "Invalid range end" not in combined
+
+
+def _strip_dashboard_control_sequences(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +470,111 @@ class TestDataSummaryOutput:
         for noisy in ["brand_code", "model_type", "setup_lock", "heos_sign_in", "firmware"]:
             assert noisy not in r.stdout
 
+    def test_mute_normalization_accepts_on_like_values(self):
+        code = textwrap.dedent("""\
+            for value in on ON yes YES true TRUE 1 MUON Z2MUON; do
+              printf '%s=%s\\n' "$value" "$(_denon_normalize_mute "$value")"
+            done
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert all(line.endswith("=yes") for line in r.stdout.splitlines())
+
+    def test_mute_normalization_accepts_off_like_values(self):
+        code = textwrap.dedent("""\
+            for value in off OFF no NO false FALSE 0 MUOFF Z2MUOFF 2; do
+              printf '%s=%s\\n' "$value" "$(_denon_normalize_mute "$value")"
+            done
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert all(line.endswith("=no") for line in r.stdout.splitlines())
+
+    def test_mute_normalization_unknown_values_stay_unknown(self):
+        code = textwrap.dedent("""\
+            printf 'empty=%s\\n' "$(_denon_normalize_mute "")"
+            printf 'unknown=%s\\n' "$(_denon_normalize_mute unknown)"
+            printf 'Unknown=%s\\n' "$(_denon_normalize_mute Unknown)"
+            printf 'null=%s\\n' "$(_denon_normalize_mute null)"
+            printf 'missing=%s\\n' "$(_denon_normalize_mute)"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert all(line.endswith("=Unknown") for line in r.stdout.splitlines())
+
+    def test_info_json_uses_null_for_unknown_mute(self):
+        code = textwrap.dedent("""\
+            IP=192.0.2.10
+            _denon_get_identity_xml() { printf '%s' '<Device><FriendlyName>Denon AVR-X1600H</FriendlyName></Device>'; }
+            _denon_get_power_xml() { printf '%s' '<listGlobals><MainZone><Power>1</Power></MainZone><Zone2><Power>2</Power></Zone2></listGlobals>'; }
+            _denon_get_source_xml() { printf '%s' '<SourceList><Zone zone="1" index="6"></Zone><Zone zone="2" index="1"></Zone></SourceList>'; }
+            _denon_get_vol_xml() { printf '%s' '<listGlobals><MainZone><Volume>490</Volume><Mute></Mute></MainZone><Zone2><Volume>650</Volume><Mute>bogus</Mute></Zone2></listGlobals>'; }
+            _denon_query_main_mute_raw() { return 1; }
+            _denon_query_zone2_mute_raw() { return 1; }
+            _denon_alias_for_source() { return 1; }
+            _denon_source_name_by_idx() { printf '%s' 'HEOS Music'; }
+            _denon_info --json
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        obj = json.loads(r.stdout)
+        assert obj["mainZone"]["muted"] is None
+        assert obj["zone2"]["muted"] is None
+
+    def test_status_prefers_telnet_mute_off_over_xml_code(self):
+        code = textwrap.dedent("""\
+            _denon_get_power_xml() { printf '%s' '<listGlobals><MainZone><Power>1</Power></MainZone></listGlobals>'; }
+            _denon_get_source_xml() { printf '%s' '<SourceList><Zone zone="1" index="13"><Source index="13"><Name>HEOS Music</Name></Source></Zone></SourceList>'; }
+            _denon_get_vol_xml() { printf '%s' '<listGlobals><MainZone><Volume>450</Volume><Mute>1</Mute></MainZone></listGlobals>'; }
+            _denon_query_main_mute_raw() { printf '%s' 'MUOFF'; }
+            _denon_alias_for_source() { return 1; }
+            _denon_source_name_by_idx() { printf '%s' 'HEOS Music'; }
+            _denon_status_pretty
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "Power: ON | Source: HEOS Music | Volume: -35.0 dB"
+        assert "[MUTED]" not in r.stdout
+
+    def test_dashboard_raw_main_mute_off_renders_no(self):
+        code = textwrap.dedent("""\
+            IP=192.0.2.10
+            _denon_info() { return 1; }
+            _denon_status_pretty() { printf '%s\\n' 'Power: ON | Source: HEOS Music | Volume: -31.0 dB'; }
+            _denon_zone_status_pretty() { printf '%s\\n' 'Zone 2 | Power: OFF | Source: Phono | Volume: -15.0 | Muted: no'; }
+            _denon_sources() {
+              if [[ "$1" == "1" ]]; then
+                printf '%s\\n' '  1  TV Audio' '* 13 HEOS Music'
+              else
+                printf '%s\\n' '* 1  Phono'
+              fi
+            }
+            _denon_track() { return 1; }
+            _denon_get_config() { printf '%s' '<listGlobals><MainZone>Main Zone</MainZone><Zone2>Zone 2</Zone2></listGlobals>'; }
+            _denon_get_vol_xml() { printf '%s' '<listGlobals><MainZone><Volume>490</Volume><Mute>off</Mute><Max>980</Max></MainZone><Zone2><Volume>650</Volume><Mute>Z2MUOFF</Mute></Zone2></listGlobals>'; }
+            _denon_query_main_mute_raw() { return 1; }
+            _denon_query_zone2_mute_raw() { return 1; }
+            _denon_dashboard_telnet_status() { return 1; }
+            _denon_dashboard_heos_status() { return 1; }
+            dashboard_initialized=0
+            previous_dashboard_key=""
+            dashboard_events=""
+            last_dashboard_event=""
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            dashboard_ascii=1
+            watch=0
+            DENON_DASHBOARD_WIDTH=120
+            DENON_DASHBOARD_HEIGHT=40
+            _denon_dashboard_collect
+            _denon_dashboard_update_events
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Muted:  no" in r.stdout
+        assert "Muted:  yes" not in r.stdout
+
 
 class TestDashboardDiagnostics:
     DASHBOARD_STATE = """\
@@ -510,6 +626,16 @@ class TestDashboardDiagnostics:
         dash_diag_heos_firmware="3.88.614"
     """
 
+    def test_denon_version_reports_release_candidate_version(self):
+        r = subprocess.run(
+            [str(SCRIPT), "version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert r.returncode == 0
+        assert r.stdout.strip() == "1.2.0-beta.1"
+
     def test_normal_dashboard_does_not_include_diagnostics(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\
             dashboard_diagnostics=0
@@ -521,6 +647,429 @@ class TestDashboardDiagnostics:
         assert "Diagnostics" not in r.stdout
         assert "Brand:" not in r.stdout
         assert "AVR FW:" not in r.stdout
+
+    def test_dashboard_renders_main_zone_zone2_and_receiver_info_panels(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            DENON_DASHBOARD_WIDTH=120
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Main Zone" in r.stdout
+        assert "Zone 2" in r.stdout
+        assert "Receiver Info" in r.stdout
+        assert "Receiver / Zone 2" not in r.stdout
+
+    def test_static_dashboard_unicode_render_starts_with_top_border(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            dashboard_ascii=0
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            DENON_DASHBOARD_WIDTH=120
+            DENON_DASHBOARD_HEIGHT=40
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        frame = _strip_dashboard_control_sequences(r.stdout)
+        assert frame.startswith("\u250c")
+        assert not frame.startswith("\u2502 Main Zone")
+        assert frame.index("\u250c") < frame.index("Main Zone")
+
+    def test_live_dashboard_unicode_redraw_starts_with_top_border(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            dashboard_ascii=0
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            watch=1
+            DENON_DASHBOARD_WIDTH=120
+            DENON_DASHBOARD_HEIGHT=40
+            _denon_dashboard_redraw
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert r.stdout.startswith("\x1b[H\x1b[J")
+        assert not r.stdout.endswith("\n")
+        frame = _strip_dashboard_control_sequences(r.stdout)
+        assert frame.startswith("\u250c")
+        assert not frame.startswith("\u2502 Main Zone")
+        assert frame.index("\u250c") < frame.index("Main Zone")
+        assert "denon-avr-controller v1.2.0-beta.1" in frame
+        assert "[q] Quit | [r] Redraw" in frame
+
+    def test_live_dashboard_ascii_redraw_starts_with_top_border(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            dashboard_ascii=1
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            watch=1
+            DENON_DASHBOARD_WIDTH=120
+            DENON_DASHBOARD_HEIGHT=40
+            _denon_dashboard_redraw
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert not r.stdout.endswith("\n")
+        frame = _strip_dashboard_control_sequences(r.stdout)
+        assert frame.startswith("+")
+        assert not frame.startswith("| Main Zone")
+        assert frame.index("+") < frame.index("Main Zone")
+
+    def test_dashboard_layout_wide_top_boxes_are_proportional(self):
+        code = textwrap.dedent("""\
+            _denon_dashboard_layout 120 40
+            printf '%s %s %s %s\\n' "$dash_layout_mode" "$dash_layout_top_w1" "$dash_layout_top_w2" "$dash_layout_top_w3"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        mode, w1, w2, w3 = r.stdout.strip().split()
+        widths = [int(w1), int(w2), int(w3)]
+        assert mode == "wide"
+        assert max(widths) - min(widths) <= 2
+        assert sum(widths) + 4 == 120
+
+    def test_dashboard_layout_bottom_row_is_equal_width(self):
+        code = textwrap.dedent("""\
+            _denon_dashboard_layout 120 40
+            printf '%s %s\\n' "$dash_layout_sources_w" "$dash_layout_events_w"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        sources_w, events_w = [int(part) for part in r.stdout.strip().split()]
+        assert sources_w + events_w + 2 == 120
+        assert 0.48 <= sources_w / (sources_w + events_w) <= 0.52
+
+    def test_dashboard_bottom_row_renders_two_panels_with_shared_height(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_ascii=0
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            dashboard_events=""
+            _denon_dashboard_set_borders
+            _denon_dashboard_build_bodies
+            _denon_dashboard_layout 120 40
+            printf 'height:%s\\n' "$dash_layout_bottom_h"
+            _denon_dashboard_render_two_panel_row \
+              "Main Zone Sources" "$dash_main_sources" "$dash_layout_sources_w" \
+              "Recent Events" "$dash_events_body" "$dash_layout_events_w" \
+              "$dash_layout_bottom_h"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        lines = r.stdout.splitlines()
+        height = int(lines[0].split(":", 1)[1])
+        row_lines = lines[1:]
+        assert len(row_lines) == height
+        assert row_lines[0].count("\u250c") == 2
+        assert row_lines[1].count("\u2502") == 4
+        assert row_lines[2].count("\u2502") == 4
+        assert row_lines[-1].count("\u2514") == 2
+        assert "Main Zone Sources" in row_lines[1]
+        assert "Recent Events" in row_lines[1]
+        assert "No state changes yet" in "\n".join(row_lines)
+
+    def test_dashboard_bottom_row_many_sources_do_not_change_shared_height(self):
+        code = textwrap.dedent("""\
+            dashboard_ascii=0
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            _denon_dashboard_set_borders
+            dash_main_sources=""
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+              dash_main_sources="${dash_main_sources}  ${i} Source ${i}"$'\\n'
+            done
+            dash_main_sources="${dash_main_sources%$'\\n'}"
+            dash_events_body="No state changes yet"
+            printf 'height:%s\\n' 7
+            _denon_dashboard_render_two_panel_row \
+              "Main Zone Sources" "$dash_main_sources" 70 \
+              "Recent Events" "$dash_events_body" 48 \
+              7
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        lines = r.stdout.splitlines()
+        height = int(lines[0].split(":", 1)[1])
+        row_lines = lines[1:]
+        assert len(row_lines) == height
+        assert row_lines[0].count("\u250c") == 2
+        assert row_lines[-1].count("\u2514") == 2
+        assert "Source 1" in "\n".join(row_lines)
+        assert "Source 15" not in "\n".join(row_lines)
+        assert all(
+            line.count("\u2502") == 4 or line.count("\u250c") == 2 or line.count("\u2514") == 2
+            for line in row_lines
+        )
+
+    def test_dashboard_tall_layout_uses_proportional_row_heights(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            _denon_dashboard_build_bodies
+            _denon_dashboard_layout 120 80
+            printf '%s %s %s %s\\n' "$dash_layout_top_h" "$dash_layout_now_h" "$dash_layout_bottom_h" "$dash_layout_footer_height"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        top_h, now_h, bottom_h, footer_h = [int(part) for part in r.stdout.strip().split()]
+        available = 80 - footer_h - 2
+        assert top_h > 10
+        assert now_h > 10
+        assert bottom_h > top_h
+        assert bottom_h > now_h
+        assert bottom_h < available * 0.65
+        assert 0.23 <= top_h / available <= 0.27
+        assert 0.18 <= now_h / available <= 0.22
+        assert 0.53 <= bottom_h / available <= 0.57
+
+    def test_dashboard_normal_wide_layout_keeps_top_and_now_meaningful(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            _denon_dashboard_build_bodies
+            _denon_dashboard_layout 120 40
+            printf '%s %s %s %s\\n' "$dash_layout_top_h" "$dash_layout_now_h" "$dash_layout_bottom_h" "$dash_layout_footer_height"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        top_h, now_h, bottom_h, footer_h = [int(part) for part in r.stdout.strip().split()]
+        available = 40 - footer_h - 2
+        assert top_h >= 10
+        assert now_h >= 10
+        assert bottom_h > top_h
+        assert bottom_h > now_h
+        assert top_h + now_h + bottom_h == available
+
+    def test_dashboard_footer_includes_version_and_quit_hint(self):
+        code = textwrap.dedent("""\
+            dash_receiver="Denon AVR-X1600H"
+            dash_ip="192.0.2.10"
+            dash_errors=""
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            watch=1
+            _denon_dashboard_render_footer 120
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert "denon-avr-controller v1.2.0-beta.1" in r.stdout
+        assert "[q] Quit" in r.stdout
+        assert "[q] Quit | [r] Redraw" in r.stdout
+        assert "v1.2.0-beta.1[q]" not in r.stdout
+        assert re.search(r"v1\.2\.0-beta\.1 {2,}\[q\] Quit", r.stdout)
+
+    def test_dashboard_footer_truncates_receiver_before_version(self):
+        code = textwrap.dedent("""\
+            dash_receiver="Denon AVR-X1600H"
+            dash_ip="192.0.2.10"
+            dash_errors=""
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            watch=1
+            _denon_dashboard_render_footer 80
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert "denon-avr-controller v1.2.0-beta.1" in r.stdout
+        assert "[q] Quit" in r.stdout
+        assert "[q] Quit | [r] Redraw" in r.stdout
+        assert "v1.2.0-beta.1[q]" not in r.stdout
+        assert re.search(r"v1\.2\.0-beta\.1 {2,}\[q\] Quit", r.stdout)
+
+    def test_dashboard_footer_narrow_keeps_key_hints(self):
+        code = textwrap.dedent("""\
+            dash_receiver="Denon AVR-X1600H"
+            dash_ip="192.0.2.10"
+            dash_errors=""
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            watch=1
+            _denon_dashboard_render_footer 50
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert "[q] Quit | [r] Redraw" in r.stdout
+        assert "v1.2.0-beta.1[q]" not in r.stdout
+        assert re.search(r" {2,}\[q\] Quit", r.stdout)
+
+    def test_dashboard_strip_ansi_handles_script_generated_sgr_colors(self):
+        code = textwrap.dedent("""\
+            dashboard_color_mode="always"
+            dashboard_use_color=0
+            _denon_dashboard_setup_color
+            colored="$(_denon_dashboard_c green "denon-avr-controller v1.2.0-beta.1")"
+            printf 'plain:%s\\n' "$(_denon_dashboard_strip_ansi "$colored")"
+            printf 'width:%s\\n' "$(_denon_dashboard_visible_width "$colored")"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert "plain:denon-avr-controller v1.2.0-beta.1" in r.stdout
+        assert "width:34" in r.stdout
+
+    def test_dashboard_footer_ansi_sequences_do_not_affect_width(self):
+        code = textwrap.dedent("""\
+            dashboard_color_mode="always"
+            dashboard_use_color=0
+            _denon_dashboard_setup_color
+            colored_version="$(_denon_dashboard_c green "denon-avr-controller v1.2.0-beta.1")"
+            colored_q="$(_denon_dashboard_c yellow "[q]")"
+            colored_r="$(_denon_dashboard_c yellow "[r]")"
+            left="Updated 18:08:09 | Denon AVR-X1600H @ 192.0.2.10 | $colored_version"
+            right="$colored_q Quit | $colored_r Redraw"
+            line=$(_denon_dashboard_compose_footer_line "$left" "$right" 120)
+            printf '%s\\n' "$line"
+            plain=$(_denon_dashboard_strip_ansi "$line")
+            printf 'visible:%s\\n' "$(_denon_dashboard_visible_width "$line")"
+            printf 'plain:%s\\n' "$plain"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert "visible:120" in r.stdout
+        assert "[q] Quit | [r] Redraw" in r.stdout
+        plain = next(line.removeprefix("plain:") for line in r.stdout.splitlines() if line.startswith("plain:"))
+        assert "v1.2.0-beta.1[q]" not in plain
+        assert re.search(r"v1\.2\.0-beta\.1 {2,}\[q\] Quit", plain)
+
+    def test_dashboard_footer_color_enabled_has_no_helper_errors(self):
+        code = textwrap.dedent("""\
+            dash_receiver="Denon AVR-X1600H"
+            dash_ip="192.0.2.10"
+            dash_errors=""
+            dashboard_color_mode="always"
+            dashboard_use_color=0
+            _denon_dashboard_setup_color
+            watch=1
+            _denon_dashboard_render_footer 120
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert "denon-avr-controller v1.2.0-beta.1" in r.stdout
+        assert "[q] Quit | [r] Redraw" in r.stdout
+        assert "v1.2.0-beta.1[q]" not in r.stdout
+
+    def test_dashboard_footer_missing_version_does_not_crash(self):
+        code = textwrap.dedent("""\
+            DENON_CONTROLLER_VERSION=""
+            dash_receiver="Denon AVR-X1600H"
+            dash_ip="192.0.2.10"
+            dash_errors=""
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            watch=1
+            _denon_dashboard_render_footer 120
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        _assert_no_dashboard_helper_errors(r)
+        assert "denon-avr-controller vunknown" in r.stdout
+        assert "[q] Quit" in r.stdout
+
+    def test_dashboard_missing_zone2_data_does_not_crash(self):
+        code = textwrap.dedent("""\
+            dash_receiver="Denon AVR-X1600H"
+            dash_ip="192.0.2.10"
+            dash_main_zone_name="LivingRoom"
+            dash_main_power="ON"
+            dash_main_source="TV Audio"
+            dash_sound_mode="Multi Ch Stereo"
+            dash_main_volume="-31.0"
+            dash_main_muted="no"
+            dash_now_message="No metadata for current source"
+            dash_main_sources=$'* 6  TV Audio'
+            dashboard_events=""
+            dash_errors=""
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            dashboard_ascii=1
+            dashboard_diagnostics=0
+            watch=0
+            DENON_DASHBOARD_WIDTH=72
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Zone 2" in r.stdout
+        assert "Power:  Unknown" in r.stdout
+
+    def test_dashboard_very_narrow_terminal_does_not_crash(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            DENON_DASHBOARD_WIDTH=24
+            DENON_DASHBOARD_HEIGHT=18
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Main Zone" in r.stdout
+
+    def test_dashboard_very_short_terminal_does_not_crash(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            DENON_DASHBOARD_WIDTH=120
+            DENON_DASHBOARD_HEIGHT=8
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Main Zone" in r.stdout
+
+    def test_dashboard_missing_now_playing_data_does_not_crash(self):
+        code = textwrap.dedent("""\
+            dash_receiver="Denon AVR-X1600H"
+            dash_ip="192.0.2.10"
+            dash_main_zone_name="LivingRoom"
+            dash_main_power="ON"
+            dash_main_source="TV Audio"
+            dash_sound_mode="Multi Ch Stereo"
+            dash_main_volume="-31.0"
+            dash_main_muted="no"
+            dash_zone2_name="ZONE2"
+            dash_zone2_power="OFF"
+            dash_zone2_source="Phono"
+            dash_zone2_muted="no"
+            dash_main_sources=$'* 6  TV Audio'
+            dashboard_events=""
+            dash_errors=""
+            dashboard_color_mode="never"
+            dashboard_use_color=0
+            dashboard_ascii=1
+            dashboard_diagnostics=0
+            watch=0
+            DENON_DASHBOARD_WIDTH=72
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Now Playing / Audio" in r.stdout
+        assert "Title:   Unknown" in r.stdout
+
+    def test_dashboard_quit_keys_set_stop_pending(self):
+        code = textwrap.dedent("""\
+            _denon_dashboard_redraw() { printf 'redraw called\\n'; }
+            dashboard_stop_pending=0
+            dashboard_exit_status=9
+            _denon_dashboard_handle_key q
+            printf 'q:%s:%s\\n' "$dashboard_stop_pending" "$dashboard_exit_status"
+            dashboard_stop_pending=0
+            dashboard_exit_status=9
+            _denon_dashboard_handle_key Q
+            printf 'Q:%s:%s\\n' "$dashboard_stop_pending" "$dashboard_exit_status"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "q:1:0" in r.stdout
+        assert "Q:1:0" in r.stdout
 
     def test_dashboard_diagnostics_includes_promoted_fields(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + self.DASHBOARD_DIAG + """\

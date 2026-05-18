@@ -8,5 +8,7 @@ Set-DenonReceiver -IpAddress 192.168.1.100 -SkipCertificateCheck
 # Read-only checks first.
 Test-DenonReceiver
 Get-DenonStatus
+Get-DenonNowPlaying
+Get-DenonReceiverSummary
 Get-DenonSources
 Show-DenonDashboard

@@ -1,3 +1,5 @@
+$script:DenonControllerVersion = '1.2.0-beta.1'
+
 $script:DenonReceiverConfig = [ordered]@{
     IpAddress = $null
     Port = 10443
@@ -54,6 +56,12 @@ function Set-DenonReceiver {
         [ValidateRange(1, 65535)]
         [int]$Port = 10443,
 
+        [ValidateRange(1, 65535)]
+        [int]$TelnetPort,
+
+        [ValidateRange(1, 120)]
+        [int]$TimeoutSeconds,
+
         [ValidateRange(-80.0, 18.0)]
         [double]$MaxVolumeDb,
 
@@ -75,6 +83,12 @@ function Set-DenonReceiver {
     $script:DenonReceiverConfig.IpAddress = $IpAddress
     if ($PSBoundParameters.ContainsKey('Port')) {
         $script:DenonReceiverConfig.Port = $Port
+    }
+    if ($PSBoundParameters.ContainsKey('TelnetPort')) {
+        $script:DenonReceiverConfig.TelnetPort = $TelnetPort
+    }
+    if ($PSBoundParameters.ContainsKey('TimeoutSeconds')) {
+        $script:DenonReceiverConfig.TimeoutSeconds = $TimeoutSeconds
     }
     $script:DenonReceiverConfig.SkipCertificateCheck = $SkipCertificateCheck.IsPresent
     if ($PSBoundParameters.ContainsKey('MaxVolumeDb')) {
@@ -120,7 +134,7 @@ function Invoke-DenonHttpGet {
         Method = 'Get'
         TimeoutSec = $TimeoutSeconds
         ErrorAction = 'Stop'
-        Headers = @{ 'User-Agent' = 'DenonAvrController.PowerShell/0.1' }
+        Headers = @{ 'User-Agent' = ('DenonAvrController.PowerShell/{0}' -f $script:DenonControllerVersion) }
     }
 
     if ($command.Parameters.ContainsKey('UseBasicParsing')) {
@@ -165,7 +179,7 @@ function Invoke-DenonGetConfig {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet(3, 4, 7, 12)]
+        [ValidateSet(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)]
         [int]$Type,
 
         [psobject]$Receiver = (Resolve-DenonReceiver)
@@ -217,13 +231,54 @@ function Get-DenonConfigXml {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet(3, 4, 7, 12)]
+        [ValidateSet(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)]
         [int]$Type,
 
         [psobject]$Receiver = (Resolve-DenonReceiver)
     )
 
     ConvertTo-DenonXmlDocument -XmlText (Invoke-DenonGetConfig -Type $Type -Receiver $Receiver)
+}
+
+function Get-DenonOptionalConfigXml {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)]
+        [int]$Type,
+
+        [psobject]$Receiver = (Resolve-DenonReceiver)
+    )
+
+    try {
+        Get-DenonConfigXml -Type $Type -Receiver $Receiver
+    }
+    catch {
+        Write-Verbose ('get_config type={0} unavailable: {1}' -f $Type, $_.Exception.Message)
+        return $null
+    }
+}
+
+function Invoke-DenonPlainHttpGet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [ValidateRange(1, 65535)]
+        [int]$Port = 80,
+
+        [psobject]$Receiver = (Resolve-DenonReceiver)
+    )
+
+    $uri = if ($Port -eq 80) {
+        'http://{0}{1}' -f $Receiver.IpAddress, $Path
+    }
+    else {
+        'http://{0}:{1}{2}' -f $Receiver.IpAddress, $Port, $Path
+    }
+
+    Invoke-DenonHttpGet -Uri $uri -TimeoutSeconds $Receiver.TimeoutSeconds -SkipCertificateCheck:$false
 }
 
 function Get-DenonXmlValue {
@@ -310,11 +365,88 @@ function ConvertTo-DenonMuteBoolean {
         [string]$Code
     )
 
-    if ([string]::IsNullOrWhiteSpace($Code)) {
+    $value = if ($null -eq $Code) { '' } else { ([string]$Code).Trim() }
+    if ([string]::IsNullOrWhiteSpace($value)) {
         return $null
     }
 
-    $Code -eq '1'
+    switch -Regex ($value.ToLowerInvariant()) {
+        '^(1|on|yes|true|muon|z2muon)$' { return $true }
+        '^(0|2|off|no|false|muoff|z2muoff)$' { return $false }
+        default { return $null }
+    }
+}
+
+function ConvertTo-DenonMuteLabel {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [object]$Muted
+    )
+
+    if ($Muted -eq $true) {
+        return 'yes'
+    }
+    if ($Muted -eq $false) {
+        return 'no'
+    }
+
+    'Unknown'
+}
+
+function Get-DenonTelnetResponseLine {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Prefix
+    )
+
+    try {
+        $result = Invoke-DenonTelnetCommand -Command $Command -ReadResponse -TimeoutMilliseconds 1500
+    }
+    catch {
+        return $null
+    }
+
+    if (-not $result.ReceivedResponse) {
+        return $null
+    }
+
+    $lines = @($result.Response -split "`r`n|`n|`r" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($line in $lines) {
+        if ($line.StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $line
+        }
+    }
+
+    return $null
+}
+
+function Get-DenonMuteCode {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$XmlCode,
+
+        [ValidateSet('Main', 'Zone2')]
+        [string]$Zone = 'Main',
+
+        [switch]$PreferTelnet
+    )
+
+    if ($PreferTelnet.IsPresent) {
+        $command = if ($Zone -eq 'Zone2') { 'Z2MU?' } else { 'MU?' }
+        $prefix = if ($Zone -eq 'Zone2') { 'Z2MU' } else { 'MU' }
+        $telnetCode = Get-DenonTelnetResponseLine -Command $command -Prefix $prefix
+        if ($null -ne (ConvertTo-DenonMuteBoolean -Code $telnetCode)) {
+            return $telnetCode
+        }
+    }
+
+    $XmlCode
 }
 
 function ConvertFrom-DenonRawVolume {
@@ -463,7 +595,8 @@ function Get-DenonStatusFromXml {
     $powerCode = Get-DenonXmlValue -Xml $PowerXml -XPath '//*[local-name()="MainZone"]/*[local-name()="Power"]'
     $sourceIndex = ConvertTo-DenonNullableInt -Value (Get-DenonXmlValue -Xml $SourceXml -XPath '//*[local-name()="Zone" and @zone="1"]/@index')
     $rawVolume = Get-DenonXmlValue -Xml $VolumeXml -XPath '//*[local-name()="MainZone"]/*[local-name()="Volume"]'
-    $muteCode = Get-DenonXmlValue -Xml $VolumeXml -XPath '//*[local-name()="MainZone"]/*[local-name()="Mute"]'
+    $xmlMuteCode = Get-DenonXmlValue -Xml $VolumeXml -XPath '//*[local-name()="MainZone"]/*[local-name()="Mute"]'
+    $muteCode = Get-DenonMuteCode -XmlCode $xmlMuteCode -Zone Main -PreferTelnet
     $sourceName = Get-DenonSourceNameFromXml -SourceXml $SourceXml -Zone 1 -Index $sourceIndex
 
     [pscustomobject]@{
@@ -471,8 +604,11 @@ function Get-DenonStatusFromXml {
         Power = ConvertTo-DenonPowerName -Code $powerCode
         SourceIndex = $sourceIndex
         SourceName = if ([string]::IsNullOrWhiteSpace($sourceName)) { 'Unknown' } else { $sourceName }
+        VolumeRaw = ConvertTo-DenonNullableInt -Value $rawVolume
         VolumeDb = ConvertFrom-DenonRawVolume -Raw $rawVolume
         Muted = ConvertTo-DenonMuteBoolean -Code $muteCode
+        MuteRaw = $muteCode
+        MuteXmlRaw = $xmlMuteCode
     }
 }
 
@@ -495,7 +631,8 @@ function Get-DenonZone2StatusFromXml {
     $powerCode = Get-DenonXmlValue -Xml $PowerXml -XPath '//*[local-name()="Zone2"]/*[local-name()="Power"]'
     $sourceIndex = ConvertTo-DenonNullableInt -Value (Get-DenonXmlValue -Xml $SourceXml -XPath '//*[local-name()="Zone" and @zone="2"]/@index')
     $rawVolume = Get-DenonXmlValue -Xml $VolumeXml -XPath '//*[local-name()="Zone2"]/*[local-name()="Volume"]'
-    $muteCode = Get-DenonXmlValue -Xml $VolumeXml -XPath '//*[local-name()="Zone2"]/*[local-name()="Mute"]'
+    $xmlMuteCode = Get-DenonXmlValue -Xml $VolumeXml -XPath '//*[local-name()="Zone2"]/*[local-name()="Mute"]'
+    $muteCode = Get-DenonMuteCode -XmlCode $xmlMuteCode -Zone Zone2 -PreferTelnet
     $sourceName = Get-DenonSourceNameFromXml -SourceXml $SourceXml -Zone 2 -Index $sourceIndex
 
     [pscustomobject]@{
@@ -506,6 +643,8 @@ function Get-DenonZone2StatusFromXml {
         VolumeRaw = ConvertTo-DenonNullableInt -Value $rawVolume
         VolumeDb = ConvertFrom-DenonRawVolume -Raw $rawVolume
         Muted = ConvertTo-DenonMuteBoolean -Code $muteCode
+        MuteRaw = $muteCode
+        MuteXmlRaw = $xmlMuteCode
     }
 }
 
@@ -553,6 +692,289 @@ function Get-DenonInfo {
         ModelName = $modelName
         MainZone = $mainStatus
         Zone2 = $zone2Status
+    }
+}
+
+function Get-DenonHeosServiceName {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$Sid,
+
+        [AllowNull()]
+        [string]$Mid
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Mid) -and $Mid -like 'spotify:*') {
+        return 'Spotify'
+    }
+
+    switch ($Sid) {
+        '1' { 'Pandora'; break }
+        '2' { 'Rhapsody'; break }
+        '3' { 'TuneIn'; break }
+        '4' { 'Spotify'; break }
+        '5' { 'Deezer'; break }
+        '7' { 'iHeartRadio'; break }
+        '8' { 'SiriusXM'; break }
+        '9' { 'SoundCloud'; break }
+        '10' { 'Tidal'; break }
+        '13' { 'Amazon'; break }
+        '30' { 'Qobuz'; break }
+        '1024' { 'Local Music'; break }
+        '1025' { 'Playlists'; break }
+        '1026' { 'History'; break }
+        '1027' { 'AUX Input'; break }
+        '1028' { 'Favorites'; break }
+        default {
+            if ([string]::IsNullOrWhiteSpace($Sid)) {
+                return $null
+            }
+            return ('sid {0}' -f $Sid)
+        }
+    }
+}
+
+function ConvertTo-DenonTransportState {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$State
+    )
+
+    $normalized = if ($null -eq $State) { '' } else { $State.Trim().ToLowerInvariant() }
+    switch ($normalized) {
+        'play' { 'Playing'; break }
+        'playing' { 'Playing'; break }
+        'pause' { 'Paused'; break }
+        'paused' { 'Paused'; break }
+        'stop' { 'Stopped'; break }
+        'stopped' { 'Stopped'; break }
+        default {
+            if ([string]::IsNullOrWhiteSpace($State)) {
+                return $null
+            }
+            return $State
+        }
+    }
+}
+
+function Invoke-DenonHeosCommand {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+
+        [psobject]$Receiver = (Resolve-DenonReceiver),
+
+        [ValidateRange(100, 30000)]
+        [int]$TimeoutMilliseconds = 1500
+    )
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    $async = $null
+    $stream = $null
+    $memory = $null
+    try {
+        $async = $client.BeginConnect($Receiver.IpAddress, 1255, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne($TimeoutMilliseconds, $false)) {
+            throw ('Timed out connecting to HEOS CLI at {0}:1255.' -f $Receiver.IpAddress)
+        }
+        $client.EndConnect($async)
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = $TimeoutMilliseconds
+        $stream.WriteTimeout = $TimeoutMilliseconds
+
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes(('{0}{1}' -f $Command, "`r`n"))
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+
+        $buffer = New-Object byte[] 4096
+        $memory = New-Object System.IO.MemoryStream
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $lastDataAtMilliseconds = $null
+        while ($stopwatch.ElapsedMilliseconds -lt $TimeoutMilliseconds) {
+            if ($stream.DataAvailable) {
+                do {
+                    $read = $stream.Read($buffer, 0, $buffer.Length)
+                    if ($read -gt 0) {
+                        $memory.Write($buffer, 0, $read)
+                        $lastDataAtMilliseconds = $stopwatch.ElapsedMilliseconds
+                    }
+                } while ($stream.DataAvailable)
+            }
+            elseif ($null -ne $lastDataAtMilliseconds -and ($stopwatch.ElapsedMilliseconds - $lastDataAtMilliseconds) -ge 100) {
+                break
+            }
+            else {
+                Start-Sleep -Milliseconds 25
+            }
+        }
+
+        $text = [System.Text.Encoding]::UTF8.GetString($memory.ToArray()).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            return $null
+        }
+        $text | ConvertFrom-Json
+    }
+    catch {
+        Write-Verbose ('HEOS command failed: {0}' -f $_.Exception.Message)
+        return $null
+    }
+    finally {
+        if ($null -ne $memory) { $memory.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ($null -ne $async -and $null -ne $async.AsyncWaitHandle) { $async.AsyncWaitHandle.Dispose() }
+        if ($null -ne $client) { $client.Close() }
+    }
+}
+
+function Get-DenonNowPlaying {
+    <#
+    .SYNOPSIS
+    Read-only: Gets current network/HEOS now-playing metadata when available.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $receiver = Resolve-DenonReceiver
+    $title = $null
+    $artist = $null
+    $album = $null
+    $station = $null
+    $service = $null
+    $state = $null
+    $pid = $null
+    $heosModel = $null
+    $heosVersion = $null
+    $network = $null
+    $source = 'Unavailable'
+
+    foreach ($port in @(80, 8080)) {
+        try {
+            $xmlText = Invoke-DenonPlainHttpGet -Path '/goform/formNetAudio_StatusXml.xml' -Port $port -Receiver $receiver
+            if ($xmlText -match '<') {
+                $xml = ConvertTo-DenonXmlDocument -XmlText $xmlText
+                $title = Get-DenonXmlValue -Xml $xml -XPath '//*[local-name()="Song" or local-name()="szLine1"]'
+                $artist = Get-DenonXmlValue -Xml $xml -XPath '//*[local-name()="Artist" or local-name()="szLine2"]'
+                $album = Get-DenonXmlValue -Xml $xml -XPath '//*[local-name()="Album" or local-name()="szLine3"]'
+                $source = 'NetAudioStatusXml'
+                break
+            }
+        }
+        catch {
+            Write-Verbose ('now-playing XML port {0} unavailable: {1}' -f $port, $_.Exception.Message)
+        }
+    }
+
+    $players = Invoke-DenonHeosCommand -Command 'heos://player/get_players' -Receiver $receiver
+    if ($null -ne $players -and $players.heos.result -eq 'success' -and $players.payload.Count -gt 0) {
+        $player = @($players.payload)[0]
+        $pid = [string]$player.pid
+        $heosModel = [string]$player.model
+        $heosVersion = [string]$player.version
+        $network = [string]$player.network
+        if ([string]::IsNullOrWhiteSpace($service) -and -not [string]::IsNullOrWhiteSpace([string]$player.name)) {
+            $service = [string]$player.name
+        }
+
+        $media = Invoke-DenonHeosCommand -Command ('heos://player/get_now_playing_media?pid={0}' -f $pid) -Receiver $receiver
+        if ($null -ne $media -and $media.heos.result -eq 'success') {
+            if ([string]::IsNullOrWhiteSpace($title)) { $title = [string]$media.payload.song }
+            if ([string]::IsNullOrWhiteSpace($artist)) { $artist = [string]$media.payload.artist }
+            if ([string]::IsNullOrWhiteSpace($album)) { $album = [string]$media.payload.album }
+            $station = [string]$media.payload.station
+            $serviceName = Get-DenonHeosServiceName -Sid ([string]$media.payload.sid) -Mid ([string]$media.payload.mid)
+            if (-not [string]::IsNullOrWhiteSpace($serviceName)) { $service = $serviceName }
+            $source = if ($source -eq 'Unavailable') { 'HEOS' } else { '{0}+HEOS' -f $source }
+        }
+
+        $playState = Invoke-DenonHeosCommand -Command ('heos://player/get_play_state?pid={0}' -f $pid) -Receiver $receiver
+        if ($null -ne $playState -and $playState.heos.result -eq 'success') {
+            $message = [string]$playState.heos.message
+            if ($message -match '(?:^|[?&])state=([^&]+)') {
+                $state = ConvertTo-DenonTransportState -State ([System.Uri]::UnescapeDataString($Matches[1]))
+            }
+        }
+    }
+
+    [pscustomobject]@{
+        IpAddress = $receiver.IpAddress
+        Title = if ([string]::IsNullOrWhiteSpace($title)) { $null } else { $title }
+        Artist = if ([string]::IsNullOrWhiteSpace($artist)) { $null } else { $artist }
+        Album = if ([string]::IsNullOrWhiteSpace($album)) { $null } else { $album }
+        Station = if ([string]::IsNullOrWhiteSpace($station)) { $null } else { $station }
+        Service = if ([string]::IsNullOrWhiteSpace($service)) { $null } else { $service }
+        State = $state
+        PlayerId = if ([string]::IsNullOrWhiteSpace($pid)) { $null } else { $pid }
+        HeosModel = if ([string]::IsNullOrWhiteSpace($heosModel)) { $null } else { $heosModel }
+        HeosVersion = if ([string]::IsNullOrWhiteSpace($heosVersion)) { $null } else { $heosVersion }
+        Network = if ([string]::IsNullOrWhiteSpace($network)) { $null } else { $network }
+        Source = $source
+    }
+}
+
+function Get-DenonReceiverSummary {
+    <#
+    .SYNOPSIS
+    Read-only: Gets concise receiver diagnostics from safe read-only surfaces.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $receiver = Resolve-DenonReceiver
+    $type1Xml = Get-DenonOptionalConfigXml -Type 1 -Receiver $receiver
+    $identityXml = Get-DenonOptionalConfigXml -Type 3 -Receiver $receiver
+    $modelTypeXml = Get-DenonOptionalConfigXml -Type 5 -Receiver $receiver
+    $zoneNameXml = Get-DenonOptionalConfigXml -Type 6 -Receiver $receiver
+    $volumeXml = Get-DenonOptionalConfigXml -Type 12 -Receiver $receiver
+    $setupLockXml = Get-DenonOptionalConfigXml -Type 8 -Receiver $receiver
+    $btXml = Get-DenonOptionalConfigXml -Type 9 -Receiver $receiver
+    $speakerPresetXml = Get-DenonOptionalConfigXml -Type 10 -Receiver $receiver
+    $systemXml = Get-DenonOptionalConfigXml -Type 11 -Receiver $receiver
+    $nowPlaying = Get-DenonNowPlaying
+
+    $mainMaxRaw = if ($null -ne $volumeXml) { Get-DenonXmlValue -Xml $volumeXml -XPath '//*[local-name()="MainZone"]/*[local-name()="Max"]' } else { $null }
+
+    [pscustomobject]@{
+        Receiver = [pscustomobject]@{
+            Name = if ($null -ne $identityXml) { Get-DenonXmlValue -Xml $identityXml -XPath '//*[local-name()="FriendlyName"]' } else { $null }
+            IpAddress = $receiver.IpAddress
+            BrandCode = if ($null -ne $type1Xml) { Get-DenonXmlValue -Xml $type1Xml -XPath '//*[local-name()="Brand"]' } else { $null }
+            ModelType = if ($null -ne $modelTypeXml) { Get-DenonXmlValue -Xml $modelTypeXml -XPath '//*[local-name()="ModelType"]' } else { $null }
+        }
+        Volume = [pscustomobject]@{
+            MainZone = [pscustomobject]@{
+                ZoneName = if ($null -ne $zoneNameXml) { Get-DenonXmlValue -Xml $zoneNameXml -XPath '//*[local-name()="MainZone"]' } else { $null }
+                VolumeScale = if ($null -ne $volumeXml) { Get-DenonXmlValue -Xml $volumeXml -XPath '//*[local-name()="MainZone"]/*[local-name()="VolumeScale"]' } else { $null }
+                VolumeLimitRaw = if ($null -ne $volumeXml) { Get-DenonXmlValue -Xml $volumeXml -XPath '//*[local-name()="MainZone"]/*[local-name()="VolumeLimit"]' } else { $null }
+                VolumeMaxDb = ConvertFrom-DenonRawVolume -Raw $mainMaxRaw
+            }
+            Zone2 = [pscustomobject]@{
+                ZoneName = if ($null -ne $zoneNameXml) { Get-DenonXmlValue -Xml $zoneNameXml -XPath '//*[local-name()="Zone2"]' } else { $null }
+                VolumeScale = if ($null -ne $volumeXml) { Get-DenonXmlValue -Xml $volumeXml -XPath '//*[local-name()="Zone2"]/*[local-name()="VolumeScale"]' } else { $null }
+                VolumeLimitRaw = if ($null -ne $volumeXml) { Get-DenonXmlValue -Xml $volumeXml -XPath '//*[local-name()="Zone2"]/*[local-name()="VolumeLimit"]' } else { $null }
+            }
+        }
+        System = [pscustomobject]@{
+            SetupLock = if ($null -ne $setupLockXml) { Get-DenonXmlValue -Xml $setupLockXml -XPath '//*[local-name()="SetupLock"]' } else { $null }
+            MenuLock = if ($null -ne $systemXml) { Get-DenonXmlValue -Xml $systemXml -XPath '//*[local-name()="System"]/*[local-name()="MenuLock"]' } else { $null }
+            AdvancedMode = if ($null -ne $systemXml) { Get-DenonXmlValue -Xml $systemXml -XPath '//*[local-name()="System"]/*[local-name()="AdvancedMode"]' } else { $null }
+            CiMode = if ($null -ne $systemXml) { Get-DenonXmlValue -Xml $systemXml -XPath '//*[local-name()="System"]/*[local-name()="CIMode"]' } else { $null }
+            SpeakerPreset = if ($null -ne $speakerPresetXml) { Get-DenonXmlValue -Xml $speakerPresetXml -XPath '//*[local-name()="SpeakerPreset"]' } else { $null }
+            GuiType = if ($null -ne $systemXml) { Get-DenonXmlValue -Xml $systemXml -XPath '//*[local-name()="System"]/*[local-name()="GuiType"]' } else { $null }
+            WebUiType = if ($null -ne $systemXml) { Get-DenonXmlValue -Xml $systemXml -XPath '//*[local-name()="System"]/*[local-name()="WebUIType"]' } else { $null }
+            ProductType = if ($null -ne $systemXml) { Get-DenonXmlValue -Xml $systemXml -XPath '//*[local-name()="System"]/*[local-name()="ProductType"]' } else { $null }
+            BluetoothHeadphonesSingleUsed = if ($null -ne $btXml) { Get-DenonXmlValue -Xml $btXml -XPath '//*[local-name()="BtHeadphonesSingleUsed"]' } else { $null }
+            HeosSignIn = if ($null -ne $systemXml) { Get-DenonXmlValue -Xml $systemXml -XPath '//*[local-name()="System"]/*[local-name()="HEOSSignIn"]' } else { $null }
+        }
+        NowPlaying = $nowPlaying
+        Firmware = [pscustomobject]@{
+            AvrMainboardFirmware = $null
+            AvrMainboardFirmwareNote = 'unavailable on tested read-only surfaces'
+            HeosVersion = $nowPlaying.HeosVersion
+        }
+        ToolVersion = $script:DenonControllerVersion
     }
 }
 
@@ -1193,15 +1615,31 @@ function Show-DenonDashboard {
     Write-Host ('Receiver: {0}' -f $(if ([string]::IsNullOrWhiteSpace($info.Receiver)) { 'Unknown' } else { $info.Receiver }))
     Write-Host ('IP:       {0}:{1}' -f $info.IpAddress, $info.Port)
     Write-Host ''
-    Write-Host ('Main Power:  {0}' -f $info.MainZone.Power)
-    Write-Host ('Main Source: {0} ({1})' -f $info.MainZone.SourceName, $info.MainZone.SourceIndex)
-    Write-Host ('Main Volume: {0} dB' -f $(if ($null -eq $info.MainZone.VolumeDb) { 'Unknown' } else { $info.MainZone.VolumeDb }))
-    Write-Host ('Main Muted:  {0}' -f $(if ($info.MainZone.Muted) { 'yes' } elseif ($info.MainZone.Muted -eq $false) { 'no' } else { 'Unknown' }))
+    Write-Host 'Main Zone'
+    Write-Host ('  Power:  {0}' -f $info.MainZone.Power)
+    Write-Host ('  Source: {0} ({1})' -f $info.MainZone.SourceName, $info.MainZone.SourceIndex)
+    Write-Host ('  Volume: {0} dB' -f $(if ($null -eq $info.MainZone.VolumeDb) { 'Unknown' } else { $info.MainZone.VolumeDb }))
+    Write-Host ('  Muted:  {0}' -f (ConvertTo-DenonMuteLabel -Muted $info.MainZone.Muted))
     Write-Host ''
-    Write-Host ('Zone 2 Power:  {0}' -f $info.Zone2.Power)
-    Write-Host ('Zone 2 Source: {0} ({1})' -f $info.Zone2.SourceName, $info.Zone2.SourceIndex)
-    Write-Host ('Zone 2 Volume: {0} dB (raw {1})' -f $(if ($null -eq $info.Zone2.VolumeDb) { 'Unknown' } else { $info.Zone2.VolumeDb }), $(if ($null -eq $info.Zone2.VolumeRaw) { 'Unknown' } else { $info.Zone2.VolumeRaw }))
-    Write-Host ('Zone 2 Muted:  {0}' -f $(if ($info.Zone2.Muted) { 'yes' } elseif ($info.Zone2.Muted -eq $false) { 'no' } else { 'Unknown' }))
+    Write-Host 'Zone 2'
+    Write-Host ('  Power:  {0}' -f $info.Zone2.Power)
+    Write-Host ('  Source: {0} ({1})' -f $info.Zone2.SourceName, $info.Zone2.SourceIndex)
+    Write-Host ('  Volume: {0} dB (raw {1})' -f $(if ($null -eq $info.Zone2.VolumeDb) { 'Unknown' } else { $info.Zone2.VolumeDb }), $(if ($null -eq $info.Zone2.VolumeRaw) { 'Unknown' } else { $info.Zone2.VolumeRaw }))
+    Write-Host ('  Muted:  {0}' -f (ConvertTo-DenonMuteLabel -Muted $info.Zone2.Muted))
+
+    $nowPlaying = Get-DenonNowPlaying
+    if ($null -ne $nowPlaying -and (
+            -not [string]::IsNullOrWhiteSpace($nowPlaying.Title) -or
+            -not [string]::IsNullOrWhiteSpace($nowPlaying.State) -or
+            -not [string]::IsNullOrWhiteSpace($nowPlaying.Service))) {
+        Write-Host ''
+        Write-Host 'Now Playing'
+        Write-Host ('  Title:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.Title)) { 'Unknown' } else { $nowPlaying.Title }))
+        Write-Host ('  Artist:  {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.Artist)) { 'Unknown' } else { $nowPlaying.Artist }))
+        Write-Host ('  Album:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.Album)) { 'Unknown' } else { $nowPlaying.Album }))
+        Write-Host ('  Service: {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.Service)) { 'Unknown' } else { $nowPlaying.Service }))
+        Write-Host ('  State:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.State)) { 'Unknown' } else { $nowPlaying.State }))
+    }
 }
 
 Export-ModuleMember -Function @(
@@ -1209,6 +1647,8 @@ Export-ModuleMember -Function @(
     'Test-DenonReceiver',
     'Get-DenonInfo',
     'Get-DenonStatus',
+    'Get-DenonReceiverSummary',
+    'Get-DenonNowPlaying',
     'Get-DenonSources',
     'Get-DenonZone2Status',
     'Get-DenonSleep',

@@ -69,6 +69,8 @@ Start with read-only checks:
 ```powershell
 Test-DenonReceiver
 Get-DenonStatus
+Get-DenonReceiverSummary
+Get-DenonNowPlaying
 Get-DenonSources
 Get-DenonZone2Status
 Get-DenonSleep
@@ -80,6 +82,8 @@ Read-only functions:
 - `Test-DenonReceiver`
 - `Get-DenonInfo`
 - `Get-DenonStatus`
+- `Get-DenonReceiverSummary`
+- `Get-DenonNowPlaying`
 - `Get-DenonSources`
 - `Get-DenonZone2Status`
 - `Get-DenonSleep`
@@ -100,13 +104,27 @@ SourceIndex : 13
 SourceName  : HEOS Music
 VolumeDb    : -42
 Muted       : False
+MuteRaw     : MUOFF
+MuteXmlRaw  : 1
 ```
+
+`Muted` is nullable. `$true` means mute ON, `$false` means mute OFF, and `$null`
+means the receiver did not return a clear mute value. Current builds normalize
+HTTP/XML values such as `1`/`2`, text values such as `on`/`off`, and telnet
+values such as `MUON`/`MUOFF`. For main-zone status, a clear telnet `MU?`
+response is preferred over the type-12 XML mute field because some receivers can
+report stale or ambiguous XML mute values while HEOS audio is playing.
 
 `Get-DenonSources` returns one object per source with:
 
 ```text
 Zone, Index, ReceiverName, DisplayName, Active
 ```
+
+`Get-DenonReceiverSummary` returns a compact diagnostics object with receiver,
+volume, system, now-playing, firmware-note, and tool-version sections. It mirrors
+the shell CLI's safe read-only diagnostics where practical, but it does not port
+the full shell data discovery and capability-inventory workflow.
 
 ## State-changing commands
 
@@ -150,6 +168,7 @@ attempt full SSDP discovery.
 The HTTP/XML implementation follows the existing Bash CLI behavior reference:
 
 - `get_config type=3` for receiver identity
+- `get_config type=1`, `5`, `6`, `8`, `9`, `10`, and `11` for optional diagnostics
 - `get_config type=4` for power
 - `get_config type=7` for source lists and active source index
 - `get_config type=12` for volume and mute
@@ -161,10 +180,14 @@ Known Denon mappings preserved:
 - Power `3` means `OFF`
 - Mute `1` means muted
 - Mute `2` means unmuted
+- Telnet `MUON` / `Z2MUON` means muted
+- Telnet `MUOFF` / `Z2MUOFF` means unmuted
 - Raw volume maps to dB as `raw / 10 - 80`
 
 `Get-DenonSleep` uses the native TCP helper because sleep timer status is easier
 through the Denon telnet-style command interface.
+`Get-DenonNowPlaying` uses the receiver's network-audio XML endpoint and, when
+available, the HEOS CLI read-only player status commands.
 
 ## Later work
 
@@ -173,6 +196,7 @@ Left for later:
 
 - Full terminal dashboard parity
 - Full HEOS browse/search/queue support
+- Shell `data discover` / `data capabilities` parity
 - Presets
 - Profiles
 - Snapshot diff

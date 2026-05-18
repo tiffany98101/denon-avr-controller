@@ -1,6 +1,15 @@
 *.bak
 *.log
 *.tmp
+*~
+*.swp
+*.swo
+.DS_Store
+.env
+.env.*
+!.env.example
+.venv/
+venv/
 test_snapshot_*/
 *.zip
 *.pdf

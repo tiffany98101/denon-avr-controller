@@ -1,11 +1,11 @@
 @{
     RootModule = 'DenonAvrController.psm1'
-    ModuleVersion = '0.1.0'
+    ModuleVersion = '1.2.0'
     GUID = '7bd4473f-4e98-4bd2-bdb9-07261e1d8a5b'
     Author = 'Denon AVR Controller contributors'
     CompanyName = 'Unknown'
     Copyright = '(c) Denon AVR Controller contributors. All rights reserved.'
-    Description = 'Native PowerShell module for controlling Denon AVR receivers over HTTP/XML and TCP sockets.'
+    Description = 'Native PowerShell module for controlling and inspecting Denon AVR receivers over HTTP/XML, HEOS status, and TCP sockets.'
     PowerShellVersion = '5.1'
     CompatiblePSEditions = @('Desktop', 'Core')
 
@@ -14,6 +14,8 @@
         'Test-DenonReceiver',
         'Get-DenonInfo',
         'Get-DenonStatus',
+        'Get-DenonReceiverSummary',
+        'Get-DenonNowPlaying',
         'Get-DenonSources',
         'Get-DenonZone2Status',
         'Get-DenonSleep',
@@ -38,7 +40,7 @@
         PSData = @{
             Tags = @('Denon', 'AVR', 'Receiver', 'PowerShell')
             ProjectUri = 'https://github.com/tiffany98101/denon-avr-controller'
-            Prerelease = 'beta'
+            Prerelease = 'beta1'
         }
     }
 }
