@@ -490,6 +490,34 @@ class TestDataSummaryOutput:
         assert r.returncode == 0
         assert all(line.endswith("=no") for line in r.stdout.splitlines())
 
+    def test_mute_display_uses_title_case_yes_no(self):
+        code = textwrap.dedent("""\
+            printf 'on=%s\\n' "$(_denon_mute_display_name on)"
+            printf 'off=%s\\n' "$(_denon_mute_display_name off)"
+            printf 'missing=%s\\n' "$(_denon_mute_display_name)"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.splitlines() == ["on=Yes", "off=No", "missing=Unknown"]
+
+    def test_data_readable_formats_muted_without_changing_json_boundary(self):
+        code = textwrap.dedent("""\
+            data_available_records=""
+            data_available_records+=$'main_zone\\tMain Zone\\tmuted\\tno\\n'
+            data_available_records+=$'zone2\\tZone 2\\tmuted\\tyes\\n'
+            _denon_data_print_readable
+            printf -- '---JSON---\\n'
+            _denon_data_print_json
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        readable, json_text = r.stdout.split("---JSON---\n", 1)
+        assert "muted                  No" in readable
+        assert "muted                  Yes" in readable
+        obj = json.loads(json_text)
+        assert obj["main_zone"]["muted"] == "no"
+        assert obj["zone2"]["muted"] == "yes"
+
     def test_mute_normalization_unknown_values_stay_unknown(self):
         code = textwrap.dedent("""\
             printf 'empty=%s\\n' "$(_denon_normalize_mute "")"
@@ -541,7 +569,7 @@ class TestDataSummaryOutput:
             IP=192.0.2.10
             _denon_info() { return 1; }
             _denon_status_pretty() { printf '%s\\n' 'Power: ON | Source: HEOS Music | Volume: -31.0 dB'; }
-            _denon_zone_status_pretty() { printf '%s\\n' 'Zone 2 | Power: OFF | Source: Phono | Volume: -15.0 | Muted: no'; }
+            _denon_zone_status_pretty() { printf '%s\\n' 'Zone 2 | Power: OFF | Source: Phono | Volume: -15.0 | Muted: No'; }
             _denon_sources() {
               if [[ "$1" == "1" ]]; then
                 printf '%s\\n' '  1  TV Audio' '* 13 HEOS Music'
@@ -572,7 +600,8 @@ class TestDataSummaryOutput:
         """)
         r = _bash(code)
         assert r.returncode == 0
-        assert "Muted:  no" in r.stdout
+        assert "Muted:  No" in r.stdout
+        assert "Muted:  no" not in r.stdout
         assert "Muted:  yes" not in r.stdout
 
 
@@ -1079,10 +1108,11 @@ class TestDashboardDiagnostics:
         r = _bash(code)
         assert r.returncode == 0
         assert "Diagnostics" in r.stdout
-        assert "Brand:  raw=1 label=unknown" in r.stdout
+        assert "Brand:  raw=1 label=Unknown" in r.stdout
         assert "Main volume: scale 1 / limit 99" in r.stdout
+        assert "Zone 2 volume: scale 1 / limit 70" in r.stdout
         assert "Locks: setup 2 / menu 2" in r.stdout
-        assert "HEOS sign-in: raw=3 label=unknown" in r.stdout
+        assert "HEOS sign-in: raw=3 label=Unknown" in r.stdout
 
     def test_dashboard_diagnostics_narrow_width_does_not_crash(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + self.DASHBOARD_DIAG + """\

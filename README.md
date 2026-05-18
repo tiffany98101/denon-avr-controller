@@ -116,6 +116,43 @@ rm "$HOME/.local/bin/denon"
 hash -r
 ```
 
+### Optional KDE/Fedora Tray Launcher
+
+The CLI can be launched from a small optional system tray helper. This does not
+change normal CLI behavior and installs only per-user files.
+
+Install it:
+
+```bash
+scripts/install-tray-launcher.sh
+```
+
+Start it:
+
+```bash
+~/.local/bin/denon-tray-launcher
+```
+
+Enable desktop-session autostart:
+
+```bash
+scripts/install-tray-launcher.sh --autostart
+```
+
+Uninstall files created by the installer:
+
+```bash
+scripts/install-tray-launcher.sh --uninstall
+```
+
+The tray menu can open the dashboard, restart the dashboard terminal, or quit the
+tray helper. On Fedora KDE, install dependencies if needed:
+
+```bash
+sudo dnf install konsole python3-qt6
+sudo dnf install python3-qt5    # fallback if PyQt6 is unavailable
+```
+
 ## Configuration
 
 The receiver must be reachable on the same local network as the machine running

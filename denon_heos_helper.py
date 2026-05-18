@@ -155,6 +155,19 @@ def print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def display_play_state(value: str) -> str:
+    states = {
+        "play": "Playing",
+        "playing": "Playing",
+        "pause": "Paused",
+        "paused": "Paused",
+        "stop": "Stopped",
+        "stopped": "Stopped",
+    }
+    text = str(value or "").strip()
+    return states.get(text.lower(), text or "Unknown")
+
+
 def show_sources(data: dict[str, Any]) -> None:
     require_ok(data)
     for source in data.get("payload") or []:
@@ -185,7 +198,7 @@ def show_now(ip: str, pid: str) -> None:
     require_ok(media)
     state = send(ip, f"player/get_play_state?pid={quote(pid)}")
     payload = media.get("payload") or {}
-    print(f"State: {message_value(state, 'state') or 'unknown'}")
+    print(f"State: {display_play_state(message_value(state, 'state'))}")
     print(f"Type: {payload.get('type', 'Unknown')}")
     print(f"Title: {payload.get('song') or payload.get('station') or payload.get('name') or 'Unknown'}")
     print(f"Artist: {payload.get('artist', 'Unknown')}")
