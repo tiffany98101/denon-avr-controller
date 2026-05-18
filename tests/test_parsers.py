@@ -448,6 +448,9 @@ class TestDataSummaryOutput:
         """)
         r = _bash(code)
         assert r.returncode == 0
+        assert "Network / Firmware Notes" in r.stdout
+        assert "network                      Wi-Fi" in r.stdout
+        assert "zone2                        Zone 2" in r.stdout
         assert "avr_mainboard_firmware" in r.stdout
         assert "unavailable on tested read-only surfaces" in r.stdout
         assert "heos_version" in r.stdout
@@ -500,11 +503,30 @@ class TestDataSummaryOutput:
         assert r.returncode == 0
         assert r.stdout.splitlines() == ["on=Yes", "off=No", "missing=Unknown"]
 
-    def test_data_readable_formats_muted_without_changing_json_boundary(self):
+    def test_display_helpers_format_network_zone_and_empty_messages(self):
+        code = textwrap.dedent("""\
+            printf 'network=%s\\n' "$(_denon_display_network_label wifi)"
+            printf 'wired=%s\\n' "$(_denon_display_network_label ethernet)"
+            printf 'zone=%s\\n' "$(_denon_display_zone_label ZONE2)"
+            printf 'empty=%s\\n' "$(_denon_display_empty_message no-state-changes)"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.splitlines() == [
+            "network=Wi-Fi",
+            "wired=Ethernet",
+            "zone=Zone 2",
+            "empty=No State Changes Yet",
+        ]
+
+    def test_data_readable_formats_display_values_without_changing_json_boundary(self):
         code = textwrap.dedent("""\
             data_available_records=""
             data_available_records+=$'main_zone\\tMain Zone\\tmuted\\tno\\n'
+            data_available_records+=$'main_zone\\tMain Zone\\tzone_name\\tMainZone\\n'
             data_available_records+=$'zone2\\tZone 2\\tmuted\\tyes\\n'
+            data_available_records+=$'zone2\\tZone 2\\tzone_name\\tZONE2\\n'
+            data_available_records+=$'network_heos\\tNetwork / HEOS\\tnetwork\\twifi\\n'
             _denon_data_print_readable
             printf -- '---JSON---\\n'
             _denon_data_print_json
@@ -514,9 +536,15 @@ class TestDataSummaryOutput:
         readable, json_text = r.stdout.split("---JSON---\n", 1)
         assert "muted                  No" in readable
         assert "muted                  Yes" in readable
+        assert "zone_name              Main Zone" in readable
+        assert "zone_name              Zone 2" in readable
+        assert "network                Wi-Fi" in readable
         obj = json.loads(json_text)
         assert obj["main_zone"]["muted"] == "no"
+        assert obj["main_zone"]["zone_name"] == "MainZone"
         assert obj["zone2"]["muted"] == "yes"
+        assert obj["zone2"]["zone_name"] == "ZONE2"
+        assert obj["heos"]["network"] == "wifi"
 
     def test_mute_normalization_unknown_values_stay_unknown(self):
         code = textwrap.dedent("""\
@@ -690,6 +718,24 @@ class TestDashboardDiagnostics:
         assert "Receiver Info" in r.stdout
         assert "Receiver / Zone 2" not in r.stdout
 
+    def test_dashboard_body_display_values_are_normalized(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            _denon_dashboard_layout 120 40
+            _denon_dashboard_build_bodies
+            printf '%s\\n---ZONE---\\n%s\\n---RECEIVER---\\n%s\\n---NOW---\\n%s\\n---EVENTS---\\n%s\\n' \
+              "$dash_main_body" "$dash_zone2_body" "$dash_receiver_body" "$dash_now_body" "$dash_events_body"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "HEOS:     3.88.614 Wi-Fi" in r.stdout
+        assert "Zone:   Zone 2" in r.stdout
+        assert "Title:   No Metadata For Current Source" in r.stdout
+        assert "No State Changes Yet" in r.stdout
+        assert "wifi" not in r.stdout
+        assert "ZONE2" not in r.stdout
+        assert "No state changes yet" not in r.stdout
+
     def test_static_dashboard_unicode_render_starts_with_top_border(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\
             dashboard_diagnostics=0
@@ -803,7 +849,7 @@ class TestDashboardDiagnostics:
         assert row_lines[-1].count("\u2514") == 2
         assert "Main Zone Sources" in row_lines[1]
         assert "Recent Events" in row_lines[1]
-        assert "No state changes yet" in "\n".join(row_lines)
+        assert "No State Changes Yet" in "\n".join(row_lines)
 
     def test_dashboard_bottom_row_many_sources_do_not_change_shared_height(self):
         code = textwrap.dedent("""\
@@ -816,7 +862,7 @@ class TestDashboardDiagnostics:
               dash_main_sources="${dash_main_sources}  ${i} Source ${i}"$'\\n'
             done
             dash_main_sources="${dash_main_sources%$'\\n'}"
-            dash_events_body="No state changes yet"
+            dash_events_body="No State Changes Yet"
             printf 'height:%s\\n' 7
             _denon_dashboard_render_two_panel_row \
               "Main Zone Sources" "$dash_main_sources" 70 \
@@ -1109,10 +1155,10 @@ class TestDashboardDiagnostics:
         assert r.returncode == 0
         assert "Diagnostics" in r.stdout
         assert "Brand:  raw=1 label=Unknown" in r.stdout
-        assert "Main volume: scale 1 / limit 99" in r.stdout
-        assert "Zone 2 volume: scale 1 / limit 70" in r.stdout
+        assert "Main Volume: scale 1 / limit 99" in r.stdout
+        assert "Zone 2 Volume: scale 1 / limit 70" in r.stdout
         assert "Locks: setup 2 / menu 2" in r.stdout
-        assert "HEOS sign-in: raw=3 label=Unknown" in r.stdout
+        assert "HEOS Sign-In: raw=3 label=Unknown" in r.stdout
 
     def test_dashboard_diagnostics_narrow_width_does_not_crash(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + self.DASHBOARD_DIAG + """\

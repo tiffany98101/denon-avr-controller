@@ -1305,6 +1305,64 @@ EOF
     esac
   }
 
+  _denon_display_network_label() {
+    local value
+
+    value=$(_denon_display_unknown "$1")
+    case "$(_denon_lower "$value")" in
+      wi-fi|wifi|wireless|wlan) echo "Wi-Fi" ;;
+      wired|ethernet|lan) echo "Ethernet" ;;
+      *) printf '%s\n' "$value" ;;
+    esac
+  }
+
+  _denon_display_zone_label() {
+    local value
+
+    value=$(_denon_display_unknown "$1")
+    case "$(_denon_lower "$value")" in
+      mainzone|"main zone") echo "Main Zone" ;;
+      zone2|"zone 2"|z2) echo "Zone 2" ;;
+      zone3|"zone 3"|z3) echo "Zone 3" ;;
+      *) printf '%s\n' "$value" ;;
+    esac
+  }
+
+  _denon_display_empty_message() {
+    local key="$(_denon_lower "${1:-}")"
+
+    case "$key" in
+      no-recent-events|recent-events|events) echo "No Recent Events" ;;
+      no-state-changes|state-changes) echo "No State Changes Yet" ;;
+      no-sources|sources) echo "No Sources Found" ;;
+      no-metadata|metadata|now-playing) echo "No Metadata For Current Source" ;;
+      unavailable|now-playing-unavailable) echo "Now Playing Unavailable" ;;
+      *) echo "Unknown" ;;
+    esac
+  }
+
+  _denon_display_data_value() {
+    local field_key="$1"
+    local value="$2"
+
+    case "$field_key" in
+      muted) _denon_mute_display_name "$value" ;;
+      network) _denon_display_network_label "$value" ;;
+      zone_name|main_zone|zone2) _denon_display_zone_label "$value" ;;
+      *) _denon_display_unknown "$value" ;;
+    esac
+  }
+
+  _denon_display_section_label() {
+    case "$1" in
+      "Audio / surround") echo "Audio / Surround" ;;
+      "Sleep timer") echo "Sleep Timer" ;;
+      "Web UI information") echo "Web UI Information" ;;
+      "Discovered read-only endpoints") echo "Discovered Read-Only Endpoints" ;;
+      *) printf '%s\n' "$1" ;;
+    esac
+  }
+
   _denon_normalize_mute() {
     local value
 
@@ -2111,14 +2169,10 @@ EOF
       [[ -n "$group_label" ]] || continue
       if [[ "$group_label" != "$current" ]]; then
         [[ -z "$current" ]] || printf '\n'
-        printf '%s\n' "$group_label"
+        printf '%s\n' "$(_denon_display_section_label "$group_label")"
         current="$group_label"
       fi
-      if [[ "$field_key" == "muted" ]]; then
-        value=$(_denon_mute_display_name "$value")
-      else
-        value=$(_denon_display_unknown "$value")
-      fi
+      value=$(_denon_display_data_value "$field_key" "$value")
       printf '  %-22s %s\n' "$field_key" "$value"
     done <<<"$data_available_records"
   }
@@ -2217,24 +2271,24 @@ EOF
     pending_upgrade_version=$(_denon_data_record_value "upnp" "pending_upgrade_version" 2>/dev/null || printf '')
     aios_firmware=$(_denon_data_record_value "upnp" "aios_firmware" 2>/dev/null || printf '')
 
-    printf 'Receiver diagnostics\n'
+    printf 'Receiver Diagnostics\n'
     printf '  %-28s %s\n' "name" "$(_denon_display_unknown "$receiver")"
     printf '  %-28s %s\n' "ip" "$(_denon_display_unknown "$ip")"
     _denon_data_print_raw_labeled_line "brand_code" "$brand_code"
     _denon_data_print_raw_labeled_line "model_type" "$model_type"
     printf '\n'
 
-    printf 'Volume diagnostics\n'
-    printf '  %-28s %s\n' "main_zone" "$(_denon_display_unknown "$main_zone")"
+    printf 'Volume Diagnostics\n'
+    printf '  %-28s %s\n' "main_zone" "$(_denon_display_zone_label "$main_zone")"
     _denon_data_print_raw_labeled_line "main_volume_scale" "$main_volume_scale"
     printf '  %-28s %s\n' "main_volume_limit_raw" "$(_denon_display_unknown "$main_volume_limit")"
     printf '  %-28s %s dB\n' "main_volume_max" "$(_denon_display_unknown "$main_volume_max")"
-    printf '  %-28s %s\n' "zone2" "$(_denon_display_unknown "$zone2_name")"
+    printf '  %-28s %s\n' "zone2" "$(_denon_display_zone_label "$zone2_name")"
     _denon_data_print_raw_labeled_line "zone2_volume_scale" "$zone2_volume_scale"
     printf '  %-28s %s\n' "zone2_volume_limit_raw" "$(_denon_display_unknown "$zone2_volume_limit")"
     printf '\n'
 
-    printf 'System diagnostics\n'
+    printf 'System Diagnostics\n'
     _denon_data_print_raw_labeled_line "setup_lock" "$setup_lock"
     _denon_data_print_raw_labeled_line "menu_lock" "$menu_lock"
     _denon_data_print_raw_labeled_line "advanced_mode" "$advanced_mode"
@@ -2247,10 +2301,10 @@ EOF
     _denon_data_print_raw_labeled_line "heos_sign_in" "$heos_sign_in"
     printf '\n'
 
-    printf 'Network / firmware notes\n'
+    printf 'Network / Firmware Notes\n'
     printf '  %-28s %s\n' "heos_model" "$(_denon_display_unknown "$heos_model")"
     printf '  %-28s %s (separate HEOS firmware, not AVR mainboard firmware)\n' "heos_version" "$(_denon_display_unknown "$heos_version")"
-    printf '  %-28s %s\n' "network" "$(_denon_display_unknown "$network")"
+    printf '  %-28s %s\n' "network" "$(_denon_display_network_label "$network")"
     printf '  %-28s %s (pending update metadata, not installed firmware)\n' "pending_upgrade_version" "$(_denon_display_unknown "$pending_upgrade_version")"
     printf '  %-28s %s (separate AIOS/HEOS firmware, not AVR mainboard firmware)\n' "aios_firmware" "$(_denon_display_unknown "$aios_firmware")"
     printf '  %-28s %s\n' "avr_mainboard_firmware" "unavailable on tested read-only surfaces"
@@ -3796,7 +3850,7 @@ EOF
     done <<<"$text"
 
     if [[ "$dash_transport_state" == "Stopped" && "$dash_now_available" != "1" ]]; then
-      dash_now_message="HEOS stopped"
+      dash_now_message="HEOS Stopped"
     fi
   }
 
@@ -3815,9 +3869,9 @@ EOF
 
     if [[ "$status" != "0" ]]; then
       if printf '%s' "$text" | grep -qiE 'unavailable|not available|no metadata|Track info unavailable'; then
-        dash_now_message="No metadata for current source"
+        dash_now_message=$(_denon_display_empty_message no-metadata)
       else
-        dash_now_message=$(_denon_trim "${text:-now-playing unavailable}")
+        dash_now_message=$(_denon_trim "${text:-$(_denon_display_empty_message now-playing-unavailable)}")
       fi
       return 0
     fi
@@ -3839,7 +3893,7 @@ EOF
       dash_now_message="${dash_now_title:-Unknown title}"
       [[ -z "$dash_now_artist" || "$dash_now_artist" == "Unknown" ]] || dash_now_message="$dash_now_message - $dash_now_artist"
     else
-      dash_now_message="No metadata for current source"
+      dash_now_message=$(_denon_display_empty_message no-metadata)
     fi
   }
 
@@ -3932,7 +3986,7 @@ EOF
     dash_zone2_volume_db=""
     dash_zone2_volume_raw=""
     dash_zone2_muted="Unknown"
-    dash_now_message="No metadata for current source"
+    dash_now_message=$(_denon_display_empty_message no-metadata)
     dash_now_title=""
     dash_now_artist=""
     dash_now_album=""
@@ -3942,7 +3996,7 @@ EOF
     dash_now_type=""
     dash_now_available=0
     dash_errors=""
-    dash_main_sources="Sources unavailable"
+    dash_main_sources=$(_denon_display_empty_message no-sources)
     dash_diag_body=""
 
     info_json=$(_denon_info --json 2>/dev/null)
@@ -3992,6 +4046,7 @@ EOF
     if [[ -n "$sources_text" ]]; then
       _denon_dashboard_parse_sources "1" "$sources_text"
       dash_main_sources=$(_denon_dashboard_sources_body "$sources_text")
+      [[ -n "$(_denon_trim "$dash_main_sources")" ]] || dash_main_sources=$(_denon_display_empty_message no-sources)
     else
       dash_errors="${dash_errors}main sources unavailable; "
     fi
@@ -4316,7 +4371,7 @@ EOF
     fi
 
     case "$lower" in
-      on|playing|play|ok|success|wired|wifi) echo "green"; return ;;
+      on|playing|play|ok|success|wired|wifi|wi-fi|ethernet) echo "green"; return ;;
       paused|pause|muted|yes|unknown|*"unavailable"*|*"no metadata"*|*"stopped"*) echo "yellow"; return ;;
       off|standby|no|"") echo ""; return ;;
       error|*"error"*|fail|failed|unreachable|*"unreachable"*) echo "red"; return ;;
@@ -4673,22 +4728,29 @@ EOF
   _denon_dashboard_build_bodies() {
     dash_source_label="$dash_main_source"
     dash_zone2_source_label="$dash_zone2_source"
-    local dash_main_muted_label dash_zone2_muted_label dash_transport_state_label
+    local dash_main_muted_label dash_zone2_muted_label dash_transport_state_label dash_now_title_label
+    local dash_main_zone_label dash_zone2_zone_label dash_heos_network_label dash_heos_label
 
     if [[ -n "$dash_main_max_volume_db" ]]; then
       dash_main_volume_label="${dash_main_volume:-Unknown} dB / max ${dash_main_max_volume_db} dB"
     else
       dash_main_volume_label="${dash_main_volume:-Unknown} dB"
     fi
+    dash_main_zone_label=$(_denon_display_zone_label "${dash_main_zone_name:-Main Zone}")
     dash_main_muted_label=$(_denon_mute_display_name "$dash_main_muted")
     dash_main_body=$(printf 'Zone:   %s\nPower:  %s\nSource: %s\nMode:   %s\nVolume: %s\nMuted:  %s' \
-      "${dash_main_zone_name:-Main Zone}" "${dash_main_power:-Unknown}" "${dash_source_label:-Unknown}" \
+      "$dash_main_zone_label" "${dash_main_power:-Unknown}" "${dash_source_label:-Unknown}" \
       "${dash_sound_mode:-Unknown}" "$dash_main_volume_label" "$dash_main_muted_label")
 
     dash_transport_state_label=$(_denon_dashboard_transport_name "${dash_transport_state:-Unknown}")
     [[ -n "$dash_transport_state_label" ]] || dash_transport_state_label="Unknown"
+    case "$(_denon_lower "${dash_now_message:-}")" in
+      "no metadata for current source") dash_now_title_label=$(_denon_display_empty_message no-metadata) ;;
+      "now-playing unavailable") dash_now_title_label=$(_denon_display_empty_message now-playing-unavailable) ;;
+      *) dash_now_title_label="${dash_now_title:-${dash_now_message:-Unknown}}" ;;
+    esac
     dash_now_body=$(printf 'Title:   %s\nArtist:  %s\nAlbum:   %s\nService: %s\nStation: %s\nState:   %s' \
-      "${dash_now_title:-${dash_now_message:-Unknown}}" "${dash_now_artist:-Unknown}" "${dash_now_album:-Unknown}" \
+      "$dash_now_title_label" "${dash_now_artist:-Unknown}" "${dash_now_album:-Unknown}" \
       "${dash_now_service:-Unknown}" "${dash_now_station:-Unknown}" "$dash_transport_state_label")
 
     if [[ -n "$dash_zone2_volume_db" && -n "$dash_zone2_volume_raw" ]]; then
@@ -4696,18 +4758,24 @@ EOF
     else
       dash_zone2_volume_label="${dash_zone2_volume:-Unknown}"
     fi
+    dash_zone2_zone_label=$(_denon_display_zone_label "${dash_zone2_name:-Zone 2}")
     dash_zone2_muted_label=$(_denon_mute_display_name "$dash_zone2_muted")
     dash_zone2_body=$(printf 'Zone:   %s\nPower:  %s\nSource: %s\nVolume: %s\nMuted:  %s' \
-      "${dash_zone2_name:-Zone 2}" "${dash_zone2_power:-Unknown}" "${dash_zone2_source_label:-Unknown}" \
+      "$dash_zone2_zone_label" "${dash_zone2_power:-Unknown}" "${dash_zone2_source_label:-Unknown}" \
       "$dash_zone2_volume_label" "$dash_zone2_muted_label")
 
+    dash_heos_network_label=$(_denon_display_network_label "$dash_heos_network")
+    dash_heos_label="${dash_heos_version:-Unknown}"
+    if [[ "$dash_heos_network_label" != "Unknown" ]]; then
+      dash_heos_label="$dash_heos_label $dash_heos_network_label"
+    fi
     dash_receiver_body=$(printf 'Receiver: %s\nIP:       %s\nHEOS:     %s' \
-      "${dash_receiver:-Unknown}" "${dash_ip:-Unknown}" "${dash_heos_version:-Unknown}${dash_heos_network:+ $dash_heos_network}")
+      "${dash_receiver:-Unknown}" "${dash_ip:-Unknown}" "$dash_heos_label")
     if [[ -n "${dash_diag_model_type:-}" ]]; then
-      dash_receiver_body="$dash_receiver_body"$'\n'"Model type: ${dash_diag_model_type}"
+      dash_receiver_body="$dash_receiver_body"$'\n'"Model Type: ${dash_diag_model_type}"
     fi
     if [[ -n "${dash_diag_brand_code:-}" ]]; then
-      dash_receiver_body="$dash_receiver_body"$'\n'"Brand code: ${dash_diag_brand_code}"
+      dash_receiver_body="$dash_receiver_body"$'\n'"Brand Code: ${dash_diag_brand_code}"
     fi
     if [[ -n "${dash_diag_avr_firmware:-}" ]]; then
       dash_receiver_body="$dash_receiver_body"$'\n'"AVR FW:   ${dash_diag_avr_firmware}"
@@ -4717,7 +4785,7 @@ EOF
     fi
 
     if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
-      dash_diag_body=$(printf 'Brand:  raw=%s label=%s\nModel:  raw=%s label=%s\nMain volume: scale %s / limit %s\nZone 2 volume: scale %s / limit %s\nLocks: setup %s / menu %s\nPreset: raw=%s label=%s\nModes: advanced %s / CI %s\nHEOS sign-in: raw=%s label=%s\nUI: gui %s / web %s\nAVR FW: %s\nHEOS FW: %s separate' \
+      dash_diag_body=$(printf 'Brand:  raw=%s label=%s\nModel:  raw=%s label=%s\nMain Volume: scale %s / limit %s\nZone 2 Volume: scale %s / limit %s\nLocks: setup %s / menu %s\nPreset: raw=%s label=%s\nModes: advanced %s / CI %s\nHEOS Sign-In: raw=%s label=%s\nUI: gui %s / web %s\nAVR FW: %s\nHEOS FW: %s separate' \
         "$(_denon_display_unknown "$dash_diag_brand_code")" "$(_denon_display_unknown "$(_denon_data_raw_label "${dash_diag_brand_code:-}")")" \
         "$(_denon_display_unknown "$dash_diag_model_type")" "$(_denon_display_unknown "$(_denon_data_raw_label "${dash_diag_model_type:-}")")" \
         "$(_denon_display_unknown "$dash_diag_main_volume_scale")" "$(_denon_display_unknown "$dash_diag_main_volume_limit")" \
@@ -4735,7 +4803,7 @@ EOF
     if [[ -n "$dashboard_events" ]]; then
       dash_events_body=$(printf '%s\n' "$dashboard_events" | head -n "$events_max")
     else
-      dash_events_body="No state changes yet"
+      dash_events_body=$(_denon_display_empty_message no-state-changes)
     fi
   }
 
