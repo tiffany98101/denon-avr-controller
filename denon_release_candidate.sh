@@ -4116,7 +4116,9 @@ EOF
       raw_mute=$(_denon_extract_main_mute "$vol_xml")
       telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
       [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && raw_mute="$telnet_mute"
-      dash_main_muted=$(_denon_normalize_mute "$raw_mute")
+      local mute_from_vol
+      mute_from_vol=$(_denon_normalize_mute "$raw_mute")
+      [[ "$mute_from_vol" != "Unknown" ]] && dash_main_muted="$mute_from_vol"
     fi
 
     if [[ "$dash_receiver" == "Unknown" ]]; then
