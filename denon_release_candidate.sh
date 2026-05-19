@@ -4334,20 +4334,43 @@ EOF
     prev_now_service="$dash_now_service"
   }
 
+  _denon_dashboard_display_width() {
+    # Display width = bytes minus UTF-8 continuation bytes (0x80..0xBF).
+    # Treats every codepoint as 1 column. CJK / emoji (2 cols) are not
+    # handled; add wcwidth if that ever matters.
+    LC_ALL=C awk -v s="$1" 'BEGIN {
+      n = length(s); cont = 0
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c >= "\200" && c <= "\277") cont++
+      }
+      print n - cont
+    }'
+  }
+
   _denon_dashboard_fit() {
     local text="$1"
     local width="$2"
     local max=$((width - 3))
+    local dw pad
 
     (( width > 0 )) || return 0
     text=${text//$'\n'/ }
     text=${text//$'\r'/ }
-    if (( ${#text} > width && width > 3 )); then
+
+    dw=$(_denon_dashboard_display_width "$text")
+
+    if (( dw > width && width > 3 )); then
       text="${text:0:max}..."
-    elif (( ${#text} > width )); then
+      dw=$width
+    elif (( dw > width )); then
       text="${text:0:width}"
+      dw=$width
     fi
-    printf "%-${width}s" "$text"
+
+    printf '%s' "$text"
+    pad=$((width - dw))
+    (( pad > 0 )) && printf '%*s' "$pad" ''
   }
 
   _denon_dashboard_strip_ansi() {
@@ -4370,21 +4393,23 @@ EOF
     text=$(_denon_dashboard_strip_ansi "$text")
     text=${text//$'\n'/ }
     text=${text//$'\r'/ }
-    printf '%s' "${#text}"
+    _denon_dashboard_display_width "$text"
   }
 
   _denon_dashboard_truncate_visible() {
     local text="$1"
     local width="$2"
     local max=$((width - 3))
+    local dw
 
     (( width > 0 )) || return 0
     text=$(_denon_dashboard_strip_ansi "$text")
     text=${text//$'\n'/ }
     text=${text//$'\r'/ }
-    if (( ${#text} > width && width > 3 )); then
+    dw=$(_denon_dashboard_display_width "$text")
+    if (( dw > width && width > 3 )); then
       text="${text:0:max}..."
-    elif (( ${#text} > width )); then
+    elif (( dw > width )); then
       text="${text:0:width}"
     fi
     printf '%s' "$text"
