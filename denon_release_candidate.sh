@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # denon_release_candidate.sh — Denon AVR controller
-# Version: 1.2.0-beta.1
+# Version: 1.2.0-beta.3
 DENON_CONTROLLER_NAME="${DENON_CONTROLLER_NAME:-denon-avr-controller}"
-DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.1}"
+DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.3}"
 # Source this from ~/.zshrc or ~/.bashrc:
 #   source ~/denon_release_candidate.sh
 #
