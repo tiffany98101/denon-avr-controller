@@ -13,7 +13,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-SCRIPT = Path(__file__).parent.parent / "denon_release_candidate.sh"
+SCRIPT = Path(__file__).parent.parent / "denon.sh"
 SCRIPT_STR = str(SCRIPT)
 
 # U+2014 EM DASH, U+201C/201D smart quotes — Python Unicode literals so

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-SCRIPT="./denon_release_candidate.sh"
+SCRIPT="./denon.sh"
 DESTRUCTIVE=0
 KEEP_ARTIFACTS=0
 SNAPSHOT_DIR=""

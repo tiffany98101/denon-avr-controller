@@ -1,0 +1,172 @@
+#compdef denon
+# zsh completion for denon-avr-controller
+# Install: place in a directory on $fpath, e.g. /usr/share/zsh/site-functions/_denon
+
+_denon() {
+    local state
+    local -a top_cmds
+
+    top_cmds=(
+        'status:Show receiver power, input, volume, and Zone 2'
+        'info:Show detailed receiver identity and source list'
+        'data:Query raw data fields from the receiver'
+        'rawstatus:Print raw XML status responses'
+        'raw:Send a raw HTTP GET or SET to the receiver'
+        'signal-debug:Show signal path and processing details'
+        'snapshot:Save current receiver state to a file'
+        'diff:Compare two snapshot files'
+        'dashboard:Live updating status dashboard'
+        'on:Power on'
+        'off:Power off (standby)'
+        'vol:Set volume in dB (e.g. vol -35)'
+        'up:Volume up by N steps'
+        'down:Volume down by N steps'
+        'mute:Mute audio'
+        'unmute:Unmute audio'
+        'toggle:Toggle mute'
+        'source:Select input source by name'
+        'sources:List all input sources'
+        'rename-source:Rename an input source'
+        'source-names:Print source name mapping'
+        'clear-source-name:Remove a renamed source label'
+        'xbox:Switch input to Xbox'
+        'xfinity:Switch input to Xfinity cable box'
+        'bluray:Switch input to Blu-ray player'
+        'tv:Switch input to TV/ARC'
+        'phono:Switch input to phono'
+        'heos:HEOS streaming control subcommands'
+        'zone2:Zone 2 control subcommands'
+        'movie:Set listening mode to Movie'
+        'game:Set listening mode to Game'
+        'music:Set listening mode to Music'
+        'night:Toggle Night mode'
+        'mode:Set surround mode'
+        'dyn-eq:Enable or disable Dynamic EQ'
+        'dyn-vol:Set Dynamic Volume level'
+        'cinema-eq:Enable or disable Cinema EQ'
+        'multeq:Set MultEQ mode'
+        'bass:Set bass level'
+        'treble:Set treble level'
+        'play:Play (HEOS/transport)'
+        'pause:Pause (HEOS/transport)'
+        'stop:Stop (HEOS/transport)'
+        'next:Next track'
+        'prev:Previous track'
+        'previous:Previous track (alias)'
+        'track:Show current track'
+        'now:Show now playing'
+        'sleep:Set sleep timer in minutes'
+        'qs:Quick select preset'
+        'preset:Named preset recall'
+        'watch-event:Watch for AVR events'
+        'discover:Force re-discovery of receiver IP'
+        'setip:Manually set receiver IP address'
+        'doctor:Check dependencies and connectivity'
+        'config:Get or set configuration values'
+        'profile:Save and restore receiver state profiles'
+        'version:Print version string'
+        'help:Show usage summary'
+    )
+
+    _arguments -C \
+        '(-h --help)'{-h,--help}'[Show help]' \
+        '(-V --version)'{-V,--version}'[Show version]' \
+        '--quiet[Suppress non-error output]' \
+        '--json[Output as JSON (where supported)]' \
+        '1: :->command' \
+        '*: :->args'
+
+    case $state in
+        command)
+            _describe 'command' top_cmds
+            ;;
+        args)
+            case $words[2] in
+                vol)
+                    _message 'volume in dB (e.g. -35)'
+                    ;;
+                up|down)
+                    compadd -- 1 2 3 5
+                    ;;
+                source)
+                    compadd -- tv heos bluray game phono xbox xfinity
+                    ;;
+                mode)
+                    compadd -- stereo direct pure pure-direct movie music game auto
+                    ;;
+                dyn-eq|cinema-eq)
+                    compadd -- on off
+                    ;;
+                dyn-vol)
+                    compadd -- off light medium heavy
+                    ;;
+                multeq)
+                    compadd -- reference audyssey bypass-lr flat manual off
+                    ;;
+                sleep)
+                    compadd -- off 30 60 90 120
+                    ;;
+                zone2)
+                    local -a zone2_cmds
+                    zone2_cmds=(
+                        'status:Zone 2 status'
+                        'on:Zone 2 power on'
+                        'off:Zone 2 power off'
+                        'vol:Zone 2 volume'
+                        'mute:Zone 2 mute'
+                        'unmute:Zone 2 unmute'
+                        'source:Zone 2 input select'
+                        'sources:Zone 2 source list'
+                        'sleep:Zone 2 sleep timer'
+                    )
+                    _describe 'zone2 command' zone2_cmds
+                    ;;
+                heos)
+                    local -a heos_cmds
+                    heos_cmds=(
+                        'now:Now playing'
+                        'play:Play'
+                        'pause:Pause'
+                        'stop:Stop'
+                        'next:Next track'
+                        'prev:Previous track'
+                        'queue:Show queue'
+                        'players:List HEOS players'
+                        'groups:List HEOS groups'
+                        'browse:Browse sources'
+                        'search:Search HEOS library'
+                    )
+                    _describe 'heos command' heos_cmds
+                    ;;
+                data)
+                    local -a data_cmds
+                    data_cmds=(
+                        'fields:List data fields'
+                        'summary:Print summary of all fields'
+                        'dump:Dump all field values'
+                        'capabilities:Show receiver capabilities'
+                        'discover:Probe all data sources'
+                    )
+                    _describe 'data command' data_cmds
+                    ;;
+                status|info)
+                    compadd -- --json
+                    ;;
+                raw)
+                    compadd -- get set
+                    ;;
+                config)
+                    compadd -- set unset path
+                    ;;
+                profile)
+                    compadd -- list show path set unset active
+                    ;;
+                dashboard)
+                    compadd -- --color --unicode --interval --watch --diagnostics
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_denon "$@"

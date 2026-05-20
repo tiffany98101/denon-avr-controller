@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small HEOS CLI helper used by denon_release_candidate.sh."""
+"""Small HEOS CLI helper used by denon.sh."""
 
 from __future__ import annotations
 

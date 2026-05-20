@@ -46,7 +46,7 @@ Clone the repository and make the scripts executable:
 ```bash
 git clone https://github.com/tiffany98101/denon-avr-controller.git
 cd denon-avr-controller
-chmod +x denon_release_candidate.sh denon_automated_test.sh denon_heos_helper.py
+chmod +x denon.sh denon_automated_test.sh denon_heos_helper.py
 ```
 
 For local development in this workspace, the active repository path is:
@@ -58,8 +58,8 @@ For local development in this workspace, the active repository path is:
 Run the script directly:
 
 ```bash
-./denon_release_candidate.sh doctor
-./denon_release_candidate.sh status
+./denon.sh doctor
+./denon.sh status
 ```
 
 Optional per-user wrapper install:
@@ -69,14 +69,14 @@ mkdir -p "$HOME/.local/lib/denon" "$HOME/.local/bin"
 cp -a . "$HOME/.local/lib/denon/"
 cat >"$HOME/.local/bin/denon" <<'EOF'
 #!/usr/bin/env bash
-source "$HOME/.local/lib/denon/denon_release_candidate.sh"
+source "$HOME/.local/lib/denon/denon.sh"
 denon "$@"
 EOF
 chmod +x "$HOME/.local/bin/denon"
 ```
 
 Make sure `$HOME/.local/bin` is on `PATH`, then use `denon status` instead of
-`./denon_release_candidate.sh status`.
+`./denon.sh status`.
 
 Optional system-wide wrapper install:
 
@@ -85,7 +85,7 @@ sudo mkdir -p /usr/local/lib/denon
 sudo cp -a . /usr/local/lib/denon/
 sudo tee /usr/local/bin/denon >/dev/null <<'EOF'
 #!/usr/bin/env bash
-source /usr/local/lib/denon/denon_release_candidate.sh
+source /usr/local/lib/denon/denon.sh
 denon "$@"
 EOF
 sudo chmod +x /usr/local/bin/denon
@@ -167,15 +167,15 @@ Recommended setup:
 
 ```bash
 export DENON_IP=192.168.1.162
-./denon_release_candidate.sh doctor
-./denon_release_candidate.sh status
+./denon.sh doctor
+./denon.sh status
 ```
 
 To store a local cached IP instead:
 
 ```bash
-./denon_release_candidate.sh setip 192.168.1.162
-./denon_release_candidate.sh status
+./denon.sh setip 192.168.1.162
+./denon.sh status
 ```
 
 `denon discover` clears the cached IP and attempts discovery again. Live `data`
@@ -203,81 +203,81 @@ The PowerShell module keeps receiver configuration in memory for the current Pow
 Read-only status and dashboard:
 
 ```bash
-./denon_release_candidate.sh status
-./denon_release_candidate.sh status --json
-./denon_release_candidate.sh info
-./denon_release_candidate.sh info --json
-./denon_release_candidate.sh dashboard --unicode
-./denon_release_candidate.sh dashboard --color always --unicode --interval 5
-./denon_release_candidate.sh dashboard --diagnostics --watch --interval 5 --color always --unicode
+./denon.sh status
+./denon.sh status --json
+./denon.sh info
+./denon.sh info --json
+./denon.sh dashboard --unicode
+./denon.sh dashboard --color always --unicode --interval 5
+./denon.sh dashboard --diagnostics --watch --interval 5 --color always --unicode
 ```
 
 Data inventory and diagnostics:
 
 ```bash
-./denon_release_candidate.sh data fields --all
-./denon_release_candidate.sh data fields --available
-./denon_release_candidate.sh data summary
-./denon_release_candidate.sh data summary --json
-./denon_release_candidate.sh data dump --readable
-./denon_release_candidate.sh data dump --json
-./denon_release_candidate.sh data dump --raw
-./denon_release_candidate.sh data capabilities --json
-./denon_release_candidate.sh data discover --json
+./denon.sh data fields --all
+./denon.sh data fields --available
+./denon.sh data summary
+./denon.sh data summary --json
+./denon.sh data dump --readable
+./denon.sh data dump --json
+./denon.sh data dump --raw
+./denon.sh data capabilities --json
+./denon.sh data discover --json
 ```
 
 Main Zone controls:
 
 ```bash
-./denon_release_candidate.sh on
-./denon_release_candidate.sh off
-./denon_release_candidate.sh vol
-./denon_release_candidate.sh vol -35
-./denon_release_candidate.sh up 1
-./denon_release_candidate.sh down 1
-./denon_release_candidate.sh mute
-./denon_release_candidate.sh unmute
-./denon_release_candidate.sh sources
-./denon_release_candidate.sh source heos
-./denon_release_candidate.sh source tv
+./denon.sh on
+./denon.sh off
+./denon.sh vol
+./denon.sh vol -35
+./denon.sh up 1
+./denon.sh down 1
+./denon.sh mute
+./denon.sh unmute
+./denon.sh sources
+./denon.sh source heos
+./denon.sh source tv
 ```
 
 Zone 2 controls:
 
 ```bash
-./denon_release_candidate.sh zone2 status
-./denon_release_candidate.sh zone2 sources
-./denon_release_candidate.sh zone2 on
-./denon_release_candidate.sh zone2 source 10
-./denon_release_candidate.sh zone2 mute
-./denon_release_candidate.sh zone2 unmute
-./denon_release_candidate.sh zone2 volume 650
-./denon_release_candidate.sh zone2 sleep 60
+./denon.sh zone2 status
+./denon.sh zone2 sources
+./denon.sh zone2 on
+./denon.sh zone2 source 10
+./denon.sh zone2 mute
+./denon.sh zone2 unmute
+./denon.sh zone2 volume 650
+./denon.sh zone2 sleep 60
 ```
 
 HEOS examples:
 
 ```bash
-./denon_release_candidate.sh heos now
-./denon_release_candidate.sh heos play
-./denon_release_candidate.sh heos pause
-./denon_release_candidate.sh heos queue
-./denon_release_candidate.sh heos groups
-./denon_release_candidate.sh heos browse sources
-./denon_release_candidate.sh heos search spotify "scorpions"
+./denon.sh heos now
+./denon.sh heos play
+./denon.sh heos pause
+./denon.sh heos queue
+./denon.sh heos groups
+./denon.sh heos browse sources
+./denon.sh heos search spotify "scorpions"
 ```
 
 Raw and snapshot workflows:
 
 ```bash
-./denon_release_candidate.sh rawstatus
-./denon_release_candidate.sh raw get 3
-./denon_release_candidate.sh raw get 7
-./denon_release_candidate.sh snapshot
-./denon_release_candidate.sh diff snapshots/a snapshots/b
+./denon.sh rawstatus
+./denon.sh raw get 3
+./denon.sh raw get 7
+./denon.sh snapshot
+./denon.sh diff snapshots/a snapshots/b
 ```
 
-Run `./denon_release_candidate.sh --help` for the full command list.
+Run `./denon.sh --help` for the full command list.
 
 ## PowerShell Module
 
@@ -358,7 +358,7 @@ See [powershell/DenonAvrController/README.md](powershell/DenonAvrController/READ
 Baseline shell checks:
 
 ```bash
-bash -n denon_release_candidate.sh
+bash -n denon.sh
 pytest -q
 ```
 
@@ -377,13 +377,13 @@ Get-ChildItem -Recurse -Include *.psm1 | ForEach-Object {
 The repository also includes `denon_automated_test.sh` for live receiver checks:
 
 ```bash
-./denon_automated_test.sh --script ./denon_release_candidate.sh
+./denon_automated_test.sh --script ./denon.sh
 ```
 
 Only run destructive/state-changing live checks when the receiver is available for testing:
 
 ```bash
-./denon_automated_test.sh --script ./denon_release_candidate.sh --destructive
+./denon_automated_test.sh --script ./denon.sh --destructive
 ```
 
 ## MPRIS2 Bridge (denon-mpris)

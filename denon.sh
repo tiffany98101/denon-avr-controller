@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# denon_release_candidate.sh — Denon AVR controller
+# denon.sh — Denon AVR controller
 # Version: 1.2.0-beta.3
 DENON_CONTROLLER_NAME="${DENON_CONTROLLER_NAME:-denon-avr-controller}"
 DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.3}"
 # Source this from ~/.zshrc or ~/.bashrc:
-#   source ~/denon_release_candidate.sh
+#   source ~/denon.sh
 #
 # Or run it directly:
-#   ./denon_release_candidate.sh status
+#   ./denon.sh status
 #
 # For testing without discovery:
 #   export DENON_IP=192.168.1.100
@@ -223,7 +223,7 @@ Denon AVR controller
 
 Usage:
   denon <command> [arguments]
-  denon_release_candidate.sh <command> [arguments]
+  denon.sh <command> [arguments]
 
 Receiver status:
   denon info                 Show receiver name, IP, main zone, Zone 2, and sources
@@ -1287,7 +1287,7 @@ EOF
 
   _denon_heos_helper() {
     local helper script_path script_dir
-    script_path=$(_denon_script_path) || script_path="$PWD/denon_release_candidate.sh"
+    script_path=$(_denon_script_path) || script_path="$PWD/denon.sh"
     script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
     helper="${DENON_HEOS_HELPER:-${script_dir:-$PWD}/denon_heos_helper.py}"
     if [[ ! -r "$helper" ]]; then

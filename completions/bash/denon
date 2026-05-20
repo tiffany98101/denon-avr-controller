@@ -1,0 +1,116 @@
+# bash completion for denon-avr-controller
+# Install: source this file, or place it in /usr/share/bash-completion/completions/denon
+
+_denon_complete() {
+    local cur prev words cword
+    _init_completion || return
+
+    local top_cmds=(
+        status info data rawstatus raw signal-debug snapshot diff dashboard
+        on off vol up down mute unmute toggle
+        source sources rename-source source-names clear-source-name
+        zone2
+        heos
+        movie game music night mode dyn-eq dyn-vol cinema-eq multeq
+        bass treble
+        play pause stop next prev previous track now
+        sleep qs preset watch-event
+        discover setip doctor config profile
+        version help
+    )
+
+    # Input shortcut aliases that map to source selection
+    local source_shortcuts=(xbox xfinity bluray tv phono heos)
+
+    case "$prev" in
+        denon)
+            COMPREPLY=( $(compgen -W "${top_cmds[*]} ${source_shortcuts[*]}" -- "$cur") )
+            return
+            ;;
+        vol)
+            # Suggest a representative dB range; user can type any integer
+            COMPREPLY=( $(compgen -W "-80 -60 -50 -40 -35 -30 -25 -20 -15 -10 -5 0" -- "$cur") )
+            return
+            ;;
+        up|down)
+            COMPREPLY=( $(compgen -W "1 2 3 5" -- "$cur") )
+            return
+            ;;
+        source)
+            COMPREPLY=( $(compgen -W "tv heos bluray game phono xbox xfinity" -- "$cur") )
+            return
+            ;;
+        mode)
+            COMPREPLY=( $(compgen -W "stereo direct pure pure-direct movie music game auto" -- "$cur") )
+            return
+            ;;
+        dyn-eq)
+            COMPREPLY=( $(compgen -W "on off" -- "$cur") )
+            return
+            ;;
+        dyn-vol)
+            COMPREPLY=( $(compgen -W "off light medium heavy" -- "$cur") )
+            return
+            ;;
+        cinema-eq)
+            COMPREPLY=( $(compgen -W "on off" -- "$cur") )
+            return
+            ;;
+        multeq)
+            COMPREPLY=( $(compgen -W "reference audyssey bypass-lr flat manual off" -- "$cur") )
+            return
+            ;;
+        zone2)
+            COMPREPLY=( $(compgen -W "status on off vol mute unmute source sources sleep" -- "$cur") )
+            return
+            ;;
+        sleep)
+            COMPREPLY=( $(compgen -W "off 30 60 90 120" -- "$cur") )
+            return
+            ;;
+        heos)
+            COMPREPLY=( $(compgen -W "now play pause stop next prev queue players groups browse search" -- "$cur") )
+            return
+            ;;
+        data)
+            COMPREPLY=( $(compgen -W "fields summary dump capabilities discover" -- "$cur") )
+            return
+            ;;
+        fields)
+            COMPREPLY=( $(compgen -W "--all --available" -- "$cur") )
+            return
+            ;;
+        dump)
+            COMPREPLY=( $(compgen -W "--readable --json --raw" -- "$cur") )
+            return
+            ;;
+        status)
+            COMPREPLY=( $(compgen -W "--json" -- "$cur") )
+            return
+            ;;
+        info)
+            COMPREPLY=( $(compgen -W "--json" -- "$cur") )
+            return
+            ;;
+        raw)
+            COMPREPLY=( $(compgen -W "get set" -- "$cur") )
+            return
+            ;;
+        config)
+            COMPREPLY=( $(compgen -W "set unset path" -- "$cur") )
+            return
+            ;;
+        profile)
+            COMPREPLY=( $(compgen -W "list show path set unset active" -- "$cur") )
+            return
+            ;;
+        dashboard)
+            COMPREPLY=( $(compgen -W "--color --unicode --interval --watch --diagnostics" -- "$cur") )
+            return
+            ;;
+    esac
+
+    COMPREPLY=()
+}
+
+complete -F _denon_complete denon

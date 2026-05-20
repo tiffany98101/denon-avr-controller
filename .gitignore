@@ -45,3 +45,6 @@ FINAL_REPORT.md
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Local RPM build tree (make srpm output)
+rpmbuild/

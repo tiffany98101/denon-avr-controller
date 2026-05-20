@@ -1,0 +1,165 @@
+.TH DENON 1 "May 2026" "denon-avr-controller 1.2.0" "User Commands"
+.SH NAME
+denon \- command\-line controller for Denon and Marantz AVR receivers
+.SH SYNOPSIS
+.B denon
+.I command
+.RI [ arguments ]
+.br
+.B denon
+.BR \-h | \-\-help
+.SH DESCRIPTION
+.B denon
+controls Denon/Marantz AV receivers over the local network using the
+receiver's built\-in HTTP/XML API.
+The receiver is discovered automatically via ARP and mDNS on first run;
+the found IP is cached in
+.IR ~/.cache/denon_ip .
+Set
+.B DENON_IP
+to skip discovery.
+.PP
+The companion service
+.B denon\-mpris
+publishes the receiver as an MPRIS2 media player on the D\-Bus session bus,
+enabling Plasma 6 media keys and KDE Connect relay.
+.SH COMMANDS
+.SS Status
+.TP
+.BR status " [\-\-json]"
+Power state, input, volume, mute, Zone 2 summary.
+.TP
+.BR info " [\-\-json]"
+Receiver model, IP, firmware, all inputs and zone names.
+.TP
+.BR dashboard " [\-\-watch] [\-\-interval \fIsec\fR] [\-\-color \fIauto|always|never\fR] [\-\-unicode]"
+Live full\-screen status view.
+.SS Power and volume
+.TP
+.BR on | off
+Power on / standby.
+.TP
+.BI vol " db"
+Set volume in dB (e.g.\&
+.BR vol\ \-35 ).
+Omit to print current level.
+.TP
+.BI up|down " n"
+Step volume up or down by
+.I n
+(default 1).
+.TP
+.BR mute | unmute | toggle
+Mute control.
+.SS Input and modes
+.TP
+.BI source " name"
+Select input by name.
+.TP
+.B sources
+List all inputs.
+.TP
+.BR xbox | xfinity | bluray | tv | phono | heos
+Shortcuts for common inputs.
+.TP
+.BR movie | game | music
+Listening mode presets.
+.TP
+.B night
+Toggle Night mode.
+.TP
+.BR "dyn\-eq on|off" ", " "dyn\-vol off|light|medium|heavy" ", " "multeq audyssey|bypass\-lr|flat|off" ", " "cinema\-eq on|off"
+Audyssey EQ controls.
+.TP
+.BI bass|treble " level"
+Tone control.
+.SS HEOS and transport
+.TP
+.BR play | pause | stop | next | prev
+Transport commands sent to the current HEOS source.
+.TP
+.B now
+Currently playing track metadata.
+.TP
+.B heos \fIsubcmd\fR
+Extended HEOS control:
+.BR queue ,
+.BR players ,
+.BR groups ,
+.BR browse ,
+.BR search .
+.SS Zone 2
+.TP
+.B zone2 \fIsubcmd\fR
+Secondary\-zone control.
+Subcommands mirror the main zone:
+.BR status ,
+.BR on ,
+.BR off ,
+.BR vol ,
+.BR mute ,
+.BR unmute ,
+.BR source ,
+.BR sources ,
+.BR sleep .
+.SS Utilities
+.TP
+.BI sleep " min"
+Set sleep timer (pass
+.B off
+to cancel).
+.TP
+.B discover
+Clear IP cache and re\-probe the network.
+.TP
+.BI setip " address"
+Pin the receiver's IP and write it to the cache.
+.TP
+.B doctor
+Check required tools and receiver connectivity.
+.TP
+.B snapshot / diff \fIa\fR \fIb\fR
+Save receiver state to JSON; compare two snapshots.
+.TP
+.B profile \fBlist|save|restore|delete\fR
+Manage named receiver\-state profiles.
+.TP
+.B data \fBfields|summary|dump|capabilities|discover\fR
+Low\-level field access.
+.SH ENVIRONMENT
+.TP
+.B DENON_IP
+Override auto\-discovery with a fixed IPv4 address.
+.TP
+.B DENON_MAX_VOLUME_DB
+Maximum volume
+.B vol
+will accept (default: 0 dB).
+.SH FILES
+.TP
+.I ~/.cache/denon_ip
+Cached receiver IP.
+Written by
+.B discover
+and
+.BR setip ;
+deleted on each new
+.B discover
+run.
+.SH EXAMPLES
+.EX
+denon status
+denon vol \-35
+denon tv
+denon status \-\-json | jq .mainZone.volumeDb
+DENON_IP=192.168.1.162 denon off
+systemctl \-\-user enable \-\-now denon\-mpris.service
+.EE
+.SH AUTHOR
+Tiffany Von Arnim <tiffany.vonarnim@gmail.com>
+.SH SEE ALSO
+.BR denon\-mpris (1),
+.BR systemctl (1),
+.BR avahi\-browse (1)
+.PP
+Project: https://github.com/tiffany98101/denon\-avr\-controller

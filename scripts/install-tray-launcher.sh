@@ -51,7 +51,7 @@ fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 repo_root="$(cd -- "${script_dir}/.." >/dev/null 2>&1 && pwd)"
-repo_cli="${repo_root}/denon_release_candidate.sh"
+repo_cli="${repo_root}/denon.sh"
 
 if command -v denon >/dev/null 2>&1; then
   denon_command="denon dashboard --color always --unicode --watch"
