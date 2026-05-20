@@ -26,6 +26,7 @@ import os
 import re
 import socket
 import ssl
+import subprocess
 import sys
 import threading
 import time
@@ -60,9 +61,10 @@ IFACE_PROPS  = "org.freedesktop.DBus.Properties"
 
 AVR_PORT          = 10443
 HEOS_PORT         = 1255
-MIN_DB            = -80.0
-HEOS_BACKOFF_BASE = 2.0
-HEOS_BACKOFF_MAX  = 60.0
+MIN_DB              = -80.0
+HEOS_BACKOFF_BASE   = 2.0
+HEOS_BACKOFF_MAX    = 60.0
+VOL_SUPPRESS_SECS   = 2.5   # ignore stale polled volume for this long after a Set
 
 _MAX_DB   = float(os.environ.get("DENON_MAX_VOLUME_DB") or "0")
 _POLL_INT = float(os.environ.get("DENON_MPRIS_POLL_INTERVAL") or "10")
@@ -92,6 +94,11 @@ class _State:
 
 _st = _State()
 
+# Suppression windows — set by Volume.setter; read by _apply on main thread only.
+# Prevents polled stale values from snapping back after an optimistic setter update.
+_vol_suppress:  tuple[int, float]  | None = None
+_mute_suppress: tuple[bool, float] | None = None
+
 # ── AVR HTTP client (stdlib, self-signed cert) ────────────────────────────────
 
 _SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -117,6 +124,66 @@ def _avr_set(ip: str, type_: int, data: str, timeout: float = 4.0) -> None:
     finally:
         conn.close()
 
+# ── AVR reachability check ────────────────────────────────────────────────────
+
+def _verify_avr(ip: str, timeout: float = 3.0) -> bool:
+    try:
+        return "Denon" in _avr_get(ip, 3, timeout=timeout)
+    except Exception:
+        return False
+
+
+def _avahi_discover() -> str | None:
+    _CACHE = os.path.expanduser("~/.cache/denon_ip")
+    for svc in ("_heos-audio._tcp", "_airplay._tcp"):
+        try:
+            proc = subprocess.run(
+                ["avahi-browse", "-rtp", svc],
+                capture_output=True, text=True, timeout=5.0,
+            )
+        except FileNotFoundError:
+            return None          # avahi-browse not installed
+        except subprocess.TimeoutExpired:
+            continue
+
+        candidates: list[str] = []
+        for line in proc.stdout.splitlines():
+            if not line.startswith("="):
+                continue
+            parts = line.split(";", 9)
+            if len(parts) < 9:
+                continue
+            proto, address = parts[2], parts[7]
+            if proto != "IPv4" or not address:
+                continue
+            if svc == "_airplay._tcp":
+                txt = parts[9] if len(parts) > 9 else ""
+                if "manufacturer=Denon" not in txt:
+                    continue
+            candidates.append(address)
+
+        if not candidates:
+            continue
+
+        if len(candidates) > 1:
+            log.warning(
+                "Multiple Denon receivers found via Avahi (%s): %s — using first; set DENON_IP to pin one",
+                svc, candidates,
+            )
+
+        for ip in candidates:
+            if _verify_avr(ip):
+                cache_dir = os.path.dirname(_CACHE)
+                if cache_dir:
+                    os.makedirs(cache_dir, exist_ok=True)
+                with open(_CACHE, "w") as f:
+                    f.write(ip)
+                log.info("AVR discovered via Avahi at %s", ip)
+                return ip
+
+    return None
+
+
 # ── XML parsers (mirror bash script's sed/awk) ────────────────────────────────
 
 def _tag(xml: str, name: str) -> str:
@@ -140,8 +207,8 @@ def _parse_power(xml: str) -> bool:
 def _parse_vol_mute(xml: str) -> tuple[int, bool]:
     raw  = _zone_tag(xml, "MainZone", "Volume")
     mute = _zone_tag(xml, "MainZone", "Mute").lower()
-    # GET response uses "on"/"off" text; numeric 1=off, 2=on also handled.
-    return (int(raw) if raw.isdigit() else 0), mute in ("2", "on", "true")
+    # GET response: 1 or "on" = muted; 2 or "off" = not muted.
+    return (int(raw) if raw.isdigit() else 0), mute in ("1", "on", "true")
 
 
 def _parse_source(xml: str) -> str:
@@ -224,9 +291,22 @@ def _find_ip() -> str:
     cache = os.path.expanduser("~/.cache/denon_ip")
     if os.path.isfile(cache):
         v = open(cache).read().strip()
-        if v:
+        if v and _verify_avr(v):
+            log.info("Using cached AVR IP: %s", v)
             return v
-    sys.exit("No AVR IP found. Set DENON_IP or run 'denon discover' first.")
+        if v:
+            log.info("Cached IP %s did not respond — trying Avahi", v)
+    ip = _avahi_discover()
+    if ip:
+        return ip
+    sys.exit(
+        "No AVR IP found. Set DENON_IP, run 'denon discover', or install avahi-tools."
+    )
+
+def _effective_volume(s: _State) -> float:
+    """MPRIS Volume as seen by clients: 0.0 when muted, real level otherwise."""
+    return 0.0 if s.mute else _db_to_mpris(_raw_to_db(s.vol_raw))
+
 
 # ── PropertiesChanged (called from GLib main thread only) ─────────────────────
 
@@ -248,10 +328,31 @@ def _emit_changed(iface: str, props: dict[str, Any]) -> None:
 
 def _apply(delta: dict[str, Any]) -> bool:
     """Merge delta into _st; emit PropertiesChanged for any derived changes."""
+    global _vol_suppress, _mute_suppress
     s = _st
 
+    # Suppression: ignore stale polled values while the AVR is still catching up
+    # after a user Set.  _vol_optimistic=True bypasses both windows (setter only).
+    is_vol_optimistic = delta.pop("_vol_optimistic", False)
+    if "vol_raw" in delta and _vol_suppress is not None and not is_vol_optimistic:
+        exp_raw, set_time = _vol_suppress
+        if time.monotonic() - set_time > VOL_SUPPRESS_SECS:
+            _vol_suppress = None
+        elif delta["vol_raw"] == exp_raw:
+            _vol_suppress = None
+        else:
+            del delta["vol_raw"]          # stale poll — drop to avoid snap-back
+    if "mute" in delta and _mute_suppress is not None and not is_vol_optimistic:
+        exp_mute, set_time = _mute_suppress
+        if time.monotonic() - set_time > VOL_SUPPRESS_SECS:
+            _mute_suppress = None
+        elif delta["mute"] == exp_mute:
+            _mute_suppress = None
+        else:
+            del delta["mute"]             # stale poll — drop to avoid snap-back
+
     old_ps   = _playback_status(s)
-    old_vol  = _db_to_mpris(_raw_to_db(s.vol_raw))
+    old_vol  = _effective_volume(s)
     old_loop = _loop_status(s)
     old_sh   = s.shuffle == "on"
     old_heos = _is_heos(s)
@@ -267,7 +368,7 @@ def _apply(delta: dict[str, Any]) -> bool:
     if new_ps != old_ps:
         player["PlaybackStatus"] = GLib.Variant("s", new_ps)
 
-    new_vol = _db_to_mpris(_raw_to_db(s.vol_raw))
+    new_vol = _effective_volume(s)
     if abs(new_vol - old_vol) > 1e-9:
         player["Volume"] = GLib.Variant("d", new_vol)
 
@@ -698,16 +799,40 @@ class DenonBridge:
 
     @property
     def Volume(self) -> float:
-        return _db_to_mpris(_raw_to_db(_st.vol_raw))
+        return _effective_volume(_st)
 
     @Volume.setter
     def Volume(self, value: float) -> None:
-        raw = _db_to_raw(_mpris_to_db(max(0.0, min(1.0, float(value)))))
-        GLib.idle_add(_apply, {"vol_raw": raw})  # optimistic update
-        ip  = self._ip
+        global _vol_suppress, _mute_suppress
+        value = max(0.0, min(1.0, float(value)))
+        ip = self._ip
+        was_muted = _st.mute
+
+        if value == 0.0:
+            if not was_muted:
+                _mute_suppress = (True, time.monotonic())
+                GLib.idle_add(_apply, {"mute": True, "_vol_optimistic": True})
+                def _mute() -> None:
+                    try:
+                        _avr_set(ip, 12, "<MainZone><Mute>1</Mute></MainZone>")
+                    except Exception as exc:
+                        log.warning("Mute set failed: %s", exc)
+                threading.Thread(target=_mute, daemon=True, name="avr-mute").start()
+            return
+
+        raw = _db_to_raw(_mpris_to_db(value))
+        _vol_suppress = (raw, time.monotonic())
+        if was_muted:
+            _mute_suppress = (False, time.monotonic())
+            GLib.idle_add(_apply, {"vol_raw": raw, "mute": False, "_vol_optimistic": True})
+        else:
+            GLib.idle_add(_apply, {"vol_raw": raw, "_vol_optimistic": True})
 
         def _go() -> None:
             try:
+                if was_muted:
+                    _avr_set(ip, 12, "<MainZone><Mute>2</Mute></MainZone>")
+                    time.sleep(0.4)   # AVR needs a moment after unmute before accepting volume
                 _avr_set(ip, 12, f"<MainZone><Volume>{raw}</Volume></MainZone>")
             except Exception as exc:
                 log.warning("Volume set failed: %s", exc)
