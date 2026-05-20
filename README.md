@@ -385,6 +385,88 @@ Only run destructive/state-changing live checks when the receiver is available f
 ./denon_automated_test.sh --script ./denon_release_candidate.sh --destructive
 ```
 
+## MPRIS2 Bridge (denon-mpris)
+
+`denon-mpris` is a headless D-Bus service that exposes the receiver as a
+standard MPRIS2 media player on the session bus.  Once running, Plasma 6
+picks it up automatically — no configuration required on the desktop side.
+
+**What you get:**
+
+- Volume slider in the Plasma media-controller widget controls receiver volume.
+- Play / Pause / Next / Prev on the lock screen and media keys are forwarded
+  to HEOS for network sources.
+- Now-playing metadata (track title, artist, album, album art) from HEOS.
+- Source name shown as the track title for HDMI and analog inputs.
+- KDE Connect relay to phones and tablets.
+- Automatic reconnect when the receiver comes out of standby — the bridge
+  never exits because the AVR is asleep.
+
+**Requirements:**
+
+```bash
+sudo dnf install python3-pydbus
+```
+
+**Install:**
+
+```bash
+make install-mpris
+```
+
+This copies `denon-mpris` to `~/.local/bin/` and installs and starts a
+systemd user unit that launches automatically with your graphical session.
+
+**Configuration:**
+
+The bridge reads the receiver IP using the same lookup order as the main
+script: `DENON_IP` env var → `DENON_DEFAULT_IP` → `~/.cache/denon_ip`
+(written by `denon discover` or `denon setip`).
+
+| Variable | Default | Description |
+|---|---|---|
+| `DENON_IP` | — | Receiver IP; overrides the cache |
+| `DENON_MAX_VOLUME_DB` | `0` | dB that maps to MPRIS Volume = 1.0 |
+| `DENON_MPRIS_POLL_INTERVAL` | `10` | AVR HTTP poll interval in seconds |
+| `DENON_HEOS_PID` | auto | Override HEOS player ID |
+| `DENON_DEBUG` | — | Set to `1` for verbose log output |
+
+To set variables for the service without editing the unit file:
+
+```bash
+systemctl --user edit denon-mpris.service
+```
+
+Then add:
+
+```ini
+[Service]
+Environment=DENON_IP=192.168.1.162
+```
+
+**Status and logs:**
+
+```bash
+systemctl --user status denon-mpris
+journalctl --user -u denon-mpris -f
+```
+
+**Uninstall:**
+
+```bash
+make uninstall-mpris
+```
+
+**Architecture notes:**
+
+- AVR HTTP polling runs on a worker thread; a stalled AVR response never
+  blocks D-Bus.
+- HEOS events (play state, now-playing, repeat, shuffle) are pushed over a
+  persistent TCP connection to port 1255 with exponential-backoff reconnect.
+- `PropertiesChanged` signals fire only on real state transitions, not every
+  poll tick.
+- Tested against Plasma 6 on Fedora 41+ (Wayland session).
+
 ## GitHub Readiness
 
 - Documentation and screenshots use relative paths.

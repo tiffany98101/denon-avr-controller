@@ -1,0 +1,25 @@
+[Unit]
+Description=Denon AVR MPRIS2 D-Bus bridge
+Documentation=https://github.com/tiffany98101/denon-avr-controller
+# Wait for the session D-Bus and the graphical session to be ready.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/denon-mpris
+Restart=on-failure
+RestartSec=5
+# Avoid restart storms when the receiver is in standby — the bridge handles
+# reconnect internally, so failures here are unexpected (e.g. D-Bus gone).
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Uncomment and set DENON_IP to skip auto-discovery from the cache.
+# Or run 'denon discover' once so the cache is written to ~/.cache/denon_ip.
+#Environment=DENON_IP=192.168.1.100
+#Environment=DENON_MAX_VOLUME_DB=0
+#Environment=DENON_MPRIS_POLL_INTERVAL=10
+
+[Install]
+WantedBy=graphical-session.target
