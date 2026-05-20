@@ -83,6 +83,36 @@ denon() {
       awk '!seen[$0]++'
   }
 
+  _denon_avahi_candidates() {
+    command -v avahi-browse >/dev/null 2>&1 || return 0
+
+    local svc type iface proto name service domain hostname address port txt
+    local -a batch
+
+    for svc in _heos-audio._tcp _airplay._tcp; do
+      _denon_debug "avahi: browsing $svc"
+      batch=()
+      while IFS=';' read -r type iface proto name service domain hostname address port txt; do
+        [[ "$type" == "=" ]]    || continue
+        [[ "$proto" == "IPv4" ]] || continue
+        [[ -n "$address" ]]     || continue
+        if [[ "$svc" == "_airplay._tcp" ]]; then
+          printf '%s' "$txt" | grep -qi 'manufacturer=Denon' || continue
+        fi
+        batch+=("$address")
+      done < <(avahi-browse -rtp "$svc" 2>/dev/null)
+
+      (( ${#batch[@]} == 0 )) && continue
+
+      if (( ${#batch[@]} > 1 )); then
+        printf 'Warning: Multiple Denon receivers found via Avahi (%s): %s — set DENON_IP to pin one\n' \
+          "$svc" "${batch[*]}" >&2
+      fi
+      printf '%s\n' "${batch[@]}"
+      return 0
+    done
+  }
+
   _denon_discover() {
     local cache="$HOME/.cache/denon_ip"
     local default_ip="${DENON_DEFAULT_IP:-}"
@@ -117,6 +147,15 @@ denon() {
         printf '%s' "$default_ip"
         return 0
       fi
+    fi
+
+    ip=$(_denon_avahi_candidates | _denon_find_first_receiver)
+    if [[ -n "$ip" ]]; then
+      _denon_debug "avahi discovery: $ip"
+      mkdir -p "$(dirname "$cache")"
+      printf '%s' "$ip" >"$cache"
+      printf '%s' "$ip"
+      return 0
     fi
 
     ip=$(_denon_ssdp_candidates | _denon_find_first_receiver)
