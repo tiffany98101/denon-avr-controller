@@ -33,7 +33,7 @@ The Bash CLI has the widest feature coverage. The PowerShell module covers commo
 ## Requirements
 
 - Local network access to a compatible Denon AVR.
-- Bash CLI: `bash`, `curl`, `awk`, `sed`, `grep`, `tr`, `mktemp`; `ip`, `arp`, `nc`, and `zsh` are useful for discovery, telnet queries, and shell-loading checks.
+- Bash CLI: `bash`, `curl`, `awk`, `sed`, `grep`, `tr`, `mktemp`; `ip`, `arp`, `nc`, and `zsh` are useful for discovery, telnet queries, and shell-loading checks; `avahi-tools` (`avahi-browse`) enables fast mDNS discovery on Fedora (`sudo dnf install avahi-tools`).
 - HEOS helper workflows: `python3`.
 - Tests: `pytest`.
 - PowerShell module: `pwsh` / PowerShell 7+ preferred; Windows PowerShell 5.1 should work for core module commands.
@@ -159,8 +159,9 @@ the tool. Most commands use the Bash CLI's normal receiver lookup order:
 1. `DENON_IP`: explicit receiver IP for the current command/session.
 2. Cached IP from `denon setip <ip>` or a previous successful discovery.
 3. `DENON_DEFAULT_IP`: fallback IP.
-4. SSDP and known local hosts.
-5. LAN scanning when `DENON_SCAN_LAN=1` is set.
+4. Avahi/mDNS (`avahi-browse`): probes `_heos-audio._tcp` then `_airplay._tcp`, sub-second on a local network.
+5. SSDP and known local hosts.
+6. LAN scanning when `DENON_SCAN_LAN=1` is set.
 
 Recommended setup:
 
@@ -419,9 +420,10 @@ systemd user unit that launches automatically with your graphical session.
 
 **Configuration:**
 
-The bridge reads the receiver IP using the same lookup order as the main
-script: `DENON_IP` env var → `DENON_DEFAULT_IP` → `~/.cache/denon_ip`
-(written by `denon discover` or `denon setip`).
+The bridge resolves the receiver IP using the same cascade as the main script:
+`DENON_IP` env var → `DENON_DEFAULT_IP` → verified cache hit → Avahi/mDNS
+(`avahi-browse`, from the `avahi-tools` package) → exit with an error.
+The cache (`~/.cache/denon_ip`) is shared with the bash script.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -483,6 +485,7 @@ make uninstall-mpris
 - Commands require local network access to the receiver.
 - Some control commands change receiver state immediately; start with read-only commands when validating a new receiver.
 - The PowerShell module does not yet cover every Bash CLI feature, especially full HEOS browse/search/queue workflows, full data discovery, capability inventory, snapshots, and diffing.
+- **MPRIS2 bridge — KDE System Settings → Sound:** the Sound settings page shows the bridge as a playback device with per-channel (L/R) volume sliders and a standalone mute toggle. Neither control works: MPRIS2 has no per-channel volume API, and its `Volume` property is a single scalar with no mute field. These controls are a KDE UI artefact of mapping MPRIS onto ALSA's device model; there is no workaround at the bridge level. **Use the Plasma Audio Volume widget's unified slider instead** — it correctly tracks receiver volume and treats dragging to zero as a mute request. For mute from the keyboard or CLI, use `denon mute` / `denon unmute` or bind a keyboard shortcut to those commands.
 
 ## Development Notes
 
