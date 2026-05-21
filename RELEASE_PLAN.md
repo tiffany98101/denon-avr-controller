@@ -31,8 +31,9 @@ These changes are local working-tree changes, not committed divergence. They mus
 | Path | State | Classification | Notes |
 |---|---:|---|---|
 | `ARCHITECTURE.md` | modified | NEEDS REVIEW | Contains per-profile cache and write-race decision record updates. Good release material, but this is not yet committed. |
-| `denon.sh` | modified | NEEDS REVIEW | Contains per-profile IP cache implementation. Needs normal release validation before public push. |
+| `denon.sh` | modified | NEEDS REVIEW | Contains per-profile IP cache, `--no-verify`, and `DENON_LOCK=1` implementation. Needs normal release validation before public push. |
 | `tests/test_profile_ip_cache.py` | untracked | NEEDS REVIEW | New pytest coverage for profile-scoped cache behavior. Must be added with the implementation if released. |
+| `tests/test_no_verify_and_locking.py` | untracked | NEEDS REVIEW | New pytest coverage for no-verify and lock behavior. Must be added with the implementation if released. |
 | `RELEASE_PLAN.md` | untracked | NEEDS REVIEW | Planning artifact from this task. Decide whether this belongs in the repo or should remain local. |
 
 ### Public-safety scan findings
@@ -95,7 +96,11 @@ The public mirror is already at local committed `HEAD`. The next useful sequence
    - Include `denon.sh`, `ARCHITECTURE.md`, and `tests/test_profile_ip_cache.py`.
    - This should land as one coherent behavior change because it changes cache path semantics for profiled users.
 
-3. Version/tag preparation PR
+3. Concurrent write mitigation PR
+   - Include `denon.sh`, `ARCHITECTURE.md`, and `tests/test_no_verify_and_locking.py`.
+   - Keep MPRIS daemon debounce out of scope, but leave the documented TODO.
+
+4. Version/tag preparation PR
    - Update `VERSION`.
    - Update `rpm/denon-avr-controller.spec` globals and `%changelog`.
    - Update release notes/CHANGELOG for the chosen version.
@@ -104,7 +109,7 @@ The public mirror is already at local committed `HEAD`. The next useful sequence
 Why smaller PRs:
 
 - The public mirror already has the big MPRIS/test/RPM/data-family sync, so an umbrella sync PR would mix already-public work with new unreleased behavior.
-- The dirty-tree changes have separable risk: cache path behavior and release hygiene.
+- The dirty-tree changes have separable risk: cache path behavior, write serialization, and release hygiene.
 - Smaller PRs make it easier to revert one behavior without backing out unrelated docs or packaging.
 
 If the maintainer wants a single release branch anyway, use one branch containing the four groups above, but preserve the logical commits.
@@ -131,6 +136,8 @@ Release blocker: `v1.2.0-beta.3` already exists and is behind `HEAD`. These note
 - Bash and zsh completions.
 - Fedora RPM/COPR packaging files.
 - Per-profile IP cache path: `~/.cache/denon_ip.<profile>` when `DENON_PROFILE` is active.
+- Global `--no-verify` flag for batch write operations.
+- Optional `DENON_LOCK=1` flock serialization for write commands.
 
 ### Architectural changes
 
@@ -140,11 +147,14 @@ Release blocker: `v1.2.0-beta.3` already exists and is behind `HEAD`. These note
 - §4.11 documents the nested-function promotion test seam.
 - §6.1 documents the MPRIS daemon boundary.
 - §6.5 documents Makefile/RPM packaging workflow.
+- §7.6 documents write-race mitigations and remaining MPRIS debounce work.
 
 ### Breaking changes
 
 - No intentional breaking CLI changes are identified.
 - Profile-scoped IP cache is additive for users who set `DENON_PROFILE`; users without `DENON_PROFILE` continue using `~/.cache/denon_ip`.
+- `DENON_LOCK=1` is opt-in and default behavior remains lock-free.
+- `--no-verify` is opt-in and default behavior remains set-then-verify.
 
 ### Upgrade notes
 
@@ -211,6 +221,20 @@ If `DENON_PROFILE=<name>` is set, discovery and `denon setip` use
 `~/.cache/denon_ip`.
 ```
 
+### Add batch/write-race controls
+
+Add under Usage or Advanced Configuration:
+
+```text
+Write commands verify receiver state by default. For batch scripts that want to
+issue writes without readback polling, pass `--no-verify`; pretty output is
+marked `(unverified)` and JSON output includes `"verified": false`.
+
+To serialize concurrent CLI writes, set `DENON_LOCK=1`. This uses `flock` on
+the active IP cache path and honors `DENON_LOCK_TIMEOUT` (default 3 seconds).
+Reads do not take the lock.
+```
+
 ### Current README sections that are accurate
 
 - Project status and feature overview for the committed v1.2.0-beta.3 tree.
@@ -248,3 +272,4 @@ shellcheck -s bash denon.sh
 make -f .copr/Makefile srpm outdir=/tmp/copr-out
 # review all output, then decide whether to push/tag
 ```
+

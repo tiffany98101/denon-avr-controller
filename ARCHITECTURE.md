@@ -114,7 +114,7 @@ State-changing commands do **not** trust the AVR's immediate response. The patte
 
 The canonical implementation is `_denon_wait_for_source`: up to 20 polls at 250 ms intervals (5 s total ceiling). The same shape appears in `_denon_set_volume_db`. The new `_denon_fade_volume` extends this to multi-step writes: each individual step still goes through verified `_denon_set_volume_db`.
 
-**All future write commands must use this pattern.** A "set and pray" command is a bug.
+**All future write commands must use this pattern by default.** A "set and pray" command is a bug unless the caller explicitly passes `--no-verify`, which is reserved for batch operations that intentionally trade immediate readback confirmation for lower race exposure and latency. Unverified writes must mark pretty output with `(unverified)` and JSON output with `"verified": false`.
 
 ### 4.3 Discovery Fallback Cascade (revised)
 
@@ -181,7 +181,7 @@ Otherwise, prefer Telnet. Every Python call adds ~50 ms of interpreter startup.
 - **stderr = diagnostics.** Errors, warnings, debug traces, "did you mean" hints.
 - **`DENON_DEBUG=1`** routes through `_denon_debug` (stderr only).
 - **`--json` is structural, not cosmetic.** Field names are a contract. Renaming a JSON key is a breaking change.
-- **Global quiet flags (new).** `--quiet`/`-q` suppresses stdout; `--silent` suppresses both stdout and stderr. These compose with all commands. New commands must honor them — wire through the same flag-strip helper, don't re-implement.
+- **Global flags (new).** `--quiet`/`-q` suppresses stdout; `--silent` suppresses both stdout and stderr; `--no-verify` skips set-then-verify polling for write commands. These compose with commands before or after the subcommand. New commands must honor them — wire through the same flag-strip helper, don't re-implement.
 
 ### 4.8 Volume Encoding
 
@@ -240,9 +240,9 @@ These are hard constraints. A change that violates one is, by definition, not in
 3. **No heavy dependencies for the script.** Required: `bash`, `curl`, `awk`, `sed`, `grep`, `ip`, `nc`. Optional: `jq`, `shellcheck`, `avahi-utils` (for the mDNS tier of discovery), `python3` (for HEOS helper and MPRIS bridge). Adding any other required dependency to the script requires explicit justification in this document.
 4. **Pipeable.** stdout is parseable. The default human output is line-oriented. `--json` produces a single JSON document. No prompts, no spinners, no curses TUIs on the primary commands. `dashboard --watch` is the sanctioned exception, and it must remain optional.
 5. **Bounded timeouts on every network call.** No command can hang. All `curl` and `nc` calls go through `_denon_curl` or `_denon_telnet`/`_denon_telnet_query`, which apply timeouts from environment variables with safe defaults.
-6. **Stateless script invocations.** No PID files. No lock files (yet — see §7.6). No long-lived sockets *inside `denon.sh`*. The script must be safe to invoke 100 times in a row from a scene script. `watch-event` is the bounded exception (§4.10); the MPRIS daemon is the separate-process exception (§6.1).
+6. **Stateless script invocations.** No PID files. No long-lived sockets *inside `denon.sh`*. The script must be safe to invoke 100 times in a row from a scene script. `watch-event` is the bounded foreground exception (§4.10); the MPRIS daemon is the separate-process exception (§6.1); and `DENON_LOCK=1` is the narrow opt-in lock-file exception for serializing writes via `flock` on the active IP cache path.
 7. **AVR-X1600H XML grammar is the reference.** The current `sed` extractors assume the structure this model emits. Supporting another model is allowed but must be additive — never break the X1600H path.
-8. **Verify after every write.** No "set and pray." See §4.2. Fade verifies per step, not just at the end.
+8. **Verify after every write.** No "set and pray" by default. See §4.2. Fade verifies per step, not just at the end. The documented opt-out is `--no-verify`, which still issues the write but skips readback polling and marks output as unverified.
 9. **Trusted LAN only.** `curl -k` is used because the receiver presents a self-signed cert. Telnet has no auth. Do not market or extend this tool as suitable for hostile networks.
 10. **Volume ceiling on by default.** `DENON_MAX_VOLUME_DB=-10` ships as the default. The user must opt out, never in. The ceiling applies to fades, to scene scripts, to raw `set` paths that touch volume — everywhere, no exceptions.
 11. **stderr for warnings, exit codes for errors.** Every command returns a meaningful exit code. Scene scripts depend on `&&` chaining working correctly. `--quiet` suppresses stdout but **does not change exit codes**.
@@ -352,12 +352,14 @@ Errors inside pipelines can silently pass. Most commands handle this with explic
 
 Two simultaneous `denon vol -30` calls race at the AVR. The AVR arbitrates (last write wins), but the verify step in the loser misleadingly reports drift. The MPRIS daemon plus an interactive shell plus a scene script can all hit the AVR at once — this is now a realistic three-way race, not a thought experiment.
 
-Mitigations available:
-- `flock` on `~/.cache/denon_ip` to serialize, at the cost of latency.
-- A `--no-verify` flag for batch operations.
-- The MPRIS daemon could de-bounce: if the CLI just issued a volume change, skip the daemon's next poll.
+Mitigations landed:
+- `DENON_LOCK=1` opts write commands into `flock` serialization on the active IP cache path, using `DENON_LOCK_TIMEOUT` (default 3s) and exit code 75 on timeout. Reads remain lock-free.
+- `--no-verify` lets batch operations issue writes without readback polling; pretty output is marked `(unverified)` and JSON output reports `"verified": false`.
 
-None of these are implemented. If race-induced spurious warnings become noticeable in practice, start with `flock`.
+Mitigations still pending:
+- The MPRIS daemon should set `DENON_LOCK=1` in its environment before write operations so D-Bus volume changes serialize against CLI writes. The current daemon-side write point is `denon_mpris.py` `Volume.setter`; adding daemon-side debounce remains out of scope here.
+
+If race-induced UI staleness remains noticeable after locking, the next step is MPRIS-side debounce: if the CLI just issued a volume change, skip the daemon's next poll.
 
 ### 7.7 Polling cost in scene scripts
 
@@ -402,6 +404,7 @@ When making a change that touches any of the patterns or guardrails above, appen
 | 2026-05-21 | v1 baseline committed (6dcc504) | Captured project-truth against public GitHub state | All (v1) |
 | 2026-05-21 | v2 reconciliation | Local working tree had diverged: MPRIS daemon, layered config + profiles, Avahi discovery, cache TTL, `data` family, `watch-event`, fade volume, snapshot diff, pytest harness via promotion trick, RPM packaging. v2 captures actual reality. | All sections superseded; §4.4, §4.9, §4.10, §4.11, §6 new; v1 §5.1, §5.3, §5.4, §5.8 explicitly superseded |
 | 2026-05-21 | Per-profile IP cache | `DENON_PROFILE=<name>` now scopes the discovery cache to `~/.cache/denon_ip.<name>` while unprofiled users continue to use `~/.cache/denon_ip`; the TTL gate, `setip`, `discover`, doctor, and data live target selection all use the active cache path. | §4.3, §4.4, §7.1 |
+| 2026-05-21 | Write race mitigations | Added global `--no-verify` for batch writes and opt-in `DENON_LOCK=1` flock serialization for write commands; defaults remain unchanged, reads stay lock-free, and missing `flock` warns then proceeds unserialized. | §4.2, §4.7, §5.6, §5.8, §7.6 |
 
 ---
 

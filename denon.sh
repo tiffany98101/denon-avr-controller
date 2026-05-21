@@ -123,6 +123,99 @@ denon() {
     printf '%s/.cache/denon_ip' "$HOME"
   }
 
+  _denon_no_verify_enabled() {
+    [[ "${DENON_NO_VERIFY_ACTIVE:-0}" == "1" ]]
+  }
+
+  _denon_args_have_json() {
+    local arg
+    for arg in "$@"; do
+      [[ "$(_denon_lower "$arg")" == "--json" || "$(_denon_lower "$arg")" == "json" ]] && return 0
+    done
+    return 1
+  }
+
+  _denon_unverified_suffix() {
+    _denon_no_verify_enabled && printf ' (unverified)'
+  }
+
+  _denon_verified_json_bool() {
+    if _denon_no_verify_enabled; then
+      printf 'false'
+    else
+      printf 'true'
+    fi
+  }
+
+  _denon_write_command_requires_lock() {
+    local cmd="$1"
+    shift || true
+    local sub="${1:-}"
+
+    case "$cmd" in
+      raw) [[ "$(_denon_lower "$sub")" == "set" ]] ;;
+      source|on|off|xbox|xfinity|bluray|tv|phono|mute|unmute|toggle|movie|game|night|music|mode|dyn-eq|dyn-vol|cinema-eq|multeq|bass|treble|play|pause|stop|next|prev|previous|preset)
+        return 0
+        ;;
+      heos)
+        [[ -z "$sub" ]] && return 0
+        case "$(_denon_lower "$sub")" in
+          play|pause|stop|next|prev|previous|repeat|shuffle|play-stream) return 0 ;;
+          *) return 1 ;;
+        esac
+        ;;
+      vol)
+        [[ -n "$sub" ]]
+        ;;
+      up|down)
+        return 0
+        ;;
+      sleep|qs|quick|quick-select)
+        [[ -n "$sub" ]]
+        ;;
+      zone2)
+        case "$(_denon_lower "$sub")" in
+          source|on|off|mute|unmute|vol|volume|up|down) return 0 ;;
+          sleep) [[ -n "${2:-}" ]] ;;
+          *) return 1 ;;
+        esac
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  _denon_acquire_write_lock() {
+    [[ "${DENON_LOCK:-0}" == "1" ]] || return 0
+
+    if ! command -v flock >/dev/null 2>&1; then
+      echo "Warning: DENON_LOCK=1 requested but flock is not available; proceeding without serialization" >&2
+      return 0
+    fi
+
+    local lock_path lock_timeout
+    lock_path=$(_denon_ip_cache_path) || return 1
+    lock_timeout="${DENON_LOCK_TIMEOUT:-3}"
+    mkdir -p "$(dirname "$lock_path")" || return 1
+
+    exec {denon_write_lock_fd}>>"$lock_path"
+    if ! flock -w "$lock_timeout" "$denon_write_lock_fd"; then
+      echo "Error: timed out waiting ${lock_timeout}s for Denon write lock: $lock_path" >&2
+      eval "exec ${denon_write_lock_fd}>&-"
+      return 75
+    fi
+    DENON_WRITE_LOCK_FD="$denon_write_lock_fd"
+  }
+
+  _denon_release_write_lock() {
+    if [[ -n "${DENON_WRITE_LOCK_FD:-}" ]]; then
+      flock -u "$DENON_WRITE_LOCK_FD" 2>/dev/null || true
+      eval "exec ${DENON_WRITE_LOCK_FD}>&-"
+      DENON_WRITE_LOCK_FD=""
+    fi
+  }
+
   _denon_discover() {
     local cache
     local default_ip="${DENON_DEFAULT_IP:-}"
@@ -381,6 +474,8 @@ Configuration:
   DENON_CURL_CONNECT_TIMEOUT
   DENON_CURL_MAX_TIME
   DENON_CACHE_TTL_SECONDS
+  DENON_LOCK=1
+  DENON_LOCK_TIMEOUT=3
   DENON_SSDP_TIMEOUT
   DENON_SSDP_MX
   DENON_HEOS_PID
@@ -400,6 +495,7 @@ Notes:
   The script can be run directly or sourced from bash/zsh.
   Pass --quiet or -q before or after any command to suppress stdout output.
   Pass --silent before or after any command to suppress both stdout and stderr.
+  Pass --no-verify before or after any write command to skip set-then-verify polling.
 EOF
   }
 
@@ -774,7 +870,10 @@ EOF
   _denon_set_source() {
     local query="$1"
     local zone="${2:-1}"
+    shift 2 2>/dev/null || true
     local source_idx current_idx source_name
+    local json=0
+    _denon_args_have_json "$@" && json=1
 
     if [[ -z "$query" ]]; then
       echo "Error: source requires an index or name, for example: denon source xbox" >&2
@@ -801,12 +900,27 @@ EOF
       echo "Warning: source change request timed out; verifying receiver state..." >&2
     fi
 
-    if ! _denon_wait_for_source "$zone" "$source_idx" 20; then
-      echo "Error: source change to zone $zone source $source_idx was not confirmed" >&2
-      return 1
+    if ! _denon_no_verify_enabled; then
+      if ! _denon_wait_for_source "$zone" "$source_idx" 20; then
+        echo "Error: source change to zone $zone source $source_idx was not confirmed" >&2
+        return 1
+      fi
     fi
 
     source_name=$(_denon_alias_for_source "$zone" "$source_idx" || _denon_source_name_by_idx "$zone" "$source_idx" || printf '%s' "$source_idx")
+    if (( json )); then
+      printf '{"zone":%s,"sourceIndex":%s,"sourceName":"%s","verified":%s}\n' \
+        "$zone" "$source_idx" "$(printf '%s' "${source_name:-Unknown}" | _denon_json_escape)" "$(_denon_verified_json_bool)"
+      return 0
+    fi
+    if _denon_no_verify_enabled; then
+      if [[ "$zone" == "1" ]]; then
+        printf 'Source set to %s (%s)%s\n' "${source_name:-Unknown}" "$source_idx" "$(_denon_unverified_suffix)"
+      else
+        printf 'Zone %s source: %s (%s)%s\n' "$zone" "${source_name:-Unknown}" "$source_idx" "$(_denon_unverified_suffix)"
+      fi
+      return 0
+    fi
     if [[ "$zone" == "1" ]]; then
       _denon_status_pretty
     else
@@ -836,7 +950,10 @@ EOF
 
   _denon_set_volume_db() {
     local db="$1"
+    shift || true
     local raw verified_raw
+    local json=0
+    _denon_args_have_json "$@" && json=1
 
     if ! _denon_is_number "$db"; then
       echo "Error: volume must be a dB value, for example: denon vol -35 or denon vol -35.5" >&2
@@ -860,19 +977,27 @@ EOF
       return 1
     }
 
-    verified_raw=$(_denon_main_volume_raw)
-    if [[ "$verified_raw" != "$raw" ]]; then
-      echo "Warning: requested volume ${db} dB, but receiver now reports raw=${verified_raw:-unknown}" >&2
+    if ! _denon_no_verify_enabled; then
+      verified_raw=$(_denon_main_volume_raw)
+      if [[ "$verified_raw" != "$raw" ]]; then
+        echo "Warning: requested volume ${db} dB, but receiver now reports raw=${verified_raw:-unknown}" >&2
+      fi
     fi
 
-    printf 'Volume set to %s dB\n' "$db"
+    if (( json )); then
+      printf '{"volumeDb":%s,"verified":%s}\n' "$db" "$(_denon_verified_json_bool)"
+      return 0
+    fi
+
+    printf 'Volume set to %s dB%s\n' "$db" "$(_denon_unverified_suffix)"
   }
 
   _denon_fade_volume() {
-    local target="" duration=10 arg
+    local target="" duration=10 arg json=0
     while [[ $# -gt 0 ]]; do
       arg="$1"
       case "$arg" in
+        --json|json) json=1; shift ;;
         --duration|-d) duration="$2"; shift 2 ;;
         *) [[ -z "$target" ]] && target="$1"; shift ;;
       esac
@@ -916,11 +1041,16 @@ EOF
       (( i < num_steps )) && sleep "$step_interval"
     done
     [[ -t 1 ]] && printf '\n'
-    echo "Volume faded to ${target} dB"
+    if (( json )); then
+      printf '{"volumeDb":%s,"verified":%s}\n' "$target" "$(_denon_verified_json_bool)"
+    else
+      printf 'Volume faded to %s dB%s\n' "$target" "$(_denon_unverified_suffix)"
+    fi
   }
 
   _denon_change_volume() {
     local delta="$1"
+    shift || true
     local raw current_db target_db
 
     if ! _denon_is_number "$delta"; then
@@ -936,7 +1066,7 @@ EOF
 
     current_db=$(_denon_raw_to_db "$raw")
     target_db=$(awk -v current="$current_db" -v delta="$delta" 'BEGIN { printf "%.1f", current + delta }')
-    _denon_set_volume_db "$target_db"
+    _denon_set_volume_db "$target_db" "$@"
   }
 
   _denon_zone2_change_volume() {
@@ -1124,8 +1254,10 @@ EOF
     esac
   }
   _denon_sound_mode() {
-    local mode code
+    local mode code json=0
     mode=$(_denon_lower "$1")
+    shift || true
+    _denon_args_have_json "$@" && json=1
     case "$mode" in
       stereo) code="MSSTEREO" ;;
       direct) code="MSDIRECT" ;;
@@ -1136,7 +1268,12 @@ EOF
       auto) code="MSAUTO" ;;
       *) echo "Error: mode must be one of stereo, direct, pure, movie, music, game, auto" >&2; return 1 ;;
     esac
-    _denon_telnet "$code" && echo "Sound mode set to $mode"
+    _denon_telnet "$code" || return 1
+    if (( json )); then
+      printf '{"mode":"%s","verified":%s}\n' "$(printf '%s' "$mode" | _denon_json_escape)" "$(_denon_verified_json_bool)"
+    else
+      printf 'Sound mode set to %s%s\n' "$mode" "$(_denon_unverified_suffix)"
+    fi
   }
 
   _denon_on_off() {
@@ -5970,23 +6107,26 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
   fi
   _denon_load_config
 
-  local _arg _quiet=0 _silent=0
+  local _arg _quiet=0 _silent=0 _no_verify="${DENON_NO_VERIFY_ACTIVE:-0}" DENON_NO_VERIFY_ACTIVE
   local -a _quiet_args=()
   for _arg in "$@"; do
     case "$_arg" in
       --quiet|-q) _quiet=1 ;;
       --silent) _silent=1 ;;
+      --no-verify) _no_verify=1 ;;
       *) _quiet_args+=("$_arg") ;;
     esac
   done
   if (( _silent )); then
-    denon "${_quiet_args[@]+"${_quiet_args[@]}"}" >/dev/null 2>&1
+    DENON_NO_VERIFY_ACTIVE="$_no_verify" denon "${_quiet_args[@]+"${_quiet_args[@]}"}" >/dev/null 2>&1
     return $?
   fi
   if (( _quiet )); then
-    denon "${_quiet_args[@]+"${_quiet_args[@]}"}" >/dev/null
+    DENON_NO_VERIFY_ACTIVE="$_no_verify" denon "${_quiet_args[@]+"${_quiet_args[@]}"}" >/dev/null
     return $?
   fi
+  DENON_NO_VERIFY_ACTIVE="$_no_verify"
+  set -- "${_quiet_args[@]+"${_quiet_args[@]}"}"
 
   local cmd
   cmd=$(_denon_lower "$1")
@@ -6068,6 +6208,16 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
     BASE="https://$IP:10443"
   fi
 
+  local _write_lock_active=0
+  if _denon_write_command_requires_lock "$cmd" "${@:2}"; then
+    _denon_acquire_write_lock
+    local _lock_status=$?
+    if (( _lock_status != 0 )); then
+      return "$_lock_status"
+    fi
+    [[ -n "${DENON_WRITE_LOCK_FD:-}" ]] && _write_lock_active=1
+  fi
+
   # ── Commands ──────────────────────────────────────────────────────────────
 
   case "$cmd" in
@@ -6120,7 +6270,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
       ;;
 
     source)
-      _denon_set_source "$2" "1"
+      _denon_set_source "$2" "1" "${@:3}"
       ;;
 
     sleep)
@@ -6181,9 +6331,9 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
         _denon_fade_volume "${@:3}"
       else
         if _denon_is_signed_step "$2" && [[ "$2" == +* ]]; then
-          _denon_change_volume "$2"
+          _denon_change_volume "$2" "${@:3}"
         else
-          _denon_set_volume_db "$2"
+          _denon_set_volume_db "$2" "${@:3}"
         fi
       fi
       ;;
@@ -6191,12 +6341,12 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
     up)
       local step="${2:-${DENON_VOLUME_STEP_DB:-1}}"
       step="${step#[-+]}"
-      _denon_change_volume "$step"
+      _denon_change_volume "$step" "${@:3}"
       ;;
     down)
       local step="${2:-${DENON_VOLUME_STEP_DB:-1}}"
       step="${step#[-+]}"
-      _denon_change_volume "-$step"
+      _denon_change_volume "-$step" "${@:3}"
       ;;
 
     mute)
@@ -6240,7 +6390,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
       ;;
 
     mode)
-      _denon_sound_mode "$2"
+      _denon_sound_mode "$2" "${@:3}"
       ;;
     dyn-eq)
       _denon_audyssey_toggle "Dynamic EQ" "$2" "PSDYNEQ"
@@ -6278,7 +6428,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
           _denon_sources "2"
           ;;
         source)
-          _denon_set_source "$3" "2"
+          _denon_set_source "$3" "2" "${@:4}"
           ;;
         rename-source)
           local zn="${*:4}"
@@ -6341,14 +6491,21 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
 
     *)
       _denon_usage
+      if (( _write_lock_active )); then
+        _denon_release_write_lock
+      fi
       return 1
       ;;
   esac
+
+  if (( _write_lock_active )); then
+    _denon_release_write_lock
+  fi
 }
 
 # shellcheck disable=SC2034,SC2153,SC2154
 _denon_completion() {
-  local -a commands modes zone2_commands raw_commands json_flags zones heos_commands onoff dyn_volumes multeq_modes tone_commands repeat_modes
+  local -a commands modes zone2_commands raw_commands json_flags global_flags zones heos_commands onoff dyn_volumes multeq_modes tone_commands repeat_modes
   commands=(
     info data status signal-debug rawstatus raw snapshot diff sources source rename-source source-names clear-source-name
     sleep qs quick quick-select
@@ -6360,6 +6517,7 @@ _denon_completion() {
   zone2_commands=(status sources source rename-source clear-source-name on off mute unmute vol volume up down sleep)
   raw_commands=(get set)
   json_flags=(--json)
+  global_flags=(--quiet --silent --no-verify)
   zones=(1 2)
   heos_commands=(now play pause stop next prev queue groups group browse search play-stream repeat shuffle update)
   onoff=(on off)
@@ -6370,6 +6528,7 @@ _denon_completion() {
 
   if (( CURRENT == 2 )); then
     _describe -t commands 'denon command' commands
+    _describe -t global-flags 'global flag' global_flags
     return
   fi
 
