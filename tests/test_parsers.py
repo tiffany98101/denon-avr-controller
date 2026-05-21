@@ -124,6 +124,29 @@ class TestParseXmlField:
         assert r.stdout.strip().startswith("uuid:")
 
 
+class TestExplicitSourceCommands:
+    def test_explicit_tv_shortcut_still_sets_source(self):
+        code = textwrap.dedent("""\
+            calls=""
+            _denon_get_source_xml() {
+              printf '%s' '<SourceList><Zone zone="1" index="13"><Source index="6"><Name>TV Audio</Name></Source><Source index="13"><Name>HEOS Music</Name></Source></Zone></SourceList>'
+            }
+            _denon_set_config() {
+              calls="${calls}${1}:${2}"$'\\n'
+            }
+            _denon_wait_for_source() { return 0; }
+            _denon_alias_for_source() { return 1; }
+            _denon_source_name_by_idx() { printf '%s' 'TV Audio'; }
+            _denon_status_pretty() { printf '%s' 'status-called'; }
+
+            _denon_set_source "tv audio" "1" >/dev/null
+            printf '%s' "$calls"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0, r.stderr
+        assert '7:<Source zone="1" index="6"></Source>' in r.stdout
+
+
 # ---------------------------------------------------------------------------
 # Bug B-3: multi-line body → single record line
 # ---------------------------------------------------------------------------

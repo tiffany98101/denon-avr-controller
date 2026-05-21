@@ -396,7 +396,7 @@ picks it up automatically — no configuration required on the desktop side.
 
 - Volume slider in the Plasma media-controller widget controls receiver volume.
 - Play / Pause / Next / Prev on the lock screen and media keys are forwarded
-  to HEOS for network sources.
+  to HEOS when the receiver is already on a HEOS/network source.
 - Now-playing metadata (track title, artist, album, album art) from HEOS.
 - Source name shown as the track title for HDMI and analog inputs.
 - KDE Connect relay to phones and tablets.
@@ -430,8 +430,28 @@ The cache (`~/.cache/denon_ip`) is shared with the bash script.
 | `DENON_IP` | — | Receiver IP; overrides the cache |
 | `DENON_MAX_VOLUME_DB` | `0` | dB that maps to MPRIS Volume = 1.0 |
 | `DENON_MPRIS_POLL_INTERVAL` | `10` | AVR HTTP poll interval in seconds |
+| `DENON_MPRIS_AUTO_SWITCH` | `0` | Set to `1` to let MPRIS transport commands activate HEOS even when another input is selected |
 | `DENON_HEOS_PID` | auto | Override HEOS player ID |
 | `DENON_DEBUG` | — | Set to `1` for verbose log output |
+
+MPRIS remains enabled by default, but automatic receiver source switching from
+desktop media activity is disabled. This prevents Firefox and other browser
+media sessions from stealing the AVR away from an intentional source such as
+TV Audio. Use explicit commands when you want to switch inputs:
+
+```bash
+denon tv
+denon heos
+denon source "heos music"
+```
+
+If you preferred the old behavior where desktop MPRIS Play/Pause/Next/Prev
+could activate HEOS from another AVR input, opt in explicitly:
+
+```ini
+[Service]
+Environment=DENON_MPRIS_AUTO_SWITCH=1
+```
 
 To set variables for the service without editing the unit file:
 

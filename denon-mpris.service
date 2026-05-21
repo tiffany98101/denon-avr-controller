@@ -20,6 +20,9 @@ StartLimitBurst=5
 #Environment=DENON_IP=192.168.1.100
 #Environment=DENON_MAX_VOLUME_DB=0
 #Environment=DENON_MPRIS_POLL_INTERVAL=10
+# Opt in to legacy behavior where MPRIS transport commands may activate HEOS
+# while another AVR source is selected.
+#Environment=DENON_MPRIS_AUTO_SWITCH=1
 
 [Install]
 WantedBy=graphical-session.target

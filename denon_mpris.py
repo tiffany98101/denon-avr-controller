@@ -14,6 +14,7 @@ Environment:
     DENON_DEFAULT_IP          Fallback IP if DENON_IP is unset
     DENON_MAX_VOLUME_DB       dB that maps to MPRIS Volume=1.0  (default 0)
     DENON_MPRIS_POLL_INTERVAL AVR HTTP poll interval in seconds (default 10)
+    DENON_MPRIS_AUTO_SWITCH   Allow MPRIS transport control to wake/switch HEOS (default 0)
     DENON_HEOS_PID            Override HEOS player ID (skip auto-resolution)
     DENON_DEBUG               Set to 1 for verbose logging
 """
@@ -68,6 +69,9 @@ VOL_SUPPRESS_SECS   = 2.5   # ignore stale polled volume for this long after a S
 
 _MAX_DB   = float(os.environ.get("DENON_MAX_VOLUME_DB") or "0")
 _POLL_INT = float(os.environ.get("DENON_MPRIS_POLL_INTERVAL") or "10")
+_MPRIS_AUTO_SWITCH = os.environ.get("DENON_MPRIS_AUTO_SWITCH", "0").strip().lower() in (
+    "1", "true", "yes", "on", "enabled",
+)
 
 # ── Ground-truth state (mutated only on the GLib main thread) ─────────────────
 
@@ -253,8 +257,28 @@ def _is_heos(s: _State) -> bool:
     return "heos" in s.source.lower() # source-name fallback
 
 
+def _active_source_is_heos(s: _State) -> bool:
+    """True when the AVR source itself is HEOS/network audio."""
+    return "heos" in s.source.lower()
+
+
+def _mpris_transport_allowed(action: str) -> bool:
+    """Allow MPRIS-originated HEOS writes only when they cannot steal input."""
+    if _active_source_is_heos(_st) or _MPRIS_AUTO_SWITCH:
+        return True
+    log.info(
+        "Ignoring MPRIS %s while AVR source is %r; set DENON_MPRIS_AUTO_SWITCH=1 to restore automatic HEOS/source activation",
+        action, _st.source or "unknown",
+    )
+    return False
+
+
+def _can_control_heos(s: _State) -> bool:
+    return bool(s.heos_pid) and (_active_source_is_heos(s) or _MPRIS_AUTO_SWITCH)
+
+
 def _playback_status(s: _State) -> str:
-    if not s.power or not _is_heos(s):
+    if not s.power or not (_active_source_is_heos(s) or _MPRIS_AUTO_SWITCH):
         return "Stopped"
     return {"play": "Playing", "pause": "Paused"}.get(s.play_state.lower(), "Stopped")
 
@@ -355,7 +379,7 @@ def _apply(delta: dict[str, Any]) -> bool:
     old_vol  = _effective_volume(s)
     old_loop = _loop_status(s)
     old_sh   = s.shuffle == "on"
-    old_heos = _is_heos(s)
+    old_control = _can_control_heos(s)
     old_meta = (s.title, s.artist, s.album, s.art_url, s.source)
 
     for k, v in delta.items():
@@ -379,10 +403,10 @@ def _apply(delta: dict[str, Any]) -> bool:
     if (s.shuffle == "on") != old_sh:
         player["Shuffle"] = GLib.Variant("b", s.shuffle == "on")
 
-    new_heos = _is_heos(s)
-    if new_heos != old_heos:
+    new_control = _can_control_heos(s)
+    if new_control != old_control:
         for prop in ("CanPlay", "CanPause", "CanGoNext", "CanGoPrevious"):
-            player[prop] = GLib.Variant("b", new_heos)
+            player[prop] = GLib.Variant("b", new_control)
 
     if (s.title, s.artist, s.album, s.art_url, s.source) != old_meta:
         player["Metadata"] = GLib.Variant("a{sv}", _metadata(s))
@@ -759,7 +783,7 @@ class DenonBridge:
     def LoopStatus(self, value: str) -> None:
         repeat_map = {"None": "off", "Track": "on_one", "Playlist": "on_all"}
         repeat = repeat_map.get(value)
-        if repeat is None or not _st.heos_pid:
+        if repeat is None or not _st.heos_pid or not _mpris_transport_allowed("LoopStatus"):
             return
         pid_q = urllib.parse.quote(_st.heos_pid)
         _heos_fire(
@@ -783,7 +807,7 @@ class DenonBridge:
 
     @Shuffle.setter
     def Shuffle(self, value: bool) -> None:
-        if not _st.heos_pid:
+        if not _st.heos_pid or not _mpris_transport_allowed("Shuffle"):
             return
         pid_q = urllib.parse.quote(_st.heos_pid)
         _heos_fire(
@@ -853,19 +877,19 @@ class DenonBridge:
 
     @property
     def CanGoNext(self) -> bool:
-        return _is_heos(_st)
+        return _can_control_heos(_st)
 
     @property
     def CanGoPrevious(self) -> bool:
-        return _is_heos(_st)
+        return _can_control_heos(_st)
 
     @property
     def CanPlay(self) -> bool:
-        return _is_heos(_st)
+        return _can_control_heos(_st)
 
     @property
     def CanPause(self) -> bool:
-        return _is_heos(_st)
+        return _can_control_heos(_st)
 
     @property
     def CanSeek(self) -> bool:
@@ -878,7 +902,7 @@ class DenonBridge:
     # ── org.mpris.MediaPlayer2.Player — control methods ───────────────────────
 
     def _play_state(self, state: str) -> None:
-        if _st.heos_pid:
+        if _st.heos_pid and _mpris_transport_allowed(state):
             pid_q = urllib.parse.quote(_st.heos_pid)
             _heos_fire(self._ip, f"player/set_play_state?pid={pid_q}&state={state}")
 
@@ -895,11 +919,11 @@ class DenonBridge:
         self._play_state("stop")
 
     def Next(self) -> None:
-        if _st.heos_pid:
+        if _st.heos_pid and _mpris_transport_allowed("Next"):
             _heos_fire(self._ip, f"player/play_next?pid={urllib.parse.quote(_st.heos_pid)}")
 
     def Previous(self) -> None:
-        if _st.heos_pid:
+        if _st.heos_pid and _mpris_transport_allowed("Previous"):
             _heos_fire(self._ip, f"player/play_previous?pid={urllib.parse.quote(_st.heos_pid)}")
 
     def Seek(self, Offset: int) -> None:
@@ -917,8 +941,8 @@ def main() -> None:
     global _bus
     ip = _find_ip()
     log.info(
-        "denon-mpris starting  ip=%s  poll=%.0fs  max_db=%.0fdB",
-        ip, _POLL_INT, _MAX_DB,
+        "denon-mpris starting  ip=%s  poll=%.0fs  max_db=%.0fdB  auto_switch=%s",
+        ip, _POLL_INT, _MAX_DB, int(_MPRIS_AUTO_SWITCH),
     )
 
     loop   = GLib.MainLoop()
