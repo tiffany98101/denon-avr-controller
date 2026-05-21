@@ -81,7 +81,7 @@ Concrete consequences:
 
 - **Bash, not Python**, for the primary control plane. Bash process startup is ~5 ms; Python is ~50 ms.
 - **Sourceable single file.** `source denon.sh` makes `denon` behave like a shell builtin. No `$PATH` lookup, no interpreter spawn.
-- **TTL-bounded IP cache** at `~/.cache/denon_ip` (default 1 hour via `DENON_CACHE_TTL_SECONDS`). Discovery runs at most once per hour on the steady-state path.
+- **TTL-bounded IP cache** at `~/.cache/denon_ip` when unprofiled, or `~/.cache/denon_ip.<profile>` when `DENON_PROFILE` is active (default 1 hour via `DENON_CACHE_TTL_SECONDS`). Discovery runs at most once per hour on the steady-state path.
 - **Bounded timeouts everywhere.** `DENON_CURL_CONNECT_TIMEOUT=2`, `DENON_CURL_MAX_TIME=4`, `DENON_SSDP_TIMEOUT=2`. No command can hang on a dead receiver.
 - **Lazy Python.** The HEOS helper is only invoked for queue/group/browse/search — commands the Telnet sideband cannot express. Basic transport (`heos play`, `heos pause`) uses Telnet codes (NS9A/B/C/D/E) and does not pay the Python startup cost.
 - **The MPRIS bridge is its own process.** It does not slow down `denon` invocations. They share a discovery cache; they do not share an interpreter.
@@ -121,7 +121,7 @@ The canonical implementation is `_denon_wait_for_source`: up to 20 polls at 250 
 `_denon_discover` walks a fixed, ordered cascade. Each tier is cheap and bounded; the cache makes the steady-state cost effectively zero:
 
 1. `$DENON_IP` (if set) — probed, never blindly trusted.
-2. `~/.cache/denon_ip` — probed for liveness, **only if mtime is within `DENON_CACHE_TTL_SECONDS` (default 3600s)**.
+2. The active cache path — `~/.cache/denon_ip` when unprofiled, or `~/.cache/denon_ip.<profile>` when `DENON_PROFILE` is active — probed for liveness, **only if mtime is within `DENON_CACHE_TTL_SECONDS` (default 3600s)**.
 3. `$DENON_DEFAULT_IP` — probed for liveness.
 4. **Avahi / mDNS** via `_denon_avahi_candidates` — fast, multicast-DNS, more reliable than SSDP on segmented networks. **[v1 omission: this tier did not exist when v1 was written.]**
 5. SSDP multicast (M-SEARCH for `MediaRenderer:1`).
@@ -130,7 +130,7 @@ The canonical implementation is `_denon_wait_for_source`: up to 20 polls at 250 
 
 Every candidate is gated through `_denon_is_receiver`, which fetches `type=3` and greps for the literal `Denon`. A stale ARP entry for a printer never causes a false positive.
 
-The cache TTL is the architecture's answer to DHCP drift. Before it existed, a stale `~/.cache/denon_ip` from yesterday could mask a real DHCP renewal. With the TTL, the cache self-invalidates and the discovery cascade reruns. **Rule:** any future discovery-layer change must respect the TTL gate — never read the cache unconditionally.
+The cache TTL is the architecture's answer to DHCP drift. Before it existed, a stale cache file from yesterday could mask a real DHCP renewal. With the TTL, the active cache path self-invalidates and the discovery cascade reruns. **Rule:** any future discovery-layer change must respect the TTL gate — never read the cache unconditionally.
 
 ### 4.4 Layered Configuration (new in v2)
 
@@ -150,7 +150,7 @@ DENON_PROFILE=livingroom denon status   # talks to the living-room AVR
 DENON_PROFILE=den       denon status    # talks to the den AVR
 ```
 
-Profiles store the per-receiver `DENON_IP` (and any other settings that differ per device). One sourced script handles arbitrarily many receivers. The cache file (`~/.cache/denon_ip`) does *not* yet partition by profile — see §7.1.
+Profiles store the per-receiver `DENON_IP` (and any other settings that differ per device). One sourced script handles arbitrarily many receivers. The discovery cache is profile-scoped when `DENON_PROFILE` is active and remains unscoped (`~/.cache/denon_ip`) when no profile is active.
 
 **Rule for new config-touching features:** add the key to *both* whitelists in `_denon_load_config` and `_denon_profile_cmd` if it should be config-storable. Otherwise it remains env-only. Never read raw config keys without going through `_denon_load_config`.
 
@@ -319,9 +319,9 @@ The packaging story is **Fedora-first**. RPM via COPR is the supported distribut
 
 These are the places the current architecture will strain if pushed. Each entry is a future decision point — not a bug to fix today, but a known limit to design around.
 
-### 7.1 Per-profile IP cache
+### 7.1 ~~Per-profile IP cache~~
 
-Profiles (§4.4) elegantly solve multi-AVR config switching, but `~/.cache/denon_ip` is still a singleton. Switching profiles invalidates the cache mid-stream; discovery has to rerun on the next call after a profile switch. The clean fix is `~/.cache/denon_ip.<profile>` keyed by `$DENON_PROFILE`, with the unscoped path used when no profile is active. Small change, high steady-state payoff for users who actually switch profiles.
+Completed on 2026-05-21. See §8 Decision Record: per-profile IP cache.
 
 ### 7.2 XML extraction fragility
 
@@ -401,6 +401,7 @@ When making a change that touches any of the patterns or guardrails above, appen
 |---|---|---|---|
 | 2026-05-21 | v1 baseline committed (6dcc504) | Captured project-truth against public GitHub state | All (v1) |
 | 2026-05-21 | v2 reconciliation | Local working tree had diverged: MPRIS daemon, layered config + profiles, Avahi discovery, cache TTL, `data` family, `watch-event`, fade volume, snapshot diff, pytest harness via promotion trick, RPM packaging. v2 captures actual reality. | All sections superseded; §4.4, §4.9, §4.10, §4.11, §6 new; v1 §5.1, §5.3, §5.4, §5.8 explicitly superseded |
+| 2026-05-21 | Per-profile IP cache | `DENON_PROFILE=<name>` now scopes the discovery cache to `~/.cache/denon_ip.<name>` while unprofiled users continue to use `~/.cache/denon_ip`; the TTL gate, `setip`, `discover`, doctor, and data live target selection all use the active cache path. | §4.3, §4.4, §7.1 |
 
 ---
 

@@ -113,10 +113,21 @@ denon() {
     done
   }
 
+  _denon_ip_cache_path() {
+    local profile="${DENON_PROFILE:-}"
+    if [[ -n "$profile" ]]; then
+      _denon_validate_stored_name "profile" "$profile" || return 1
+      printf '%s/.cache/denon_ip.%s' "$HOME" "$profile"
+      return 0
+    fi
+    printf '%s/.cache/denon_ip' "$HOME"
+  }
+
   _denon_discover() {
-    local cache="$HOME/.cache/denon_ip"
+    local cache
     local default_ip="${DENON_DEFAULT_IP:-}"
     local ip=""
+    cache=$(_denon_ip_cache_path) || return 1
 
     if [[ -n "${DENON_IP:-}" ]]; then
       if _denon_is_receiver "$DENON_IP"; then
@@ -3276,8 +3287,9 @@ EOF
   }
 
   _denon_data_target_ip() {
-    local cache="$HOME/.cache/denon_ip"
+    local cache
     local candidate=""
+    cache=$(_denon_ip_cache_path) || return 1
 
     if [[ -n "${DENON_IP:-}" ]]; then
       candidate="$DENON_IP"
@@ -3405,11 +3417,12 @@ EOF
   }
 
   _denon_doctor() {
-    local cache="$HOME/.cache/denon_ip"
+    local cache
     local default_ip="${DENON_DEFAULT_IP:-}"
     local cached_ip=""
     local route_target=""
     local exit_status=0
+    cache=$(_denon_ip_cache_path) || return 1
 
     echo "Denon doctor"
     echo "User: $(id -un 2>/dev/null || echo unknown)"
@@ -5993,7 +6006,9 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
         return 1
       fi
       mkdir -p "$HOME/.cache"
-      printf '%s' "$2" >"$HOME/.cache/denon_ip"
+      local cache
+      cache=$(_denon_ip_cache_path) || return 1
+      printf '%s' "$2" >"$cache"
       if _denon_is_receiver "$2"; then
         echo "Saved receiver IP: $2"
       else
@@ -6019,7 +6034,9 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
       return $?
       ;;
     discover)
-      rm -f "$HOME/.cache/denon_ip"
+      local cache
+      cache=$(_denon_ip_cache_path) || return 1
+      rm -f "$cache"
       local new_ip
       new_ip=$(_denon_discover)
       if [[ -n "$new_ip" ]]; then
