@@ -170,7 +170,7 @@ _denon() {
                     compadd -- --color --unicode --ascii --interval --watch --diagnostics
                     ;;
                 dashboard-alt)
-                    compadd -- --compare-providers --provider --color --unicode --ascii --interval --watch
+                    compadd -- --compare-providers --json --provider --color --unicode --ascii --interval --watch
                     ;;
             esac
             ;;

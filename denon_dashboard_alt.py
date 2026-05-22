@@ -13,6 +13,7 @@ import dataclasses
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -30,6 +31,8 @@ from typing import Any, Sequence
 
 
 UNKNOWN = "Unknown"
+PLACEHOLDER = "-"
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 @dataclass(frozen=True)
@@ -829,6 +832,102 @@ class DashboardEventTracker:
         }
 
 
+def strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text)
+
+
+def visible_width(text: str) -> int:
+    return len(strip_ansi(text))
+
+
+def truncate_text(text: Any, width: int) -> str:
+    if width <= 0:
+        return ""
+    plain = str(text).replace("\n", " ").replace("\r", " ")
+    if visible_width(plain) <= width:
+        return plain
+    if width <= 1:
+        return plain[:width]
+    return plain[: max(0, width - 1)] + "…"
+
+
+def pad_text(text: Any, width: int) -> str:
+    fitted = truncate_text(text, width)
+    pad = width - visible_width(fitted)
+    return fitted + (" " * max(0, pad))
+
+
+def display_value(value: Any) -> str:
+    return _clean(value) or PLACEHOLDER
+
+
+def render_status_kv(label: str, value: Any, width: int) -> str:
+    label_text = f"{label}:"
+    value_text = display_value(value)
+    if width <= 0:
+        return f"{label_text} {value_text}"
+    if width <= len(label_text) + 1:
+        return truncate_text(f"{label_text} {value_text}", width)
+    value_width = width - len(label_text) - 1
+    return f"{label_text} {pad_text(value_text, value_width)}"
+
+
+@dataclass(frozen=True)
+class Panel:
+    title: str
+    lines: tuple[str, ...]
+
+
+def render_panel(
+    title: str,
+    lines: Sequence[str],
+    width: int,
+    height: int | None = None,
+    unicode: bool = True,
+) -> list[str]:
+    width = max(8, width)
+    content_width = max(0, width - 4)
+    if unicode:
+        tl, tr, bl, br, side, horiz = ("┌", "┐", "└", "┘", "│", "─")
+    else:
+        tl, tr, bl, br, side, horiz = ("+", "+", "+", "+", "|", "-")
+
+    body = [str(line) for line in lines] or [PLACEHOLDER]
+    if height is not None:
+        height = max(3, height)
+        body = body[: max(0, height - 3)]
+    rendered = [f"{tl}{horiz * (width - 2)}{tr}"]
+    rendered.append(f"{side} {pad_text(title, content_width)} {side}")
+    for line in body:
+        rendered.append(f"{side} {pad_text(line, content_width)} {side}")
+    if height is not None:
+        while len(rendered) < height - 1:
+            rendered.append(f"{side} {' ' * content_width} {side}")
+    rendered.append(f"{bl}{horiz * (width - 2)}{br}")
+    return rendered
+
+
+def render_two_column_row(
+    left: Panel,
+    right: Panel,
+    width: int,
+    height: int | None = None,
+    unicode: bool = True,
+) -> list[str]:
+    gap = 2
+    left_width = max(8, width // 2 - 1)
+    right_width = max(8, width - left_width - gap)
+    left_lines = render_panel(left.title, left.lines, left_width, height=height, unicode=unicode)
+    right_lines = render_panel(right.title, right.lines, right_width, height=height, unicode=unicode)
+    count = max(len(left_lines), len(right_lines))
+    out: list[str] = []
+    for index in range(count):
+        left_line = left_lines[index] if index < len(left_lines) else " " * left_width
+        right_line = right_lines[index] if index < len(right_lines) else " " * right_width
+        out.append(f"{left_line}{' ' * gap}{right_line}")
+    return out
+
+
 class DashboardRenderer:
     def __init__(self, color: str = "auto", unicode: bool = False) -> None:
         self.color = color
@@ -841,57 +940,86 @@ class DashboardRenderer:
         height: int,
         events: Sequence[str] = (),
     ) -> str:
-        width = max(32, width)
-        height = max(10, height)
+        width = max(28, width)
+        height = max(8, height)
+        warnings = self._dedupe_lines((*snapshot.warnings, *snapshot.errors))
+        event_lines = self._dedupe_lines(events)
         lines: list[str] = []
-        title = f"{snapshot.receiver} @ {snapshot.ip}"
-        provider = _display(snapshot.provider, "provider unknown")
-        subtitle = f"{snapshot.timestamp.strftime('Updated %H:%M:%S')} | {provider}"
-        lines.append(self._header(title, subtitle, width))
+        lines.extend(self._header_lines(snapshot, width, len(warnings)))
 
-        panel_width = width
-        if width >= 96:
-            left_w = width // 2 - 1
-            right_w = width - left_w - 2
-            lines.extend(self._two_columns(
-                self._panel_lines("Main Zone", self._zone_rows(snapshot.main), left_w),
-                self._panel_lines("Zone 2", self._zone_rows(snapshot.zone2), right_w),
-                gap="  ",
-            ))
+        main_panel = Panel("Main Zone", tuple(self._zone_rows(snapshot.main)))
+        zone2_panel = Panel("Zone 2", tuple(self._zone_rows(snapshot.zone2)))
+        now_panel = Panel("Now Playing / Audio", tuple(self._now_rows(snapshot)))
+        sources_panel = Panel("Sources", tuple(self._source_rows(snapshot)))
+        events_panel = Panel("Recent Events", tuple(event_lines[:8]) or ("No state changes yet",))
+        warning_lines = [f"{index + 1}. {warning}" for index, warning in enumerate(warnings[:6])]
+        warnings_panel = Panel("Warnings", tuple(warning_lines))
+
+        if width >= 100:
+            lines.extend(render_two_column_row(main_panel, zone2_panel, width, unicode=self.unicode))
+            lines.extend(render_panel(now_panel.title, now_panel.lines, width, unicode=self.unicode))
+            lines.extend(render_two_column_row(sources_panel, events_panel, width, height=16, unicode=self.unicode))
+            if warnings:
+                lines.extend(render_panel(warnings_panel.title, warnings_panel.lines, width, height=min(8, len(warning_lines) + 3), unicode=self.unicode))
+        elif width >= 70:
+            lines.extend(render_two_column_row(main_panel, zone2_panel, width, unicode=self.unicode))
+            lines.extend(render_panel(now_panel.title, now_panel.lines, width, unicode=self.unicode))
+            lines.extend(render_panel(sources_panel.title, sources_panel.lines, width, height=8, unicode=self.unicode))
+            if warnings:
+                lines.extend(render_panel(warnings_panel.title, warnings_panel.lines, width, height=min(8, len(warning_lines) + 3), unicode=self.unicode))
+            lines.extend(render_panel(events_panel.title, events_panel.lines, width, height=7, unicode=self.unicode))
         else:
-            lines.extend(self._panel_lines("Main Zone", self._zone_rows(snapshot.main), panel_width))
-            if snapshot.zone2 is not None:
-                lines.extend(self._panel_lines("Zone 2", self._zone_rows(snapshot.zone2), panel_width))
-
-        lines.extend(self._panel_lines("Now Playing / Audio", self._now_rows(snapshot), panel_width))
-        lines.extend(self._panel_lines("Sources", self._source_rows(snapshot), panel_width))
-        lines.extend(self._panel_lines("Recent Events / Warnings", self._warning_rows(snapshot, events), panel_width))
+            compact_panels = [main_panel, zone2_panel, now_panel, sources_panel]
+            if warnings:
+                compact_panels.append(warnings_panel)
+            compact_panels.append(events_panel)
+            for panel in compact_panels:
+                panel_height = 8 if panel.title == "Sources" else None
+                lines.extend(render_panel(panel.title, panel.lines, width, height=panel_height, unicode=self.unicode))
 
         return "\n".join(lines[:height])
 
-    def _header(self, title: str, subtitle: str, width: int) -> str:
-        text = f" {title} | {subtitle} "
-        return self._color(self._fit(text, width), "1;36")
+    def _header_lines(self, snapshot: DashboardSnapshot, width: int, warning_count: int) -> list[str]:
+        provider = display_value(snapshot.provider)
+        receiver = display_value(snapshot.receiver)
+        ip = display_value(snapshot.ip)
+        summary = " / ".join((
+            display_value(snapshot.main.power),
+            display_value(snapshot.main.source),
+            display_value(snapshot.main.volume),
+        ))
+        left = f"{receiver} @ {ip}"
+        right = f"{provider} | {snapshot.timestamp.strftime('%H:%M:%S')}"
+        if warning_count:
+            right = f"{right} | {warning_count} warning{'s' if warning_count != 1 else ''}"
+        if width >= 72:
+            gap = max(1, width - visible_width(left) - visible_width(right))
+            first = f"{left}{' ' * gap}{right}"
+        else:
+            first = f"{left} | {right}"
+        return [
+            self._color(pad_text(first, width), "1;36"),
+            pad_text(summary, width),
+        ]
 
     def _zone_rows(self, zone: ZoneSnapshot | None) -> list[str]:
         if zone is None:
             return ["No Zone 2 data available"]
-        rows = [
-            f"Power:  {_display(zone.power)}",
-            f"Source: {_display(zone.source)}{self._index_suffix(zone.source_index)}",
-            f"Volume: {_display(zone.volume)}",
-            f"Mute:   {_display(zone.mute)}",
+        return [
+            render_status_kv("Power", zone.power, 0),
+            render_status_kv("Source", f"{display_value(zone.source)}{self._index_suffix(zone.source_index)}", 0),
+            render_status_kv("Volume", zone.volume, 0),
+            render_status_kv("Mute", zone.mute, 0),
         ]
-        return rows
 
     def _now_rows(self, snapshot: DashboardSnapshot) -> list[str]:
         now = snapshot.now_playing
         return [
-            f"Title:  {_display(now.title, 'No metadata for current source')}",
-            f"Artist: {_display(now.artist)}",
-            f"Album:  {_display(now.album)}",
-            f"State:  {_display(now.state)}",
-            f"Type:   {_display(now.media_type)}",
+            render_status_kv("Title", now.title or "No metadata for current source", 0),
+            render_status_kv("Artist", now.artist, 0),
+            render_status_kv("Album", now.album, 0),
+            render_status_kv("State", now.state, 0),
+            render_status_kv("Type", now.media_type, 0),
         ]
 
     def _source_rows(self, snapshot: DashboardSnapshot) -> list[str]:
@@ -900,51 +1028,17 @@ class DashboardRenderer:
         rows = []
         for source in snapshot.sources[:12]:
             marker = "*" if source.active else " "
-            rows.append(f"{marker} {source.index:>2}  {source.name}")
+            rows.append(f"{marker} {source.index:>2}  {display_value(source.name)}")
         if len(snapshot.sources) > 12:
             rows.append(f"... {len(snapshot.sources) - 12} more")
-        return rows
-
-    def _warning_rows(self, snapshot: DashboardSnapshot, events: Sequence[str]) -> list[str]:
-        rows = list(events[:8])
-        for warning in snapshot.warnings[:4]:
-            rows.append(f"Warning: {warning}")
-        for error in snapshot.errors[:4]:
-            rows.append(f"Error: {error}")
-        return rows or ["No state changes yet"]
-
-    def _panel_lines(self, title: str, rows: Sequence[str], width: int) -> list[str]:
-        if self.unicode:
-            tl, tr, bl, br, side, horiz = ("┌", "┐", "└", "┘", "│", "─")
-        else:
-            tl, tr, bl, br, side, horiz = ("+", "+", "+", "+", "|", "-")
-        line = horiz * max(0, width - 2)
-        out = [f"{tl}{line}{tr}", self._fit(f"{side} {title}", width - 1) + side]
-        for row in rows:
-            out.append(self._fit(f"{side} {row}", width - 1) + side)
-        out.append(f"{bl}{line}{br}")
-        return out
-
-    def _two_columns(self, left: Sequence[str], right: Sequence[str], gap: str) -> list[str]:
-        count = max(len(left), len(right))
-        left_w = len(left[0]) if left else 0
-        right_w = len(right[0]) if right else 0
-        rows = []
-        for i in range(count):
-            l = left[i] if i < len(left) else " " * left_w
-            r = right[i] if i < len(right) else " " * right_w
-            rows.append(f"{l}{gap}{r}")
         return rows
 
     def _index_suffix(self, source_index: str | None) -> str:
         text = _clean(source_index)
         return f" ({text})" if text else ""
 
-    def _fit(self, text: str, width: int) -> str:
-        text = text.replace("\n", " ")
-        if len(text) > width:
-            return text[: max(0, width - 3)] + ("..." if width >= 3 else "")
-        return text + (" " * (width - len(text)))
+    def _dedupe_lines(self, lines: Sequence[str]) -> tuple[str, ...]:
+        return _bounded_unique([line for line in lines if _clean(line)], limit=12)
 
     def _color(self, text: str, code: str) -> str:
         if self.color == "never":
@@ -1012,6 +1106,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--provider", choices=("auto", "direct", "shell"), default="auto")
     parser.add_argument("--compare-providers", action="store_true", help="compare direct and shell provider snapshots")
+    parser.add_argument("--json", action="store_true", help="print one snapshot as JSON")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--unicode", action="store_true", help="reserve for Unicode rendering")
     mode.add_argument("--ascii", action="store_true", help="force ASCII rendering")
@@ -1019,23 +1114,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_provider(mode: str, script: str | Path) -> DashboardProvider:
+    shell_provider = ShellDashboardProvider(script)
+    if mode == "shell":
+        return shell_provider
+    if mode == "direct":
+        return DirectDashboardProvider(strict=False)
+    return FallbackDashboardProvider(
+        DirectDashboardProvider(strict=True),
+        shell_provider,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.json and args.watch:
+        print("Error: --json cannot be combined with --watch", file=sys.stderr)
+        return 2
+    if args.json and args.compare_providers:
+        print("Error: --json cannot be combined with --compare-providers", file=sys.stderr)
+        return 2
     if args.compare_providers:
         return run_provider_comparison(args.script)
     if args.interval <= 0:
         print("Error: --interval must be greater than zero", file=sys.stderr)
         return 2
-    shell_provider = ShellDashboardProvider(args.script)
-    if args.provider == "shell":
-        provider: DashboardProvider = shell_provider
-    elif args.provider == "direct":
-        provider = DirectDashboardProvider(strict=False)
-    else:
-        provider = FallbackDashboardProvider(
-            DirectDashboardProvider(strict=True),
-            shell_provider,
-        )
+    provider = build_provider(args.provider, args.script)
+    if args.json:
+        snapshot = provider.collect()
+        print(json.dumps(snapshot_to_dict(snapshot), ensure_ascii=False, sort_keys=True))
+        return 1 if snapshot.errors else 0
     renderer = DashboardRenderer(color=args.color, unicode=args.unicode and not args.ascii)
     tracker = DashboardEventTracker()
     app = DashboardApp(provider, renderer, tracker, interval=args.interval)

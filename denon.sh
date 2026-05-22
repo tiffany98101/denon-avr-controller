@@ -359,7 +359,7 @@ Receiver status:
   denon doctor               Check dependencies, route, cache, and receiver reachability
   denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
-  denon dashboard-alt [--compare-providers] [--provider auto|direct|shell] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
+  denon dashboard-alt [--compare-providers|--json] [--provider auto|direct|shell] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show the experimental Python dashboard architecture
 
 Sources:

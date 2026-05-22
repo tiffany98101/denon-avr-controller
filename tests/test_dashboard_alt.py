@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -21,9 +22,14 @@ from denon_dashboard_alt import (
     SourceSnapshot,
     ZoneSnapshot,
     build_parser,
+    pad_text,
     compare_snapshots,
+    render_panel,
     render_provider_comparison,
+    strip_ansi,
     snapshot_to_dict,
+    truncate_text,
+    visible_width,
 )
 
 
@@ -163,13 +169,35 @@ def test_renderer_handles_complete_snapshot():
     assert "direct" not in frame
 
 
+def test_visible_width_and_truncation_ignore_ansi():
+    text = "\x1b[31mReceiverName\x1b[0m"
+    assert strip_ansi(text) == "ReceiverName"
+    assert visible_width(text) == len("ReceiverName")
+    assert truncate_text("abcdef", 4) == "abc…"
+    assert pad_text("abc", 5) == "abc  "
+
+
+def test_unicode_panel_rendering_is_width_stable():
+    panel = render_panel("Panel", ["alpha", "beta"], width=24, unicode=True)
+    assert panel[0].startswith("┌")
+    assert panel[-1].startswith("└")
+    assert all(visible_width(line) == 24 for line in panel)
+
+
+def test_ascii_panel_rendering_is_width_stable():
+    panel = render_panel("Panel", ["alpha"], width=20, unicode=False)
+    assert panel[0] == "+------------------+"
+    assert panel[-1] == "+------------------+"
+    assert all(visible_width(line) == 20 for line in panel)
+
+
 def test_renderer_handles_direct_provider_snapshot():
     frame = DashboardRenderer(color="never").render(
         complete_snapshot(provider="direct"),
         width=100,
         height=40,
     )
-    assert "Updated 18:30:00 | direct" in frame
+    assert "direct | 18:30:00" in frame
     assert "Main Zone" in frame
 
 
@@ -338,10 +366,21 @@ def test_renderer_handles_missing_partial_snapshot():
         width=72,
         height=30,
     )
-    assert "Denon AVR @ Unknown" in frame
+    assert "Denon AVR @ -" in frame
     assert "No metadata for current source" in frame
     assert "No sources available" in frame
-    assert "Warning: sources unavailable" in frame
+    assert "sources unavailable" in frame
+
+
+def test_renderer_missing_fields_use_placeholder():
+    frame = DashboardRenderer(color="never").render(
+        DashboardSnapshot(provider="direct", timestamp=datetime(2026, 5, 21, 18, 30, 0)),
+        width=80,
+        height=30,
+    )
+    assert "Power: -" in frame
+    assert "Source: -" in frame
+    assert "Artist: -" in frame
 
 
 @pytest.mark.parametrize(("width", "height"), [(24, 8), (36, 12), (120, 6)])
@@ -353,6 +392,60 @@ def test_renderer_width_height_overrides_do_not_traceback(width, height):
     )
     assert isinstance(frame, str)
     assert "Main Zone" in frame or width < 32 or height < 12
+
+
+def test_renderer_truncates_long_now_playing_values():
+    snapshot = complete_snapshot(
+        now_playing=NowPlayingSnapshot(
+            title="A" * 120,
+            artist="Artist " + ("B" * 120),
+            album="Album",
+            state="Playing",
+        )
+    )
+    frame = DashboardRenderer(color="never").render(snapshot, width=80, height=40)
+    assert "…" in frame
+    assert "A" * 90 not in frame
+
+
+def test_renderer_deduplicates_warnings_in_frame():
+    snapshot = complete_snapshot(
+        warnings=("same warning", "same warning", "other warning"),
+        errors=("same warning",),
+    )
+    frame = DashboardRenderer(color="never").render(snapshot, width=100, height=60)
+    assert frame.count("same warning") == 1
+    assert "other warning" in frame
+    assert "2 warnings" in frame
+
+
+def test_renderer_handles_many_sources_and_many_warnings():
+    sources = tuple(SourceSnapshot(index=str(i), name=f"Very Long Source Name {i}", active=i == 3) for i in range(1, 20))
+    warnings = tuple(f"warning {i}" for i in range(1, 12))
+    frame = DashboardRenderer(color="never").render(
+        complete_snapshot(sources=sources, warnings=warnings),
+        width=120,
+        height=40,
+    )
+    assert "Sources" in frame
+    assert "... 7 more" in frame
+    assert "Warnings" in frame
+    assert "warning 1" in frame
+    assert "warning 7" not in frame
+
+
+def test_renderer_handles_partial_direct_snapshot():
+    snapshot = DashboardSnapshot(
+        receiver="Denon AVR",
+        ip="192.0.2.10",
+        provider="direct",
+        main=ZoneSnapshot(power="ON"),
+        timestamp=datetime(2026, 5, 21, 18, 30, 0),
+    )
+    frame = DashboardRenderer(color="never").render(snapshot, width=72, height=24)
+    assert "Denon AVR @ 192.0.2.10" in frame
+    assert "Power: ON" in frame
+    assert "Source: -" in frame
 
 
 def test_event_tracker_does_not_spam_first_baseline():
@@ -506,6 +599,39 @@ def test_compare_providers_mode_uses_both_providers_without_network(monkeypatch,
     assert rc == 0
     assert "dashboard-alt provider comparison" in output
     assert "Main Power         same" in output
+
+
+def test_json_mode_outputs_stable_snapshot_without_network(monkeypatch, capsys):
+    class DirectStaticProvider(DashboardProvider):
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def collect(self) -> DashboardSnapshot:
+            return complete_snapshot(provider="direct")
+
+    monkeypatch.setattr(dashboard_alt, "DirectDashboardProvider", DirectStaticProvider)
+    rc = dashboard_alt.main(["--provider", "direct", "--json"])
+    output = capsys.readouterr().out
+    data = json.loads(output)
+    assert rc == 0
+    assert data["provider"] == "direct"
+    assert data["receiver"] == "Denon AVR-X1600H"
+    assert data["main_power"] == "ON"
+    assert "timestamp" in data
+
+
+def test_json_rejects_watch(capsys):
+    rc = dashboard_alt.main(["--json", "--watch"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "--json cannot be combined with --watch" in captured.err
+
+
+def test_json_rejects_compare_providers(capsys):
+    rc = dashboard_alt.main(["--json", "--compare-providers"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "--json cannot be combined with --compare-providers" in captured.err
 
 
 def test_dashboard_alt_shell_dispatch_does_not_force_receiver_discovery(tmp_path):
