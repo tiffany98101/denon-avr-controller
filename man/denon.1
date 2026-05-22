@@ -36,13 +36,26 @@ Receiver model, IP, firmware, all inputs and zone names.
 Live full\-screen status view.
 .TP
 .BR dashboard\-alt " [\-\-compare\-providers|\-\-json] [\-\-provider \fIauto|direct|shell\fR] [\-\-watch] [\-\-interval \fIsec\fR] [\-\-color \fIauto|always|never\fR] [\-\-unicode|\-\-ascii]"
-Experimental Python dashboard. The default
+Experimental Python dashboard preview. The default
 .B auto
 provider tries direct receiver reads first and falls back to the shell provider.
 .B \-\-compare\-providers
 prints a one\-shot direct\-versus\-shell diagnostic comparison.
 .B \-\-json
 prints one serialized provider snapshot instead of rendering the terminal frame.
+.B \-\-json
+is one\-shot only and cannot be combined with
+.B \-\-watch
+or
+.BR \-\-compare\-providers .
+Wide terminals use two\-column panels; medium and narrow terminals use stacked
+layouts. Use
+.B \-\-unicode
+or
+.B \-\-ascii
+for border style and
+.B \-\-color
+for ANSI color behavior.
 The existing shell dashboard remains the default for
 .BR dashboard .
 .SS Power and volume
@@ -164,6 +177,9 @@ denon vol \-35
 denon tv
 denon status \-\-json | jq .mainZone.volumeDb
 DENON_IP=192.168.1.162 denon off
+denon dashboard-alt \-\-provider auto
+denon dashboard-alt \-\-provider direct \-\-json
+denon dashboard-alt \-\-compare-providers
 systemctl \-\-user enable \-\-now denon\-mpris.service
 .EE
 .SH AUTHOR

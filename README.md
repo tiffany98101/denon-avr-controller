@@ -215,23 +215,27 @@ Read-only status and dashboard:
 Experimental alternative dashboard:
 
 The existing shell dashboard remains the default. `dashboard-alt` starts a new
-Python-based dashboard path that separates snapshot collection from rendering so
-it can evolve without rewriting the current dashboard. Its default
-`--provider auto` mode tries direct Python receiver reads first and falls back to
-the shell provider if direct collection cannot start. The renderer adapts across
-wide and narrow terminals with dedicated panels for zones, now-playing, sources,
-events, and warnings. `--compare-providers` prints a one-shot diagnostic
-comparison between direct and shell snapshots.
+Python-based preview path that separates snapshot collection from rendering so it
+can evolve without rewriting the current dashboard. Its default `--provider auto`
+mode tries direct Python receiver reads first and falls back to the shell
+provider if direct collection cannot start. `--compare-providers` prints a
+one-shot diagnostic comparison between direct and shell snapshots. `--json`
+prints one serialized snapshot and cannot be combined with `--watch` or
+`--compare-providers`.
+
+The renderer uses a two-column panel layout on wide terminals, a simpler stacked
+layout on medium widths, and a compact stacked layout on narrow terminals. Use
+`--unicode` for box drawing, `--ascii` for plain borders, and
+`--color auto|always|never` to control ANSI color. For repeatable manual checks,
+set `DENON_DASHBOARD_WIDTH` and `DENON_DASHBOARD_HEIGHT`.
 
 ```bash
-./denon.sh dashboard-alt --provider auto
-./denon.sh dashboard-alt --provider direct
-./denon.sh dashboard-alt --provider shell
-./denon.sh dashboard-alt --compare-providers
-./denon.sh dashboard-alt --provider direct --json
-./denon.sh dashboard-alt --watch
-./denon.sh dashboard-alt --watch --interval 2
-DENON_DASHBOARD_WIDTH=120 DENON_DASHBOARD_HEIGHT=40 ./denon.sh dashboard-alt
+denon dashboard-alt --provider auto
+denon dashboard-alt --provider direct --json
+denon dashboard-alt --compare-providers
+denon dashboard-alt --watch --interval 2
+DENON_DASHBOARD_WIDTH=120 DENON_DASHBOARD_HEIGHT=40 denon dashboard-alt --provider auto --color always --unicode
+DENON_DASHBOARD_WIDTH=50 DENON_DASHBOARD_HEIGHT=20 denon dashboard-alt --provider auto --ascii --color never
 ```
 
 Data inventory and diagnostics:

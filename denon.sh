@@ -360,7 +360,10 @@ Receiver status:
   denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
   denon dashboard-alt [--compare-providers|--json] [--provider auto|direct|shell] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
-                             Show the experimental Python dashboard architecture
+                             Show the experimental Python dashboard preview; denon dashboard remains the stable default
+                             Examples: denon dashboard-alt --provider auto
+                                       denon dashboard-alt --provider direct --json
+                                       denon dashboard-alt --compare-providers
 
 Sources:
   denon sources              List main zone sources and mark the active one

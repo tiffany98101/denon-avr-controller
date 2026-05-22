@@ -109,7 +109,7 @@ _denon_complete() {
             return
             ;;
         dashboard-alt)
-            COMPREPLY=( $(compgen -W "--compare-providers --json --provider --color --unicode --ascii --interval --watch" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--compare-providers --json --provider --color --unicode --ascii --interval --watch --help" -- "$cur") )
             return
             ;;
         --provider)

@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -496,6 +497,55 @@ def test_dashboard_alt_parser_accepts_expected_options():
     assert args.ascii is True
     assert args.provider == "direct"
     assert args.compare_providers is True
+
+
+def test_dashboard_alt_help_is_discoverable_preview_text():
+    help_text = build_parser().format_help()
+    assert "Experimental Python dashboard preview" in help_text
+    assert "denon dashboard-alt --provider auto" in help_text
+    assert "denon dashboard-alt --provider direct --json" in help_text
+    assert "denon dashboard-alt --compare-providers" in help_text
+    assert "--json is one-shot only" in help_text
+    assert "denon dashboard" in help_text
+    assert "stable default dashboard" in help_text
+
+
+def test_denon_help_mentions_dashboard_alt_preview():
+    result = subprocess.run(
+        [str(SCRIPT), "help"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0
+    assert "denon dashboard-alt" in result.stdout
+    assert "experimental Python dashboard preview" in result.stdout
+    assert "denon dashboard remains the stable default" in result.stdout
+
+
+def test_readme_dashboard_alt_examples_use_supported_options():
+    readme = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8")
+    examples = []
+    for line in readme.splitlines():
+        line = line.strip()
+        if "dashboard-alt" not in line or line.startswith("#"):
+            continue
+        if " denon dashboard-alt " in f" {line} ":
+            examples.append(line)
+
+    assert "denon dashboard-alt --provider auto" in examples
+    assert "denon dashboard-alt --provider direct --json" in examples
+    assert "denon dashboard-alt --compare-providers" in examples
+
+    for example in examples:
+        if "=" in example.split()[0]:
+            parts = shlex.split(example)
+            command_index = parts.index("denon")
+            parts = parts[command_index:]
+        else:
+            parts = shlex.split(example)
+        assert parts[:2] == ["denon", "dashboard-alt"]
+        build_parser().parse_args(parts[2:])
 
 
 @pytest.mark.parametrize("provider", ["auto", "direct", "shell"])

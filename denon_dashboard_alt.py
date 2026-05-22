@@ -1100,7 +1100,22 @@ def terminal_height() -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="denon dashboard-alt")
+    parser = argparse.ArgumentParser(
+        prog="denon dashboard-alt",
+        description=(
+            "Experimental Python dashboard preview. The existing 'denon dashboard' "
+            "command remains the stable default dashboard."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  denon dashboard-alt --provider auto\n"
+            "  denon dashboard-alt --provider direct --json\n"
+            "  denon dashboard-alt --compare-providers\n\n"
+            "--json is one-shot only and cannot be combined with --watch or "
+            "--compare-providers."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--watch", action="store_true", help="redraw until interrupted")
     parser.add_argument("--interval", type=float, default=5.0, help="watch refresh interval in seconds")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
