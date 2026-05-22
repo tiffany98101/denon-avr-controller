@@ -4102,7 +4102,7 @@ EOF
   }
 
   _denon_dashboard_parse_now() {
-    local status="$1"
+    local now_status="$1"
     local text="$2"
     local line label value
 
@@ -4114,7 +4114,7 @@ EOF
     dash_now_type=""
     dash_now_available=0
 
-    if [[ "$status" != "0" ]]; then
+    if [[ "$now_status" != "0" ]]; then
       if printf '%s' "$text" | grep -qiE 'unavailable|not available|no metadata|Track info unavailable'; then
         dash_now_message=$(_denon_display_empty_message no-metadata)
       else
