@@ -6,7 +6,7 @@ _denon_complete() {
     _init_completion || return
 
     local top_cmds=(
-        status info data rawstatus raw signal-debug snapshot diff dashboard
+        status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt
         on off vol up down mute unmute toggle
         source sources rename-source source-names clear-source-name
         zone2
@@ -105,7 +105,11 @@ _denon_complete() {
             return
             ;;
         dashboard)
-            COMPREPLY=( $(compgen -W "--color --unicode --interval --watch --diagnostics" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--color --unicode --ascii --interval --watch --diagnostics" -- "$cur") )
+            return
+            ;;
+        dashboard-alt)
+            COMPREPLY=( $(compgen -W "--color --unicode --ascii --interval --watch" -- "$cur") )
             return
             ;;
     esac

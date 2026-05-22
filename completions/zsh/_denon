@@ -16,6 +16,7 @@ _denon() {
         'snapshot:Save current receiver state to a file'
         'diff:Compare two snapshot files'
         'dashboard:Live updating status dashboard'
+        'dashboard-alt:Experimental Python status dashboard'
         'on:Power on'
         'off:Power off (standby)'
         'vol:Set volume in dB (e.g. vol -35)'
@@ -162,7 +163,10 @@ _denon() {
                     compadd -- list show path set unset active
                     ;;
                 dashboard)
-                    compadd -- --color --unicode --interval --watch --diagnostics
+                    compadd -- --color --unicode --ascii --interval --watch --diagnostics
+                    ;;
+                dashboard-alt)
+                    compadd -- --color --unicode --ascii --interval --watch
                     ;;
             esac
             ;;

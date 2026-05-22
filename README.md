@@ -212,6 +212,19 @@ Read-only status and dashboard:
 ./denon.sh dashboard --diagnostics --watch --interval 5 --color always --unicode
 ```
 
+Experimental alternative dashboard:
+
+The existing shell dashboard remains the default. `dashboard-alt` starts a new
+Python-based dashboard path that separates snapshot collection from rendering so
+it can evolve without rewriting the current dashboard.
+
+```bash
+./denon.sh dashboard-alt
+./denon.sh dashboard-alt --watch
+./denon.sh dashboard-alt --watch --interval 2
+DENON_DASHBOARD_WIDTH=120 DENON_DASHBOARD_HEIGHT=40 ./denon.sh dashboard-alt
+```
+
 Data inventory and diagnostics:
 
 ```bash

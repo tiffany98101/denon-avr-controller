@@ -359,6 +359,8 @@ Receiver status:
   denon doctor               Check dependencies, route, cache, and receiver reachability
   denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
+  denon dashboard-alt [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
+                             Show the experimental Python dashboard architecture
 
 Sources:
   denon sources              List main zone sources and mark the active one
@@ -1447,6 +1449,22 @@ EOF
       return 1
     }
     python3 "$helper" "$IP" "$@"
+  }
+
+  _denon_dashboard_alt() {
+    local helper script_path script_dir
+    script_path=$(_denon_script_path) || script_path="$PWD/denon.sh"
+    script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
+    helper="${DENON_DASHBOARD_ALT_HELPER:-${script_dir:-$PWD}/denon_dashboard_alt.py}"
+    if [[ ! -r "$helper" ]]; then
+      echo "Error: alternative dashboard helper not found: $helper" >&2
+      return 1
+    fi
+    command -v python3 >/dev/null 2>&1 || {
+      echo "Error: python3 is required for dashboard-alt" >&2
+      return 1
+    }
+    python3 "$helper" --script "$script_path" "$@"
   }
 
   _denon_track() {
@@ -6173,6 +6191,10 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
       _denon_profile_cmd "${@:2}"
       return $?
       ;;
+    dashboard-alt)
+      _denon_dashboard_alt "${@:2}"
+      return $?
+      ;;
     discover)
       local cache
       cache=$(_denon_ip_cache_path) || return 1
@@ -6511,7 +6533,7 @@ _denon_completion() {
     sleep qs quick quick-select
     on off xbox xfinity bluray tv phono heos vol up down mute unmute toggle movie game night music mode
     dyn-eq dyn-vol cinema-eq multeq bass treble
-    play pause stop next prev previous track now dashboard zone2 preset watch-event discover doctor setip config profile help
+    play pause stop next prev previous track now dashboard dashboard-alt zone2 preset watch-event discover doctor setip config profile help
   )
   modes=(stereo direct pure movie music game auto)
   zone2_commands=(status sources source rename-source clear-source-name on off mute unmute vol volume up down sleep)
