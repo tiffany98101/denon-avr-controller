@@ -82,6 +82,10 @@ _denon() {
             _describe 'command' top_cmds
             ;;
         args)
+            if [[ ${words[CURRENT-1]} == --provider ]]; then
+                compadd -- auto direct shell
+                return
+            fi
             case $words[2] in
                 vol)
                     _message 'volume in dB (e.g. -35)'
@@ -166,7 +170,7 @@ _denon() {
                     compadd -- --color --unicode --ascii --interval --watch --diagnostics
                     ;;
                 dashboard-alt)
-                    compadd -- --color --unicode --ascii --interval --watch
+                    compadd -- --provider --color --unicode --ascii --interval --watch
                     ;;
             esac
             ;;

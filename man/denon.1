@@ -35,8 +35,12 @@ Receiver model, IP, firmware, all inputs and zone names.
 .BR dashboard " [\-\-watch] [\-\-interval \fIsec\fR] [\-\-color \fIauto|always|never\fR] [\-\-unicode]"
 Live full\-screen status view.
 .TP
-.BR dashboard\-alt " [\-\-watch] [\-\-interval \fIsec\fR] [\-\-color \fIauto|always|never\fR] [\-\-unicode|\-\-ascii]"
-Experimental Python dashboard. The existing shell dashboard remains the default.
+.BR dashboard\-alt " [\-\-provider \fIauto|direct|shell\fR] [\-\-watch] [\-\-interval \fIsec\fR] [\-\-color \fIauto|always|never\fR] [\-\-unicode|\-\-ascii]"
+Experimental Python dashboard. The default
+.B auto
+provider tries direct receiver reads first and falls back to the shell provider.
+The existing shell dashboard remains the default for
+.BR dashboard .
 .SS Power and volume
 .TP
 .BR on | off

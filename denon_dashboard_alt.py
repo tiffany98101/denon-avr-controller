@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import http.client
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -56,6 +61,7 @@ class SourceSnapshot:
 class DashboardSnapshot:
     receiver: str = UNKNOWN
     ip: str = UNKNOWN
+    provider: str = UNKNOWN
     main: ZoneSnapshot = field(default_factory=ZoneSnapshot)
     zone2: ZoneSnapshot | None = None
     now_playing: NowPlayingSnapshot = field(default_factory=NowPlayingSnapshot)
@@ -85,7 +91,7 @@ def _display_mute(value: Any) -> str:
     text = _clean(value).lower()
     if text in {"true", "1", "yes", "on"}:
         return "Yes"
-    if text in {"false", "0", "no", "off"}:
+    if text in {"false", "0", "2", "no", "off"}:
         return "No"
     return UNKNOWN
 
@@ -101,11 +107,291 @@ def _display_volume(value: Any, raw_zone2: bool = False) -> str:
     return f"{text} dB"
 
 
+def _power_name(value: Any) -> str:
+    text = _clean(value)
+    return {"1": "ON", "2": "STANDBY", "3": "OFF"}.get(text, _display(text))
+
+
+def _raw_to_db(value: Any) -> str:
+    text = _clean(value)
+    if not text:
+        return ""
+    try:
+        return f"{int(text) / 10 - 80:.1f} dB"
+    except ValueError:
+        return ""
+
+
+def _xml_root(text: str) -> ET.Element | None:
+    try:
+        return ET.fromstring(text)
+    except ET.ParseError:
+        return None
+
+
+def _find_text(root: ET.Element | None, tag: str) -> str:
+    if root is None:
+        return ""
+    for elem in root.iter():
+        if elem.tag == tag and elem.text is not None:
+            return elem.text.strip()
+    return ""
+
+
+def _zone(root: ET.Element | None, tag: str) -> ET.Element | None:
+    if root is None:
+        return None
+    for elem in root.iter():
+        if elem.tag == tag:
+            return elem
+    return None
+
+
+def _zone_text(root: ET.Element | None, zone_tag: str, child_tag: str) -> str:
+    zone = _zone(root, zone_tag)
+    if zone is None:
+        return ""
+    child = zone.find(child_tag)
+    return child.text.strip() if child is not None and child.text is not None else ""
+
+
+def _active_source_index(root: ET.Element | None, zone: str) -> str:
+    if root is None:
+        return ""
+    for elem in root.iter("Zone"):
+        if elem.get("zone") == zone:
+            return _clean(elem.get("index"))
+    return ""
+
+
+def _source_rows(root: ET.Element | None, zone: str) -> tuple[SourceSnapshot, ...]:
+    if root is None:
+        return ()
+    rows: list[SourceSnapshot] = []
+    active = _active_source_index(root, zone)
+    for zone_elem in root.iter("Zone"):
+        if zone_elem.get("zone") != zone:
+            continue
+        for source in zone_elem.iter("Source"):
+            idx = _clean(source.get("index"))
+            name = _find_text(source, "Name")
+            if idx or name:
+                rows.append(SourceSnapshot(index=idx, name=_display(name), active=idx == active))
+    return tuple(rows)
+
+
+def _source_name(root: ET.Element | None, zone: str, index: str) -> str:
+    for source in _source_rows(root, zone):
+        if source.index == index:
+            return source.name
+    return ""
+
+
+def _parse_now_playing_xml(text: str) -> NowPlayingSnapshot:
+    root = _xml_root(text)
+    if root is None:
+        return NowPlayingSnapshot()
+    title = _find_text(root, "Song") or _find_text(root, "szLine1")
+    artist = _find_text(root, "Artist") or _find_text(root, "szLine2")
+    album = _find_text(root, "Album") or _find_text(root, "szLine3")
+    return NowPlayingSnapshot(
+        title=_clean(title),
+        artist=_clean(artist),
+        album=_clean(album),
+    )
+
+
 class DashboardProvider:
     """Collects one normalized snapshot. It never renders."""
 
     def collect(self) -> DashboardSnapshot:
         raise NotImplementedError
+
+
+class ProviderUnavailable(RuntimeError):
+    """Raised when a provider cannot produce a useful snapshot."""
+
+
+class DirectDashboardProvider(DashboardProvider):
+    """Collects dashboard data directly from receiver read-only endpoints."""
+
+    GET_CONFIG_PORT = 10443
+
+    def __init__(self, timeout: float = 2.0, strict: bool = True) -> None:
+        self.timeout = timeout
+        self.strict = strict
+        self._ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self._ssl_context.check_hostname = False
+        self._ssl_context.verify_mode = ssl.CERT_NONE
+
+    def collect(self) -> DashboardSnapshot:
+        warnings: list[str] = []
+        errors: list[str] = []
+        ip = self._resolve_ip()
+        if not ip:
+            message = "direct provider cannot resolve receiver IP; set DENON_IP or run denon discover"
+            if self.strict:
+                raise ProviderUnavailable(message)
+            return DashboardSnapshot(
+                provider="direct",
+                errors=(message,),
+                timestamp=datetime.now(),
+            )
+
+        xml_by_type: dict[int, str] = {}
+        for type_id in (3, 4, 7, 12):
+            try:
+                xml_by_type[type_id] = self._get_config(ip, type_id)
+            except Exception as exc:
+                warnings.append(f"get_config type {type_id} unavailable: {exc}")
+
+        required = (4, 7, 12)
+        if not any(type_id in xml_by_type for type_id in required):
+            message = "direct provider could not read receiver status endpoints"
+            if self.strict:
+                raise ProviderUnavailable(message)
+            errors.append(message)
+
+        snapshot = self._snapshot_from_xml(ip, xml_by_type, warnings, errors)
+        if "heos" in _display(snapshot.main.source, "").lower():
+            try:
+                snapshot = dataclasses.replace(snapshot, now_playing=self._fetch_now_playing(ip))
+            except Exception as exc:
+                warnings = list(snapshot.warnings)
+                warnings.append(f"now playing unavailable: {exc}")
+                snapshot = dataclasses.replace(snapshot, warnings=tuple(warnings))
+        return snapshot
+
+    def _resolve_ip(self) -> str:
+        for key in ("DENON_IP", "DENON_DEFAULT_IP"):
+            value = os.environ.get(key, "").strip()
+            if value:
+                return value
+
+        for path in self._config_paths():
+            value = self._config_value(path, "DENON_IP") or self._config_value(path, "DENON_DEFAULT_IP")
+            if value:
+                return value
+
+        cache_path = Path.home() / ".cache" / "denon_ip"
+        if cache_path.is_file():
+            return cache_path.read_text(encoding="utf-8").strip()
+        return ""
+
+    def _config_paths(self) -> tuple[Path, ...]:
+        paths: list[Path] = []
+        explicit = os.environ.get("DENON_CONFIG", "").strip()
+        if explicit:
+            paths.append(Path(explicit).expanduser())
+        config_dir = Path.home() / ".config" / "denon"
+        profile = os.environ.get("DENON_PROFILE", "").strip()
+        if profile and "/" not in profile and not profile.startswith("."):
+            paths.append(config_dir / "profiles" / profile)
+        paths.append(config_dir / "config")
+        return tuple(paths)
+
+    def _config_value(self, path: Path, key: str) -> str:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ""
+        for line in lines:
+            line = line.split("#", 1)[0].strip()
+            if not line or "=" not in line:
+                continue
+            got_key, value = line.split("=", 1)
+            if got_key.strip() == key:
+                return value.strip()
+        return ""
+
+    def _get_config(self, ip: str, type_id: int) -> str:
+        query = urllib.parse.urlencode({"type": str(type_id)})
+        conn = http.client.HTTPSConnection(
+            ip,
+            self.GET_CONFIG_PORT,
+            context=self._ssl_context,
+            timeout=self.timeout,
+        )
+        try:
+            conn.request("GET", f"/ajax/globals/get_config?{query}")
+            response = conn.getresponse()
+            body = response.read().decode("utf-8", "replace")
+            if response.status >= 400:
+                raise RuntimeError(f"HTTP {response.status}")
+            if not body.strip():
+                raise RuntimeError("empty response")
+            return body
+        finally:
+            conn.close()
+
+    def _fetch_now_playing(self, ip: str) -> NowPlayingSnapshot:
+        urls = (
+            f"http://{ip}/goform/formNetAudio_StatusXml.xml",
+            f"http://{ip}:8080/goform/formNetAudio_StatusXml.xml",
+        )
+        last_error: Exception | None = None
+        for url in urls:
+            try:
+                with urllib.request.urlopen(url, timeout=self.timeout) as response:
+                    text = response.read().decode("utf-8", "replace")
+                now = _parse_now_playing_xml(text)
+                if now.title or now.artist or now.album:
+                    return now
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("no now-playing metadata")
+
+    def _snapshot_from_xml(
+        self,
+        ip: str,
+        xml_by_type: dict[int, str],
+        warnings: Sequence[str],
+        errors: Sequence[str],
+    ) -> DashboardSnapshot:
+        identity_root = _xml_root(xml_by_type.get(3, ""))
+        power_root = _xml_root(xml_by_type.get(4, ""))
+        source_root = _xml_root(xml_by_type.get(7, ""))
+        volume_root = _xml_root(xml_by_type.get(12, ""))
+
+        main_source_index = _active_source_index(source_root, "1")
+        zone2_source_index = _active_source_index(source_root, "2")
+        sources = _source_rows(source_root, "1")
+
+        main = ZoneSnapshot(
+            power=_power_name(_zone_text(power_root, "MainZone", "Power")),
+            source=_display(_source_name(source_root, "1", main_source_index)),
+            source_index=main_source_index,
+            volume=_display(_raw_to_db(_zone_text(volume_root, "MainZone", "Volume"))),
+            mute=_display_mute(_zone_text(volume_root, "MainZone", "Mute")),
+        )
+
+        zone2 = None
+        if any((
+            _zone(power_root, "Zone2") is not None,
+            zone2_source_index,
+            _zone(volume_root, "Zone2") is not None,
+        )):
+            zone2 = ZoneSnapshot(
+                power=_power_name(_zone_text(power_root, "Zone2", "Power")),
+                source=_display(_source_name(source_root, "2", zone2_source_index)),
+                source_index=zone2_source_index,
+                volume=_display(_raw_to_db(_zone_text(volume_root, "Zone2", "Volume"))),
+                mute=_display_mute(_zone_text(volume_root, "Zone2", "Mute")),
+            )
+
+        return DashboardSnapshot(
+            receiver=_display(_find_text(identity_root, "FriendlyName"), "Denon AVR"),
+            ip=ip,
+            provider="direct",
+            main=main,
+            zone2=zone2,
+            sources=sources,
+            timestamp=datetime.now(),
+            warnings=tuple(warnings),
+            errors=tuple(errors),
+        )
 
 
 class ShellDashboardProvider(DashboardProvider):
@@ -214,6 +500,7 @@ class ShellDashboardProvider(DashboardProvider):
         return DashboardSnapshot(
             receiver=receiver,
             ip=ip,
+            provider="shell",
             main=main,
             zone2=zone2,
             now_playing=now,
@@ -222,6 +509,30 @@ class ShellDashboardProvider(DashboardProvider):
             warnings=tuple(warnings),
             errors=tuple(errors),
         )
+
+
+class FallbackDashboardProvider(DashboardProvider):
+    def __init__(self, primary: DashboardProvider, fallback: DashboardProvider) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self._fallback_reason = ""
+
+    def collect(self) -> DashboardSnapshot:
+        if self._fallback_reason:
+            snapshot = self.fallback.collect()
+            return self._with_fallback_warning(snapshot, self._fallback_reason)
+        try:
+            return self.primary.collect()
+        except ProviderUnavailable as exc:
+            self._fallback_reason = str(exc)
+        except Exception as exc:
+            self._fallback_reason = f"direct provider failed: {exc}"
+        snapshot = self.fallback.collect()
+        return self._with_fallback_warning(snapshot, self._fallback_reason)
+
+    def _with_fallback_warning(self, snapshot: DashboardSnapshot, reason: str) -> DashboardSnapshot:
+        warnings = (f"auto provider using shell fallback: {reason}", *snapshot.warnings)
+        return dataclasses.replace(snapshot, provider="shell-fallback", warnings=warnings)
 
 
 def _parse_label_lines(text: str) -> dict[str, str]:
@@ -311,7 +622,8 @@ class DashboardRenderer:
         height = max(10, height)
         lines: list[str] = []
         title = f"{snapshot.receiver} @ {snapshot.ip}"
-        subtitle = snapshot.timestamp.strftime("Updated %H:%M:%S")
+        provider = _display(snapshot.provider, "provider unknown")
+        subtitle = f"{snapshot.timestamp.strftime('Updated %H:%M:%S')} | {provider}"
         lines.append(self._header(title, subtitle, width))
 
         panel_width = width
@@ -475,6 +787,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--watch", action="store_true", help="redraw until interrupted")
     parser.add_argument("--interval", type=float, default=5.0, help="watch refresh interval in seconds")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
+    parser.add_argument("--provider", choices=("auto", "direct", "shell"), default="auto")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--unicode", action="store_true", help="reserve for Unicode rendering")
     mode.add_argument("--ascii", action="store_true", help="force ASCII rendering")
@@ -487,7 +800,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.interval <= 0:
         print("Error: --interval must be greater than zero", file=sys.stderr)
         return 2
-    provider = ShellDashboardProvider(args.script)
+    shell_provider = ShellDashboardProvider(args.script)
+    if args.provider == "shell":
+        provider: DashboardProvider = shell_provider
+    elif args.provider == "direct":
+        provider = DirectDashboardProvider(strict=False)
+    else:
+        provider = FallbackDashboardProvider(
+            DirectDashboardProvider(strict=True),
+            shell_provider,
+        )
     renderer = DashboardRenderer(color=args.color, unicode=args.unicode and not args.ascii)
     tracker = DashboardEventTracker()
     app = DashboardApp(provider, renderer, tracker, interval=args.interval)

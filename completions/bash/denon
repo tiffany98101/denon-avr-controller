@@ -109,7 +109,11 @@ _denon_complete() {
             return
             ;;
         dashboard-alt)
-            COMPREPLY=( $(compgen -W "--color --unicode --ascii --interval --watch" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--provider --color --unicode --ascii --interval --watch" -- "$cur") )
+            return
+            ;;
+        --provider)
+            COMPREPLY=( $(compgen -W "auto direct shell" -- "$cur") )
             return
             ;;
     esac
