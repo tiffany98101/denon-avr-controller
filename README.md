@@ -218,12 +218,14 @@ The existing shell dashboard remains the default. `dashboard-alt` starts a new
 Python-based dashboard path that separates snapshot collection from rendering so
 it can evolve without rewriting the current dashboard. Its default
 `--provider auto` mode tries direct Python receiver reads first and falls back to
-the shell provider if direct collection cannot start.
+the shell provider if direct collection cannot start. `--compare-providers`
+prints a one-shot diagnostic comparison between direct and shell snapshots.
 
 ```bash
-./denon.sh dashboard-alt
+./denon.sh dashboard-alt --provider auto
 ./denon.sh dashboard-alt --provider direct
 ./denon.sh dashboard-alt --provider shell
+./denon.sh dashboard-alt --compare-providers
 ./denon.sh dashboard-alt --watch
 ./denon.sh dashboard-alt --watch --interval 2
 DENON_DASHBOARD_WIDTH=120 DENON_DASHBOARD_HEIGHT=40 ./denon.sh dashboard-alt

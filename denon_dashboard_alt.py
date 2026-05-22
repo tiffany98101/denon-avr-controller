@@ -14,6 +14,7 @@ import http.client
 import json
 import os
 import shutil
+import socket
 import ssl
 import subprocess
 import sys
@@ -122,10 +123,34 @@ def _raw_to_db(value: Any) -> str:
         return ""
 
 
+def _bounded_unique(items: Sequence[str], limit: int = 8) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        text = _clean(item)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return tuple(result)
+
+
 def _xml_root(text: str) -> ET.Element | None:
     try:
         return ET.fromstring(text)
     except ET.ParseError:
+        return None
+
+
+def _xml_root_with_warning(text: str, label: str, warnings: list[str]) -> ET.Element | None:
+    if not _clean(text):
+        return None
+    try:
+        return ET.fromstring(text)
+    except ET.ParseError:
+        warnings.append(f"{label} XML parse failed")
         return None
 
 
@@ -194,10 +219,12 @@ def _parse_now_playing_xml(text: str) -> NowPlayingSnapshot:
     title = _find_text(root, "Song") or _find_text(root, "szLine1")
     artist = _find_text(root, "Artist") or _find_text(root, "szLine2")
     album = _find_text(root, "Album") or _find_text(root, "szLine3")
+    state = _find_text(root, "State") or _find_text(root, "PlayState") or _find_text(root, "PlaybackState")
     return NowPlayingSnapshot(
         title=_clean(title),
         artist=_clean(artist),
         album=_clean(album),
+        state=_clean(state),
     )
 
 
@@ -210,6 +237,48 @@ class DashboardProvider:
 
 class ProviderUnavailable(RuntimeError):
     """Raised when a provider cannot produce a useful snapshot."""
+
+
+def snapshot_to_dict(snapshot: DashboardSnapshot) -> dict[str, Any]:
+    zone2 = snapshot.zone2 or ZoneSnapshot()
+    return {
+        "provider": _clean(snapshot.provider),
+        "receiver": _clean(snapshot.receiver),
+        "ip": _clean(snapshot.ip),
+        "main_power": _clean(snapshot.main.power),
+        "main_source": _clean(snapshot.main.source),
+        "main_source_index": _clean(snapshot.main.source_index),
+        "main_volume": _clean(snapshot.main.volume),
+        "main_mute": _clean(snapshot.main.mute),
+        "zone2_power": _clean(zone2.power),
+        "zone2_source": _clean(zone2.source),
+        "zone2_source_index": _clean(zone2.source_index),
+        "zone2_volume": _clean(zone2.volume),
+        "zone2_mute": _clean(zone2.mute),
+        "now_title": _clean(snapshot.now_playing.title),
+        "now_artist": _clean(snapshot.now_playing.artist),
+        "now_album": _clean(snapshot.now_playing.album),
+        "playback_state": _clean(snapshot.now_playing.state),
+        "now_service": _clean(snapshot.now_playing.service),
+        "now_media_type": _clean(snapshot.now_playing.media_type),
+        "source_count": len(snapshot.sources),
+        "sources": [
+            {
+                "index": source.index,
+                "name": source.name,
+                "active": source.active,
+            }
+            for source in snapshot.sources
+        ],
+        "network": _clean(snapshot.network),
+        "player": _clean(snapshot.player),
+        "heos_status": _clean(snapshot.heos_status),
+        "warnings": list(snapshot.warnings),
+        "warning_count": len(snapshot.warnings),
+        "errors": list(snapshot.errors),
+        "error_count": len(snapshot.errors),
+        "timestamp": snapshot.timestamp.isoformat(timespec="seconds"),
+    }
 
 
 class DirectDashboardProvider(DashboardProvider):
@@ -242,6 +311,8 @@ class DirectDashboardProvider(DashboardProvider):
         for type_id in (3, 4, 7, 12):
             try:
                 xml_by_type[type_id] = self._get_config(ip, type_id)
+            except (TimeoutError, socket.timeout) as exc:
+                warnings.append(f"get_config type {type_id} timed out: {exc}")
             except Exception as exc:
                 warnings.append(f"get_config type {type_id} unavailable: {exc}")
 
@@ -257,9 +328,8 @@ class DirectDashboardProvider(DashboardProvider):
             try:
                 snapshot = dataclasses.replace(snapshot, now_playing=self._fetch_now_playing(ip))
             except Exception as exc:
-                warnings = list(snapshot.warnings)
-                warnings.append(f"now playing unavailable: {exc}")
-                snapshot = dataclasses.replace(snapshot, warnings=tuple(warnings))
+                warnings = [*snapshot.warnings, f"now playing endpoint unavailable: {exc}"]
+                snapshot = dataclasses.replace(snapshot, warnings=_bounded_unique(warnings))
         return snapshot
 
     def _resolve_ip(self) -> str:
@@ -350,14 +420,22 @@ class DirectDashboardProvider(DashboardProvider):
         warnings: Sequence[str],
         errors: Sequence[str],
     ) -> DashboardSnapshot:
-        identity_root = _xml_root(xml_by_type.get(3, ""))
-        power_root = _xml_root(xml_by_type.get(4, ""))
-        source_root = _xml_root(xml_by_type.get(7, ""))
-        volume_root = _xml_root(xml_by_type.get(12, ""))
+        parse_warnings = list(warnings)
+        identity_root = _xml_root_with_warning(xml_by_type.get(3, ""), "identity", parse_warnings)
+        power_root = _xml_root_with_warning(xml_by_type.get(4, ""), "power", parse_warnings)
+        source_root = _xml_root_with_warning(xml_by_type.get(7, ""), "sources", parse_warnings)
+        volume_root = _xml_root_with_warning(xml_by_type.get(12, ""), "volume", parse_warnings)
 
         main_source_index = _active_source_index(source_root, "1")
         zone2_source_index = _active_source_index(source_root, "2")
         sources = _source_rows(source_root, "1")
+        missing_expected = self._missing_expected_fields(
+            power_root,
+            source_root,
+            volume_root,
+            main_source_index,
+        )
+        parse_warnings.extend(missing_expected)
 
         main = ZoneSnapshot(
             power=_power_name(_zone_text(power_root, "MainZone", "Power")),
@@ -389,9 +467,31 @@ class DirectDashboardProvider(DashboardProvider):
             zone2=zone2,
             sources=sources,
             timestamp=datetime.now(),
-            warnings=tuple(warnings),
-            errors=tuple(errors),
+            warnings=_bounded_unique(parse_warnings),
+            errors=_bounded_unique(errors),
         )
+
+    def _missing_expected_fields(
+        self,
+        power_root: ET.Element | None,
+        source_root: ET.Element | None,
+        volume_root: ET.Element | None,
+        main_source_index: str,
+    ) -> list[str]:
+        warnings: list[str] = []
+        expected = (
+            ("main power missing", _zone_text(power_root, "MainZone", "Power")),
+            ("main volume missing", _zone_text(volume_root, "MainZone", "Volume")),
+            ("main mute missing", _zone_text(volume_root, "MainZone", "Mute")),
+        )
+        for label, value in expected:
+            if not _clean(value):
+                warnings.append(label)
+        if source_root is not None and not main_source_index:
+            warnings.append("active main source missing")
+        elif main_source_index and not _source_name(source_root, "1", main_source_index):
+            warnings.append(f"active main source {main_source_index} missing from source list")
+        return warnings
 
 
 class ShellDashboardProvider(DashboardProvider):
@@ -447,7 +547,7 @@ class ShellDashboardProvider(DashboardProvider):
                     power=_display(zone2_data.get("power")),
                     source=_display(zone2_data.get("sourceName")),
                     source_index=_clean(zone2_data.get("sourceIndex")),
-                    volume=_display_volume(zone2_data.get("volumeRaw"), raw_zone2=True),
+                    volume=_display(_raw_to_db(zone2_data.get("volumeRaw"))),
                     mute=_display_mute(zone2_data.get("muted")),
                 )
         else:
@@ -533,6 +633,129 @@ class FallbackDashboardProvider(DashboardProvider):
     def _with_fallback_warning(self, snapshot: DashboardSnapshot, reason: str) -> DashboardSnapshot:
         warnings = (f"auto provider using shell fallback: {reason}", *snapshot.warnings)
         return dataclasses.replace(snapshot, provider="shell-fallback", warnings=warnings)
+
+
+COMPARE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("provider", "Provider"),
+    ("receiver", "Receiver"),
+    ("main_power", "Main Power"),
+    ("main_source", "Main Source"),
+    ("main_volume", "Main Volume"),
+    ("main_mute", "Main Mute"),
+    ("zone2_power", "Zone 2 Power"),
+    ("zone2_source", "Zone 2 Source"),
+    ("zone2_volume", "Zone 2 Volume"),
+    ("zone2_mute", "Zone 2 Mute"),
+    ("now_title", "Now Title"),
+    ("now_artist", "Now Artist"),
+    ("playback_state", "Playback State"),
+    ("source_count", "Source Count"),
+    ("warning_count", "Warnings"),
+)
+
+
+def collect_provider_snapshot(provider: DashboardProvider, name: str) -> DashboardSnapshot:
+    try:
+        return provider.collect()
+    except Exception as exc:
+        return DashboardSnapshot(
+            provider=name,
+            errors=(f"{name} provider error: {exc}",),
+            timestamp=datetime.now(),
+        )
+
+
+def compare_snapshots(direct: DashboardSnapshot, shell: DashboardSnapshot) -> list[dict[str, str]]:
+    direct_dict = snapshot_to_dict(direct)
+    shell_dict = snapshot_to_dict(shell)
+    rows: list[dict[str, str]] = []
+    for key, label in COMPARE_FIELDS:
+        direct_value = direct_dict.get(key, "")
+        shell_value = shell_dict.get(key, "")
+        status = _comparison_status(direct_value, shell_value)
+        if key == "provider" and direct.errors:
+            status = "error"
+        if key == "provider" and shell.errors:
+            status = "error"
+        rows.append({
+            "field": label,
+            "status": status,
+            "direct": _comparison_value(direct_value),
+            "shell": _comparison_value(shell_value),
+        })
+    for error in direct.errors:
+        rows.append({"field": "Direct Error", "status": "error", "direct": error, "shell": ""})
+    for error in shell.errors:
+        rows.append({"field": "Shell Error", "status": "error", "direct": "", "shell": error})
+    return rows
+
+
+def _comparison_status(direct_value: Any, shell_value: Any) -> str:
+    direct_missing = _is_missing_comparison_value(direct_value)
+    shell_missing = _is_missing_comparison_value(shell_value)
+    if direct_missing and shell_missing:
+        return "same"
+    if direct_missing:
+        return "missing-direct"
+    if shell_missing:
+        return "missing-shell"
+    if direct_value == shell_value:
+        return "same"
+    return "different"
+
+
+def _is_missing_comparison_value(value: Any) -> bool:
+    if isinstance(value, int):
+        return False
+    if isinstance(value, list):
+        return len(value) == 0
+    return not _clean(value)
+
+
+def _comparison_value(value: Any) -> str:
+    if isinstance(value, list):
+        return f"{len(value)} items"
+    if value is None:
+        return "-"
+    text = str(value)
+    return text if text else "-"
+
+
+def render_provider_comparison(direct: DashboardSnapshot, shell: DashboardSnapshot) -> str:
+    rows = compare_snapshots(direct, shell)
+    lines = [
+        "dashboard-alt provider comparison",
+        "",
+        f"{'Field':<18} {'Status':<15} {'Direct':<28} Shell",
+        f"{'-' * 18} {'-' * 15} {'-' * 28} {'-' * 28}",
+    ]
+    for row in rows:
+        direct_value = _truncate(row["direct"], 28)
+        shell_value = _truncate(row["shell"], 60)
+        lines.append(f"{row['field']:<18} {row['status']:<15} {direct_value:<28} {shell_value}")
+    direct_warnings = "; ".join(direct.warnings)
+    shell_warnings = "; ".join(shell.warnings)
+    if direct_warnings or shell_warnings:
+        lines.extend(["", "Warnings"])
+        if direct_warnings:
+            lines.append(f"  direct: {direct_warnings}")
+        if shell_warnings:
+            lines.append(f"  shell:  {shell_warnings}")
+    return "\n".join(lines)
+
+
+def _truncate(text: str, width: int) -> str:
+    text = text.replace("\n", " ")
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 3)] + "..."
+
+
+def run_provider_comparison(script: str | Path) -> int:
+    direct = collect_provider_snapshot(DirectDashboardProvider(strict=False), "direct")
+    shell = collect_provider_snapshot(ShellDashboardProvider(script), "shell")
+    print(render_provider_comparison(direct, shell))
+    return 0
 
 
 def _parse_label_lines(text: str) -> dict[str, str]:
@@ -788,6 +1011,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval", type=float, default=5.0, help="watch refresh interval in seconds")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--provider", choices=("auto", "direct", "shell"), default="auto")
+    parser.add_argument("--compare-providers", action="store_true", help="compare direct and shell provider snapshots")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--unicode", action="store_true", help="reserve for Unicode rendering")
     mode.add_argument("--ascii", action="store_true", help="force ASCII rendering")
@@ -797,6 +1021,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.compare_providers:
+        return run_provider_comparison(args.script)
     if args.interval <= 0:
         print("Error: --interval must be greater than zero", file=sys.stderr)
         return 2

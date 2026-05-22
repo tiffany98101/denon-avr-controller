@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import denon_dashboard_alt as dashboard_alt
 from denon_dashboard_alt import (
     DirectDashboardProvider,
     DashboardEventTracker,
@@ -20,6 +21,9 @@ from denon_dashboard_alt import (
     SourceSnapshot,
     ZoneSnapshot,
     build_parser,
+    compare_snapshots,
+    render_provider_comparison,
+    snapshot_to_dict,
 )
 
 
@@ -57,6 +61,7 @@ NOW_XML = """
   <Song>Song One</Song>
   <Artist>Artist One</Artist>
   <Album>Album One</Album>
+  <State>Playing</State>
 </item>
 """
 
@@ -83,6 +88,13 @@ class FakeDirectProvider(DirectDashboardProvider):
         from denon_dashboard_alt import _parse_now_playing_xml
 
         return _parse_now_playing_xml(self.now_xml)
+
+
+class TimeoutDirectProvider(FakeDirectProvider):
+    def _get_config(self, ip: str, type_id: int) -> str:
+        if type_id == 12:
+            raise TimeoutError("slow receiver")
+        return super()._get_config(ip, type_id)
 
 
 class RaisingProvider(DashboardProvider):
@@ -174,6 +186,7 @@ def test_direct_provider_parses_main_zone_xml():
     assert snapshot.main.mute == "No"
     assert SourceSnapshot(index="13", name="HEOS Music", active=True) in snapshot.sources
     assert snapshot.now_playing.title == "Song One"
+    assert snapshot.now_playing.state == "Playing"
 
 
 def test_direct_provider_parses_zone2_xml():
@@ -204,6 +217,8 @@ def test_direct_provider_handles_missing_xml_fields():
     assert snapshot.main.volume == "Unknown"
     assert snapshot.main.mute == "Unknown"
     assert snapshot.sources == ()
+    assert "active main source missing" in snapshot.warnings
+    assert "main power missing" in snapshot.warnings
 
 
 def test_direct_provider_records_warnings_on_partial_fetch_failure():
@@ -212,6 +227,91 @@ def test_direct_provider_records_warnings_on_partial_fetch_failure():
     assert snapshot.provider == "direct"
     assert any("get_config type 12 unavailable" in warning for warning in snapshot.warnings)
     assert snapshot.errors == ()
+
+
+def test_direct_provider_distinguishes_timeout_warning():
+    provider = TimeoutDirectProvider({3: IDENTITY_XML, 4: POWER_XML, 7: SOURCE_XML})
+    snapshot = provider.collect()
+    assert any("get_config type 12 timed out" in warning for warning in snapshot.warnings)
+
+
+def test_direct_provider_treats_missing_zone2_as_absent():
+    source_xml = """
+    <SourceList>
+      <Zone zone="1" index="6">
+        <Source index="6"><Name>TV Audio</Name></Source>
+      </Zone>
+    </SourceList>
+    """
+    provider = FakeDirectProvider({
+        3: IDENTITY_XML,
+        4: "<listGlobals><MainZone><Power>1</Power></MainZone></listGlobals>",
+        7: source_xml,
+        12: "<listGlobals><MainZone><Volume>450</Volume><Mute>2</Mute></MainZone></listGlobals>",
+    })
+    snapshot = provider.collect()
+    assert snapshot.zone2 is None
+    assert snapshot.main.source == "TV Audio"
+    assert snapshot.warnings == ()
+
+
+def test_direct_provider_malformed_xml_records_parse_warning():
+    provider = FakeDirectProvider({
+        3: IDENTITY_XML,
+        4: "<listGlobals><MainZone><Power>1</Power></MainZone>",
+        7: SOURCE_XML,
+        12: VOLUME_XML,
+    })
+    snapshot = provider.collect()
+    assert "power XML parse failed" in snapshot.warnings
+    assert "main power missing" in snapshot.warnings
+    assert snapshot.main.source == "HEOS Music"
+
+
+def test_direct_provider_missing_active_source_warns_without_crashing():
+    source_xml = """
+    <SourceList>
+      <Zone zone="1">
+        <Source index="6"><Name>TV Audio</Name></Source>
+      </Zone>
+    </SourceList>
+    """
+    provider = FakeDirectProvider({3: IDENTITY_XML, 4: POWER_XML, 7: source_xml, 12: VOLUME_XML})
+    snapshot = provider.collect()
+    assert snapshot.main.source == "Unknown"
+    assert "active main source missing" in snapshot.warnings
+
+
+def test_direct_provider_active_source_missing_from_list_warns():
+    source_xml = """
+    <SourceList>
+      <Zone zone="1" index="13">
+        <Source index="6"><Name>TV Audio</Name></Source>
+      </Zone>
+    </SourceList>
+    """
+    provider = FakeDirectProvider({3: IDENTITY_XML, 4: POWER_XML, 7: source_xml, 12: VOLUME_XML})
+    snapshot = provider.collect()
+    assert snapshot.main.source == "Unknown"
+    assert "active main source 13 missing from source list" in snapshot.warnings
+
+
+def test_direct_provider_unknown_volume_and_mute_formats_do_not_crash():
+    volume_xml = "<listGlobals><MainZone><Volume>loud</Volume><Mute>maybe</Mute></MainZone></listGlobals>"
+    provider = FakeDirectProvider({3: IDENTITY_XML, 4: POWER_XML, 7: SOURCE_XML, 12: volume_xml})
+    snapshot = provider.collect()
+    assert snapshot.main.volume == "Unknown"
+    assert snapshot.main.mute == "Unknown"
+
+
+def test_heos_now_playing_xml_with_missing_fields_is_absent():
+    provider = FakeDirectProvider(
+        {3: IDENTITY_XML, 4: POWER_XML, 7: SOURCE_XML, 12: VOLUME_XML},
+        now_xml="<item><Song></Song></item>",
+    )
+    snapshot = provider.collect()
+    assert snapshot.now_playing.title is None or snapshot.now_playing.title == ""
+    assert snapshot.now_playing.artist is None or snapshot.now_playing.artist == ""
 
 
 def test_direct_provider_direct_mode_no_ip_returns_error_snapshot():
@@ -295,12 +395,14 @@ def test_dashboard_alt_parser_accepts_expected_options():
         "--ascii",
         "--provider",
         "direct",
+        "--compare-providers",
     ])
     assert args.watch is True
     assert args.interval == 2
     assert args.color == "never"
     assert args.ascii is True
     assert args.provider == "direct"
+    assert args.compare_providers is True
 
 
 @pytest.mark.parametrize("provider", ["auto", "direct", "shell"])
@@ -315,6 +417,95 @@ def test_auto_provider_falls_back_to_shell_when_direct_unavailable():
     assert snapshot.provider == "shell-fallback"
     assert snapshot.receiver == "Shell Receiver"
     assert any("auto provider using shell fallback: no direct IP" in warning for warning in snapshot.warnings)
+
+
+def test_snapshot_to_dict_is_plain_and_stable():
+    snapshot = complete_snapshot(provider="direct")
+    data = snapshot_to_dict(snapshot)
+    assert data["provider"] == "direct"
+    assert data["receiver"] == "Denon AVR-X1600H"
+    assert data["main_power"] == "ON"
+    assert data["zone2_volume"] == "raw 650"
+    assert data["now_title"] == "Song One"
+    assert data["source_count"] == 3
+    assert data["timestamp"] == "2026-05-21T18:30:00"
+    assert isinstance(data["sources"][0], dict)
+
+
+def test_compare_snapshots_reports_same_fields():
+    direct = complete_snapshot(provider="direct")
+    shell = complete_snapshot(provider="shell")
+    rows = compare_snapshots(direct, shell)
+    status_by_field = {row["field"]: row["status"] for row in rows}
+    assert status_by_field["Main Power"] == "same"
+    assert status_by_field["Main Source"] == "same"
+    assert status_by_field["Provider"] == "different"
+
+
+def test_compare_snapshots_reports_different_fields():
+    direct = complete_snapshot(provider="direct")
+    shell = complete_snapshot(
+        provider="shell",
+        main=ZoneSnapshot(power="ON", source="TV Audio", source_index="6", volume="-34.0 dB", mute="No"),
+    )
+    rows = compare_snapshots(direct, shell)
+    status_by_field = {row["field"]: row["status"] for row in rows}
+    assert status_by_field["Main Source"] == "different"
+    assert status_by_field["Main Volume"] == "different"
+
+
+def test_compare_snapshots_reports_missing_direct_fields():
+    direct = complete_snapshot(provider="direct", now_playing=NowPlayingSnapshot())
+    shell = complete_snapshot(provider="shell")
+    rows = compare_snapshots(direct, shell)
+    status_by_field = {row["field"]: row["status"] for row in rows}
+    assert status_by_field["Now Title"] == "missing-direct"
+    assert status_by_field["Now Artist"] == "missing-direct"
+    assert status_by_field["Playback State"] == "missing-direct"
+
+
+def test_compare_snapshots_reports_provider_error_without_crashing():
+    direct = DashboardSnapshot(provider="direct", errors=("direct failed",))
+    shell = complete_snapshot(provider="shell")
+    output = render_provider_comparison(direct, shell)
+    assert "dashboard-alt provider comparison" in output
+    assert "Direct Error" in output
+    assert "direct failed" in output
+    assert "error" in output
+
+
+def test_provider_comparison_output_is_readable_and_stable():
+    direct = complete_snapshot(provider="direct")
+    shell = complete_snapshot(provider="shell")
+    output = render_provider_comparison(direct, shell)
+    assert output.splitlines()[0] == "dashboard-alt provider comparison"
+    assert "Field              Status" in output
+    assert "Main Power         same" in output
+    assert "Provider           different" in output
+
+
+def test_compare_providers_mode_uses_both_providers_without_network(monkeypatch, capsys):
+    class DirectStaticProvider(DashboardProvider):
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def collect(self) -> DashboardSnapshot:
+            return complete_snapshot(provider="direct")
+
+    class ShellStaticProvider(DashboardProvider):
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def collect(self) -> DashboardSnapshot:
+            return complete_snapshot(provider="shell")
+
+    monkeypatch.setattr(dashboard_alt, "DirectDashboardProvider", DirectStaticProvider)
+    monkeypatch.setattr(dashboard_alt, "ShellDashboardProvider", ShellStaticProvider)
+    rc = dashboard_alt.main(["--compare-providers", "--script", str(SCRIPT)])
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "dashboard-alt provider comparison" in output
+    assert "Main Power         same" in output
 
 
 def test_dashboard_alt_shell_dispatch_does_not_force_receiver_discovery(tmp_path):
