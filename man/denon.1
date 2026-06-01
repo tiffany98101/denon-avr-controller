@@ -40,6 +40,23 @@ Receiver model, IP, firmware, all inputs and zone names.
 .TP
 .BR dashboard " [\-\-watch] [\-\-interval \fIsec\fR] [\-\-color \fIauto|always|never\fR] [\-\-unicode]"
 Live full\-screen status view.
+When
+.B dashboard \-\-watch
+runs in an interactive terminal, the following keys work without Enter:
+Up/Down adjust volume, Left/Right send previous/next, Space toggles
+play/pause,
+.B m
+toggles mute,
+.B 1
+through
+.B 4
+recall Quick Select 1 through 4,
+.B z
+cycles the volume/mute control target between Main and Zone2, and
+.B q
+quits the dashboard.
+Transport keys keep using the active HEOS/player path.
+These keys are disabled for non\-TTY input and one\-shot output.
 .TP
 .BR dashboard\-alt " [\-\-compare\-providers|\-\-json] [\-\-provider \fIauto|direct|shell\fR] [\-\-watch] [\-\-interval \fIsec\fR] [\-\-color \fIauto|always|never\fR] [\-\-unicode|\-\-ascii]"
 Experimental Python dashboard preview. The default
@@ -66,22 +83,8 @@ The existing shell dashboard remains the default for
 .BR dashboard .
 When
 .B dashboard\-alt \-\-watch
-runs in an interactive terminal, the following keys work without Enter:
-Up/Down adjust volume, Left/Right send previous/next, Space toggles
-play/pause,
-.B m
-toggles mute,
-.B 1
-through
-.B 4
-recall Quick Select 1 through 4,
-.B z
-cycles the volume/mute control target between Main and Zone2, and
-.B q
-quits the dashboard.
-Transport keys keep using the active HEOS/player path.
-These keys are disabled for non\-TTY input and are not used by the legacy Bash
-dashboard.
+runs in an interactive terminal, it supports the same keyboard controls as
+.BR dashboard .
 .SS Power and volume
 .TP
 .BR on | off

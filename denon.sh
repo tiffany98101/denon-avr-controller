@@ -369,6 +369,7 @@ Receiver status:
   denon doctor               Check dependencies, route, cache, and receiver reachability
   denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
+                             Watch keys: ↑/↓ volume, ←/→ prev/next, Space play/pause, m mute, 1-4 quick select, z zone, q quit
   denon dashboard-alt [--compare-providers|--json] [--provider auto|direct|shell] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show the experimental Python dashboard preview; denon dashboard remains the stable default
                              Examples: denon dashboard-alt --provider auto
@@ -4994,6 +4995,10 @@ EOF
     local top_available bottom_available available usable
     local min_top min_now min_bottom min_total deficit
 
+    if [[ "${dashboard_keyboard_active:-0}" == "1" ]]; then
+      footer_height=2
+    fi
+
     dash_layout_width="$cols"
     dash_layout_height="$rows"
     dash_layout_gap="$gap"
@@ -5379,6 +5384,14 @@ EOF
     local hints="" hint_width left_width left footer
 
     if [[ "${watch:-0}" == "1" ]]; then
+      if [[ "${dashboard_keyboard_active:-0}" == "1" ]]; then
+        hints="Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  1-4 quick select  z zone  q quit"
+        _denon_dashboard_fit "Control Target: ${dashboard_control_target:-Main}" "$width"
+        printf '\n'
+        _denon_dashboard_fit "$hints" "$width"
+        printf '\n'
+        return 0
+      fi
       hints="[q] Quit | [r] Redraw"
       hint_width=$(_denon_dashboard_visible_width "$hints")
       left_width=$((width - hint_width - 2))
@@ -5474,17 +5487,190 @@ EOF
     printf '\033[?25h'
   }
 
+  _denon_dashboard_parse_key() {
+    local sequence="$1"
+
+    case "$sequence" in
+      $'\033[A') echo "volume_up" ;;
+      $'\033[B') echo "volume_down" ;;
+      $'\033[C') echo "next" ;;
+      $'\033[D') echo "previous" ;;
+      " ") echo "play_pause" ;;
+      1) echo "quick_select_1" ;;
+      2) echo "quick_select_2" ;;
+      3) echo "quick_select_3" ;;
+      4) echo "quick_select_4" ;;
+      m|M) echo "mute_toggle" ;;
+      z|Z) echo "cycle_zone_target" ;;
+      q|Q) echo "quit" ;;
+      r|R) echo "redraw" ;;
+      *) return 1 ;;
+    esac
+  }
+
+  _denon_dashboard_now_ms() {
+    if [[ -n "${dashboard_test_now_ms:-}" ]]; then
+      printf '%s' "$dashboard_test_now_ms"
+      return 0
+    fi
+    date +%s%3N 2>/dev/null || awk 'BEGIN { printf "%.0f", systime() * 1000 }'
+  }
+
+  _denon_dashboard_throttle_allows_command() {
+    local now elapsed
+
+    now=$(_denon_dashboard_now_ms)
+    if [[ -n "${dashboard_last_command_ms:-}" ]]; then
+      elapsed=$((now - dashboard_last_command_ms))
+      if (( elapsed < ${dashboard_command_throttle_ms:-200} )); then
+        return 1
+      fi
+    fi
+    dashboard_last_command_ms="$now"
+    return 0
+  }
+
+  _denon_dashboard_key_event_name() {
+    local action="$1"
+
+    case "$action" in
+      volume_up) echo "Volume Up" ;;
+      volume_down) echo "Volume Down" ;;
+      previous) echo "Previous" ;;
+      next) echo "Next" ;;
+      play_pause) echo "Play/Pause" ;;
+      mute_toggle) echo "Mute Toggle" ;;
+      quick_select_*) echo "Quick Select ${action##*_}" ;;
+      *) echo "$action" ;;
+    esac
+  }
+
+  _denon_dashboard_command_event_name() {
+    local action="$1"
+
+    case "$action" in
+      volume_up) echo "volume up" ;;
+      volume_down) echo "volume down" ;;
+      previous) echo "previous" ;;
+      next) echo "next" ;;
+      play_pause)
+        case "$(_denon_lower "${dash_transport_state:-}")" in
+          play|playing) echo "pause" ;;
+          *) echo "play" ;;
+        esac
+        ;;
+      mute_toggle) echo "mute toggle" ;;
+      quick_select_*) echo "quick select ${action##*_}" ;;
+      *) echo "$action" ;;
+    esac
+  }
+
+  _denon_dashboard_zone2_is_muted() {
+    case "$(_denon_lower "${dash_zone2_muted:-}")" in
+      yes|true|1|on|muted) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+
+  _denon_dashboard_run_action() {
+    local action="$1"
+    local step="${DENON_VOLUME_STEP_DB:-1}"
+    step="${step#[-+]}"
+
+    case "$action" in
+      volume_up)
+        if [[ "${dashboard_control_target:-Main}" == "Zone2" ]]; then
+          _denon_zone2_change_volume "$step"
+        else
+          _denon_change_volume "$step"
+        fi
+        ;;
+      volume_down)
+        if [[ "${dashboard_control_target:-Main}" == "Zone2" ]]; then
+          _denon_zone2_change_volume "-$step"
+        else
+          _denon_change_volume "-$step"
+        fi
+        ;;
+      mute_toggle)
+        if [[ "${dashboard_control_target:-Main}" == "Zone2" ]]; then
+          if _denon_dashboard_zone2_is_muted; then
+            _denon_set_config 12 '<Zone2><Mute>2</Mute></Zone2>'
+          else
+            _denon_set_config 12 '<Zone2><Mute>1</Mute></Zone2>'
+          fi
+        else
+          _denon_toggle mute
+        fi
+        ;;
+      previous)
+        _denon_heos_control prev
+        ;;
+      next)
+        _denon_heos_control next
+        ;;
+      play_pause)
+        case "$(_denon_lower "${dash_transport_state:-}")" in
+          play|playing) _denon_heos_control pause ;;
+          *) _denon_heos_control play ;;
+        esac
+        ;;
+      quick_select_*)
+        _denon_quick_select "${action##*_}"
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
   _denon_dashboard_handle_key() {
     local key="$1"
+    local action key_event command_event
 
-    case "$key" in
-      q|Q)
+    action=$(_denon_dashboard_parse_key "$key" 2>/dev/null) || return 0
+    case "$action" in
+      quit)
         dashboard_stop_pending=1
         dashboard_exit_status=0
         ;;
-      r|R)
+      redraw)
         dashboard_resize_pending=0
         _denon_dashboard_redraw
+        ;;
+      cycle_zone_target)
+        _denon_dashboard_throttle_allows_command || return 0
+        if [[ "${dashboard_control_target:-Main}" == "Main" ]]; then
+          dashboard_control_target="Zone2"
+        else
+          dashboard_control_target="Main"
+        fi
+        _denon_dashboard_add_event "Key: Control Target: $dashboard_control_target"
+        dashboard_resize_pending=0
+        _denon_dashboard_redraw
+        ;;
+      *)
+        _denon_dashboard_throttle_allows_command || return 0
+        key_event=$(_denon_dashboard_key_event_name "$action")
+        _denon_dashboard_add_event "Key: $key_event"
+        if ! _denon_dashboard_run_action "$action" >/dev/null 2>&1; then
+          command_event=$(_denon_dashboard_command_event_name "$action")
+          case "$action" in
+            previous|next|play_pause)
+              _denon_dashboard_add_event "Transport command unavailable: $command_event"
+              ;;
+            volume_up|volume_down|mute_toggle)
+              if [[ "${dashboard_control_target:-Main}" == "Zone2" ]]; then
+                _denon_dashboard_add_event "Zone2 command unavailable: $command_event"
+              else
+                _denon_dashboard_add_event "Command unavailable: $command_event"
+              fi
+              ;;
+            *)
+              _denon_dashboard_add_event "Command unavailable: $command_event"
+              ;;
+          esac
+        fi
         ;;
     esac
   }
@@ -5492,9 +5678,14 @@ EOF
   _denon_dashboard_poll_key() {
     local timeout="$1"
     local key=""
+    local rest=""
 
     [[ -t 0 ]] || return 1
     if read -rsn1 -t "$timeout" key 2>/dev/null; then
+      if [[ "$key" == $'\033' ]]; then
+        read -rsn2 -t 0.02 rest 2>/dev/null || rest=""
+        key="$key$rest"
+      fi
       _denon_dashboard_handle_key "$key"
       return 0
     fi
@@ -5549,6 +5740,10 @@ EOF
     local dashboard_diagnostics=0
     local dashboard_saved_stty=""
     local dashboard_terminal_active=0
+    local dashboard_keyboard_active=0
+    local dashboard_control_target="Main"
+    local dashboard_last_command_ms=""
+    local dashboard_command_throttle_ms=200
 
     dashboard_ascii=0
     case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
@@ -5623,8 +5818,10 @@ EOF
       if [[ -t 0 ]]; then
         dashboard_saved_stty=$(stty -g 2>/dev/null || printf '')
         if [[ -n "$dashboard_saved_stty" ]]; then
-          stty -echo -icanon min 0 time 0 2>/dev/null || true
-          dashboard_terminal_active=1
+          if stty -echo -icanon min 0 time 0 2>/dev/null; then
+            dashboard_terminal_active=1
+            dashboard_keyboard_active=1
+          fi
         fi
       fi
       printf '\033[?25l'

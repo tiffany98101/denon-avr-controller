@@ -13,6 +13,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).parent.parent / "denon.sh"
 FIXTURES = Path(__file__).parent / "fixtures"
 SCRIPT_STR = str(SCRIPT)
@@ -870,6 +872,189 @@ class TestDashboardRecentEvents:
         assert "HEOS: Playing -> Paused" not in r.stdout
 
 
+class TestDashboardInteractiveKeys:
+    @pytest.mark.parametrize(("sequence", "action"), [
+        (r"$'\033[A'", "volume_up"),
+        (r"$'\033[B'", "volume_down"),
+        (r"$'\033[C'", "next"),
+        (r"$'\033[D'", "previous"),
+        ("' '", "play_pause"),
+        ("'m'", "mute_toggle"),
+        ("'q'", "quit"),
+        ("'1'", "quick_select_1"),
+        ("'2'", "quick_select_2"),
+        ("'3'", "quick_select_3"),
+        ("'4'", "quick_select_4"),
+        ("'z'", "cycle_zone_target"),
+    ])
+    def test_main_dashboard_key_parser_maps_controls(self, sequence, action):
+        code = textwrap.dedent(f"""\
+            _denon_dashboard_parse_key {sequence}
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == action
+
+    def test_main_dashboard_control_target_cycles_main_zone2_main(self):
+        code = textwrap.dedent("""\
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            _denon_dashboard_redraw() { :; }
+
+            _denon_dashboard_handle_key z
+            printf 'target1=%s\\n' "$dashboard_control_target"
+            printf 'events1=%s\\n' "$dashboard_events"
+            _denon_dashboard_handle_key z
+            printf 'target2=%s\\n' "$dashboard_control_target"
+            printf 'events2=%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "target1=Zone2" in r.stdout
+        assert "Key: Control Target: Zone2" in r.stdout
+        assert "target2=Main" in r.stdout
+        assert "Key: Control Target: Main" in r.stdout
+
+    def test_main_dashboard_volume_and_mute_dispatch_selected_target(self):
+        code = textwrap.dedent("""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            dash_zone2_muted="No"
+            _denon_change_volume() { calls="${calls}main-volume:$1"$'\\n'; }
+            _denon_zone2_change_volume() { calls="${calls}zone2-volume:$1"$'\\n'; }
+            _denon_toggle() { calls="${calls}main-toggle:$1"$'\\n'; }
+            _denon_set_config() { calls="${calls}set-config:$1:$2"$'\\n'; }
+            _denon_dashboard_redraw() { :; }
+
+            _denon_dashboard_handle_key $'\\033[A'
+            _denon_dashboard_handle_key $'\\033[B'
+            _denon_dashboard_handle_key m
+            _denon_dashboard_handle_key z
+            _denon_dashboard_handle_key $'\\033[A'
+            _denon_dashboard_handle_key $'\\033[B'
+            _denon_dashboard_handle_key m
+            dash_zone2_muted="Yes"
+            _denon_dashboard_handle_key m
+            printf '%s' "$calls"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "main-volume:1" in r.stdout
+        assert "main-volume:-1" in r.stdout
+        assert "main-toggle:mute" in r.stdout
+        assert "zone2-volume:1" in r.stdout
+        assert "zone2-volume:-1" in r.stdout
+        assert "set-config:12:<Zone2><Mute>1</Mute></Zone2>" in r.stdout
+        assert "set-config:12:<Zone2><Mute>2</Mute></Zone2>" in r.stdout
+
+    @pytest.mark.parametrize(("key", "call", "event"), [
+        ("1", "quick:1", "Key: Quick Select 1"),
+        ("2", "quick:2", "Key: Quick Select 2"),
+        ("3", "quick:3", "Key: Quick Select 3"),
+        ("4", "quick:4", "Key: Quick Select 4"),
+    ])
+    def test_main_dashboard_quick_select_hotkeys_dispatch_existing_path(self, key, call, event):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            _denon_quick_select() {{ calls="${{calls}}quick:$1"$'\\n'; }}
+
+            _denon_dashboard_handle_key {key}
+            printf 'calls=%s\\n' "$calls"
+            printf 'events=%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert call in r.stdout
+        assert event in r.stdout
+
+    @pytest.mark.parametrize(("key", "event"), [
+        (r"$'\033[A'", "Key: Volume Up"),
+        (r"$'\033[B'", "Key: Volume Down"),
+        (r"$'\033[D'", "Key: Previous"),
+        (r"$'\033[C'", "Key: Next"),
+        ("' '", "Key: Play/Pause"),
+        ("'m'", "Key: Mute Toggle"),
+    ])
+    def test_main_dashboard_keypress_adds_recent_event_feedback(self, key, event):
+        code = textwrap.dedent(f"""\
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            _denon_change_volume() {{ :; }}
+            _denon_toggle() {{ :; }}
+            _denon_heos_control() {{ :; }}
+
+            _denon_dashboard_handle_key {key}
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert event in r.stdout
+
+    def test_main_dashboard_q_quits_without_key_feedback(self):
+        code = textwrap.dedent("""\
+            dashboard_stop_pending=0
+            dashboard_exit_status=99
+            dashboard_events=""
+            _denon_dashboard_handle_key q
+            printf 'stop=%s status=%s events=%s\\n' "$dashboard_stop_pending" "$dashboard_exit_status" "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "stop=1" in r.stdout
+        assert "status=0" in r.stdout
+        assert "Key:" not in r.stdout
+
+    def test_main_dashboard_failed_transport_keeps_running_and_adds_warning_event(self):
+        code = textwrap.dedent("""\
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            dashboard_stop_pending=0
+            _denon_heos_control() { return 1; }
+
+            _denon_dashboard_handle_key $'\\033[C'
+            printf 'stop=%s\\n%s\\n' "$dashboard_stop_pending" "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "stop=0" in r.stdout
+        assert "Key: Next" in r.stdout
+        assert "Transport command unavailable: next" in r.stdout
+
+    def test_main_dashboard_throttle_suppresses_held_key_events(self):
+        code = textwrap.dedent("""\
+            calls=0
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=200
+            dashboard_test_now_ms=1000
+            dashboard_events=""
+            last_dashboard_event=""
+            _denon_change_volume() { calls=$((calls + 1)); }
+
+            _denon_dashboard_handle_key $'\\033[A'
+            _denon_dashboard_handle_key $'\\033[A'
+            dashboard_test_now_ms=1250
+            _denon_dashboard_handle_key $'\\033[A'
+            printf 'calls=%s\\n%s\\n' "$calls" "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "calls=2" in r.stdout
+        assert r.stdout.count("Key: Volume Up") == 1
+
+
 class TestDashboardDiagnostics:
     DASHBOARD_STATE = """\
         dash_receiver="Denon AVR-X1600H"
@@ -954,6 +1139,36 @@ class TestDashboardDiagnostics:
         assert "Zone 2" in r.stdout
         assert "Receiver Info" in r.stdout
         assert "Receiver / Zone 2" not in r.stdout
+
+    def test_dashboard_interactive_target_and_help_do_not_affect_one_shot_output(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            dashboard_control_target="Zone2"
+            dashboard_keyboard_active=0
+            watch=0
+            DENON_DASHBOARD_WIDTH=120
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Control Target:" not in r.stdout
+        assert "Keys:" not in r.stdout
+        assert "quick select" not in r.stdout.lower()
+
+    def test_dashboard_interactive_output_shows_target_and_hotkey_help(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            dashboard_control_target="Zone2"
+            dashboard_keyboard_active=1
+            watch=1
+            DENON_DASHBOARD_WIDTH=140
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Control Target: Zone2" in r.stdout
+        assert "Keys: ↑/↓ volume" in r.stdout
+        assert "1-4 quick select  z zone" in r.stdout
 
     def test_dashboard_body_display_values_are_normalized(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\
