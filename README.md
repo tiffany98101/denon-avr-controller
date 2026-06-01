@@ -8,7 +8,7 @@ Current version: `v1.2.0-beta.4`.
 
 The project currently supports a Bash shell CLI, a terminal dashboard, safe receiver diagnostics/data inventory commands, HEOS playback metadata/control where the receiver exposes it, and a native PowerShell module. It is a local-network receiver control and diagnostics tool; it does not use a cloud service.
 
-The Bash CLI has the widest feature coverage. The PowerShell module covers common read-only status, source, volume, mute, Zone 2, dashboard, and basic control workflows, but it does not yet cover every Bash CLI data discovery or HEOS workflow.
+The Bash CLI remains the source-of-truth implementation. The PowerShell module now exposes the same user-facing command surface where practical with native PowerShell functions, a Bash-style `Invoke-DenonCommand` migration shim, shared config/cache behavior, HEOS helper integration, data/raw/snapshot/profile/preset helpers, and PowerShell argument-completion metadata.
 
 ## Features
 
@@ -22,7 +22,7 @@ The Bash CLI has the widest feature coverage. The PowerShell module covers commo
 - Receiver diagnostics through `doctor`, `signal-debug`, `data summary`, and `data fields`.
 - Safe read-only data dump and discovery commands for supported HTTP/XML, AppCommand, Deviceinfo, telnet query, HEOS, and web UI surfaces.
 - Snapshot and diff commands for comparing receiver XML state captures.
-- Native PowerShell module support for PowerShell 7+ and Windows PowerShell 5.1 core workflows.
+- Native PowerShell module support for PowerShell 7+ on Linux, macOS, and Windows.
 
 ## Screenshots
 
@@ -37,7 +37,7 @@ The Bash CLI has the widest feature coverage. The PowerShell module covers commo
 - Shell completions are available for bash, zsh, and fish. Completion support does not mean `denon.sh` is sourced or executed as zsh/fish; the runtime script requires bash.
 - HEOS helper workflows: `python3`.
 - Tests: `pytest`.
-- PowerShell module: `pwsh` / PowerShell 7+ preferred; Windows PowerShell 5.1 should work for core module commands.
+- PowerShell module: `pwsh` / PowerShell 7+.
 - Optional development checks: `shellcheck`, `Pester`, `PSScriptAnalyzer`.
 
 ## Installation
@@ -226,7 +226,7 @@ DENON_HEOS_GID=...
 DENON_DATA_DISCOVERY_MAX_TYPE=30
 ```
 
-The PowerShell module keeps receiver configuration in memory for the current PowerShell session. It also checks `DENON_IP` and then `DENON_DEFAULT_IP` as fallbacks.
+The PowerShell module reads the same `DENON_CONFIG` key/value file format and honors environment overrides. Its receiver lookup order is `Set-DenonReceiver` session state, `DENON_IP`, cached receiver IP, and `DENON_DEFAULT_IP`; `Find-DenonReceiver -RefreshCache` also attempts SSDP discovery.
 
 ### HTTPS/TLS Verification
 
@@ -373,7 +373,7 @@ Configure the receiver for the current PowerShell session:
 Set-DenonReceiver -IpAddress 192.0.2.10
 ```
 
-If the receiver's HTTPS certificate is not trusted:
+The PowerShell module defaults to receiver-compatible certificate handling, matching the Bash CLI's default `curl -k` behavior. To require system trust, set `DENON_CURL_INSECURE=0`. If the receiver's HTTPS certificate is not trusted and you have opted into strict verification, you can explicitly bypass validation for the current PowerShell session:
 
 ```powershell
 Set-DenonReceiver -IpAddress 192.0.2.10 -SkipCertificateCheck
@@ -391,6 +391,9 @@ Get-DenonSources
 Get-DenonZone2Status
 Get-DenonSleep
 Show-DenonDashboard
+Get-DenonDataSummary
+Get-DenonDataFields
+Get-DenonRawStatus
 ```
 
 Control examples:
@@ -402,6 +405,22 @@ Set-DenonVolume -Db -42
 Step-DenonVolume -Db -1
 Set-DenonSource -Name "HEOS Music"
 Set-DenonZone2Power -Off
+Set-DenonSoundMode -Mode movie
+Invoke-DenonQuickSelect -Number 1
+Invoke-DenonHeos queue
+Invoke-DenonCommand status
+```
+
+Configuration, snapshots, and completion metadata:
+
+```powershell
+Set-DenonReceiverIp 192.0.2.10
+Get-DenonConfig
+Set-DenonConfig -Key DENON_DEFAULT_IP -Value 192.0.2.10
+Get-DenonProfile
+Save-DenonSnapshot
+Get-DenonCompletionCommandSurface
+Register-DenonArgumentCompleter
 ```
 
 Validate the module:
@@ -416,6 +435,12 @@ Run module tests if Pester is installed:
 
 ```powershell
 Invoke-Pester ./powershell/DenonAvrController/DenonAvrController.Tests.ps1
+```
+
+Run the no-dependency PowerShell validation script:
+
+```powershell
+./powershell/DenonAvrController/Test-DenonAvrController.ps1
 ```
 
 Run ScriptAnalyzer if installed:
@@ -579,7 +604,7 @@ make uninstall-mpris
 - HEOS/AIOS firmware is separate from AVR mainboard firmware.
 - Commands require local network access to the receiver.
 - Some control commands change receiver state immediately; start with read-only commands when validating a new receiver.
-- The PowerShell module does not yet cover every Bash CLI feature, especially full HEOS browse/search/queue workflows, full data discovery, capability inventory, snapshots, and diffing.
+- The PowerShell module mirrors the Bash command surface where practical, but the full-screen Bash dashboard renderer and Avahi/ARP discovery tiers remain shell-specific.
 - **MPRIS2 bridge — KDE System Settings → Sound:** the Sound settings page shows the bridge as a playback device with per-channel (L/R) volume sliders and a standalone mute toggle. Neither control works: MPRIS2 has no per-channel volume API, and its `Volume` property is a single scalar with no mute field. These controls are a KDE UI artefact of mapping MPRIS onto ALSA's device model; there is no workaround at the bridge level. **Use the Plasma Audio Volume widget's unified slider instead** — it correctly tracks receiver volume and treats dragging to zero as a mute request. For mute from the keyboard or CLI, use `denon mute` / `denon unmute` or bind a keyboard shortcut to those commands.
 
 ## Development Notes

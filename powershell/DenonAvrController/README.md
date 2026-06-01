@@ -5,8 +5,7 @@ to the receiver with PowerShell/.NET HTTP, XML, and TCP socket APIs. It does not
 require WSL, Bash, zsh, Git Bash, Cygwin, MSYS, curl, nc, sed, awk, or grep at
 runtime.
 
-PowerShell 7+ on Windows is the primary target. Windows PowerShell 5.1 should
-work for the core commands where practical.
+PowerShell 7+ is the supported target on Linux, macOS, and Windows.
 
 ## Install PowerShell 7
 
@@ -40,7 +39,7 @@ Get-Command -Module DenonAvrController
 
 ## Configure the receiver
 
-Configuration is stored in memory for the current PowerShell session:
+Configuration can be stored in memory for the current PowerShell session:
 
 ```powershell
 Set-DenonReceiver -IpAddress 192.168.1.100
@@ -48,19 +47,32 @@ Set-DenonReceiver -IpAddress 192.168.1.100
 
 Replace `192.168.1.100` with your AVR's local IP address.
 
+To persist the receiver IP in the shared Denon cache:
+
+```powershell
+Set-DenonReceiverIp 192.168.1.100
+```
+
+The module resolves the receiver in this order:
+
+1. `Set-DenonReceiver` session state.
+2. `DENON_IP`.
+3. Cached IP from `Set-DenonReceiverIp` or discovery.
+4. `DENON_DEFAULT_IP`.
+5. SSDP when using `Find-DenonReceiver -RefreshCache`.
+
 Many Denon receivers present a self-signed or otherwise untrusted HTTPS
-certificate on port 10443. Certificate validation is enabled by default. If your
-receiver fails with a certificate trust error, explicitly allow that receiver's
-local certificate with:
+certificate on port 10443. Like the Bash CLI, the module defaults to
+receiver-compatible certificate handling. To require system trust, set
+`DENON_CURL_INSECURE=0`. To explicitly allow an untrusted receiver certificate
+for the current session:
 
 ```powershell
 Set-DenonReceiver -IpAddress 192.168.1.100 -SkipCertificateCheck
 ```
 
 In PowerShell 7+, `-SkipCertificateCheck` uses PowerShell's per-request
-certificate bypass. In Windows PowerShell 5.1, there is no per-request equivalent,
-so the module temporarily installs a .NET certificate callback for the duration
-of the individual request and restores the previous callback afterward.
+certificate bypass.
 
 You can also set an environment fallback before importing or using the module:
 
@@ -68,7 +80,15 @@ You can also set an environment fallback before importing or using the module:
 $env:DENON_IP = '192.168.1.100'
 ```
 
-If `DENON_IP` is not set, the module also checks `DENON_DEFAULT_IP`.
+The module also reads the Bash-compatible config file. Use these helpers:
+
+```powershell
+Get-DenonConfig
+Set-DenonConfig -Key DENON_DEFAULT_IP -Value 192.168.1.100
+Remove-DenonConfig -Key DENON_DEFAULT_IP
+Get-DenonProfile
+Set-DenonProfile -Name living-room -Key DENON_DEFAULT_IP -Value 192.168.1.100
+```
 
 ## Read-only commands
 
@@ -83,6 +103,10 @@ Get-DenonSources
 Get-DenonZone2Status
 Get-DenonSleep
 Show-DenonDashboard
+Get-DenonDataSummary
+Get-DenonDataFields
+Get-DenonDataDump
+Get-DenonRawStatus
 ```
 
 Read-only functions:
@@ -96,6 +120,12 @@ Read-only functions:
 - `Get-DenonZone2Status`
 - `Get-DenonSleep`
 - `Show-DenonDashboard`
+- `Get-DenonRawConfig`
+- `Get-DenonRawStatus`
+- `Get-DenonDataFields`
+- `Get-DenonDataSummary`
+- `Get-DenonDataDump`
+- `Get-DenonDataCapabilities`
 
 `Get-DenonStatus` returns a structured object:
 
@@ -129,10 +159,11 @@ report stale or ambiguous XML mute values while HEOS audio is playing.
 Zone, Index, ReceiverName, DisplayName, Active
 ```
 
-`Get-DenonReceiverSummary` returns a compact diagnostics object with receiver,
-volume, system, now-playing, firmware-note, and tool-version sections. It mirrors
-the shell CLI's safe read-only diagnostics where practical, but it does not port
-the full shell data discovery and capability-inventory workflow.
+`Get-DenonReceiverSummary` and `Get-DenonDataSummary` return compact diagnostics
+objects with receiver, volume, system, now-playing, firmware-note, and
+tool-version sections. `Get-DenonDataDump`, `Get-DenonDataFields`,
+`Get-DenonDataCapabilities`, and `Invoke-DenonDataDiscover` cover the safe
+read-only data inventory paths used by the Bash CLI.
 
 ## State-changing commands
 
@@ -143,6 +174,7 @@ Set-DenonMute -On
 Set-DenonMute -Off
 Step-DenonVolume -Db -1
 Set-DenonSource -Name "HEOS Music"
+Set-DenonZone2Source -Name "Phono"
 ```
 
 Volume commands refuse targets above `-10.0` dB by default. Adjust the session
@@ -158,21 +190,34 @@ Additional state-changing commands:
 - `Set-DenonVolume -Db -42`
 - `Step-DenonVolume -Db 1`
 - `Set-DenonSource -Index 13`
+- `Set-DenonZone2Source -Name "Phono"`
 - `Set-DenonZone2Power -On`
 - `Set-DenonZone2Power -Off`
 - `Set-DenonZone2Mute -On`
 - `Set-DenonZone2Mute -Off`
 - `Set-DenonZone2Volume -Raw 650`
 - `Step-DenonZone2Volume -Db -1`
+- `Set-DenonSleep -Value 30`
+- `Invoke-DenonQuickSelect -Number 1`
+- `Set-DenonSoundMode -Mode movie`
+- `Set-DenonDynamicEq -State on`
+- `Set-DenonDynamicVolume -Level light`
+- `Set-DenonCinemaEq -State off`
+- `Set-DenonMultEq -Mode reference`
+- `Set-DenonTone -Control bass -Value 2`
+- `Invoke-DenonTransport -Action play`
+- `Invoke-DenonHeos queue`
+- `Invoke-DenonListeningPreset -Name movie`
 
 The state-changing commands support `-WhatIf` through PowerShell's common
 parameter behavior.
 
 ## Network behavior
 
-This first PowerShell pass prefers explicit IP configuration. It does not
-attempt full SSDP discovery. The receiver must be reachable on the same local
-network as the PowerShell host.
+The receiver must be reachable on the same local network as the PowerShell host.
+`Find-DenonReceiver -RefreshCache` checks configured IPs and then sends an SSDP
+M-SEARCH probe. Avahi/mDNS and LAN ARP scanning remain Bash-specific discovery
+paths.
 
 The HTTP/XML implementation follows the existing Bash CLI behavior reference:
 
@@ -198,17 +243,48 @@ through the Denon telnet-style command interface.
 `Get-DenonNowPlaying` uses the receiver's network-audio XML endpoint and, when
 available, the HEOS CLI read-only player status commands.
 
-## Later work
+## Bash-style migration shim
 
-The initial PowerShell module intentionally does not port every Bash feature.
-Left for later:
+`Invoke-DenonCommand` accepts Bash-style command names and dispatches to native
+PowerShell functions:
 
-- Full terminal dashboard parity
-- Full HEOS browse/search/queue support
-- Shell `data discover` / `data capabilities` parity
-- Presets
-- Profiles
-- Snapshot diff
-- `watch-event`
-- MQTT/Home Assistant
-- UPnP eventing
+```powershell
+Invoke-DenonCommand status
+Invoke-DenonCommand source heos
+Invoke-DenonCommand heos queue
+Invoke-DenonCommand data fields --all
+Invoke-DenonCommand data discover
+Invoke-DenonCommand raw get 3
+Invoke-DenonCommand config set DENON_DEFAULT_IP 192.168.1.100
+```
+
+The shim is intended for migration and parity checks. Idiomatic scripts should
+prefer the named PowerShell functions.
+
+## Completion
+
+PowerShell completion metadata is available through:
+
+```powershell
+Get-DenonCompletionCommandSurface
+Register-DenonArgumentCompleter
+```
+
+The Bash CLI still generates bash, zsh, and fish completion files with
+`denon completion bash|zsh|fish|install`.
+
+## Validation
+
+The repository includes both Pester tests and a no-dependency validation script:
+
+```powershell
+Invoke-Pester ./powershell/DenonAvrController/DenonAvrController.Tests.ps1
+./powershell/DenonAvrController/Test-DenonAvrController.ps1
+```
+
+## Remaining shell-specific gaps
+
+- The full-screen Bash dashboard has more detailed layout/watch behavior than
+  the intentionally simpler `Show-DenonDashboard`.
+- Avahi/mDNS and ARP/LAN scan discovery remain Bash-specific; PowerShell uses
+  configured IPs, cache, default IP, and SSDP.

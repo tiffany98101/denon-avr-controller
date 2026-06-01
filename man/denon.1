@@ -167,6 +167,15 @@ to choose explicitly and
 to overwrite a different existing user completion file.
 Completion support for zsh and fish is interactive shell integration only; the
 command runtime remains bash.
+.SH POWERSHELL MODULE
+The repository also ships a native PowerShell 7+ module at
+.IR powershell/DenonAvrController/DenonAvrController.psd1 .
+It exposes the Bash command surface through PowerShell functions and the
+.B Invoke-DenonCommand
+migration shim. It supports shared config/cache behavior, raw/data helpers,
+HEOS helper integration, snapshots, profiles, presets, watch-event style polling,
+and PowerShell completion metadata where practical. Avahi/ARP discovery and the
+full Bash dashboard renderer remain shell-specific.
 .SH ENVIRONMENT
 .TP
 .B DENON_IP

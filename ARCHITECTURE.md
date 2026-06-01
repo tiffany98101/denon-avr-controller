@@ -8,7 +8,7 @@
 
 ## 1. What this project is (and what it is not)
 
-`denon-avr-controller` is an **operator's CLI plus a sanctioned optional desktop bridge** for a Denon AVR sitting on a trusted home LAN. It wraps the receiver's three native control surfaces — the HTTPS XML config API, the legacy Telnet ASCII protocol, and the HEOS JSON-over-TCP protocol — behind a bash runtime script and a single sourced Bash function called `denon`. A separate Python MPRIS2 daemon (`denon-mpris`) optionally bridges the receiver to the user's desktop session over D-Bus.
+`denon-avr-controller` is an **operator's CLI plus a sanctioned optional desktop bridge** for a Denon AVR sitting on a trusted home LAN. It wraps the receiver's three native control surfaces — the HTTPS XML config API, the legacy Telnet ASCII protocol, and the HEOS JSON-over-TCP protocol — behind a bash runtime script and a single sourced Bash function called `denon`. A native PowerShell 7+ module mirrors that command surface where practical for cross-platform scripting. A separate Python MPRIS2 daemon (`denon-mpris`) optionally bridges the receiver to the user's desktop session over D-Bus.
 
 It is **not**:
 - A daemon for the AVR's full state machine. The MPRIS bridge is narrow (media-key control + Now Playing surface), not a general control daemon.
@@ -35,7 +35,7 @@ denon_main/
 ├── docs/                        # Long-form documentation
 ├── scripts/                     # Build / dev helpers
 ├── rpm/                         # RPM spec + packaging for COPR
-├── powershell/                  # Windows companion (out of scope here)
+├── powershell/                  # Native PowerShell 7+ module and parity tests
 ├── references/                  # Captured XML fixtures, protocol notes
 ├── local-live-runs/             # Runtime captures
 ├── Makefile                     # install-mpris, uninstall-mpris, srpm, tag

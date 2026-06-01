@@ -6,6 +6,19 @@ This beta prepares the Denon AVR Controller for release after the completion
 installer, hardening, portability, reliability, performance, TLS, and
 release-readiness cleanup passes.
 
+### PowerShell Parity
+
+- Expanded the native PowerShell 7+ module to cover the Bash command surface
+  where practical, including raw/data helpers, config/profile/cache behavior,
+  source aliases, snapshots, presets, sleep/Quick Select, sound mode,
+  Audyssey/tone controls, transport commands, data discovery, watch-event style
+  polling, and HEOS helper integration.
+- Added `Invoke-DenonCommand` as a Bash-style migration shim and
+  `Get-DenonCompletionCommandSurface` / `Register-DenonArgumentCompleter` for
+  PowerShell completion metadata.
+- Added a no-dependency PowerShell validation script alongside the existing
+  Pester tests so module parity can be checked without a live receiver.
+
 ### Shell Completion Installer
 
 - Added `denon completion install` for per-user completion installation.
