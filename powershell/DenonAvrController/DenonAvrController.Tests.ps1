@@ -1,5 +1,9 @@
+$script:ModuleRoot = Split-Path -Parent $PSCommandPath
+$script:ManifestPath = Join-Path $script:ModuleRoot 'DenonAvrController.psd1'
+Import-Module $script:ManifestPath -Force
+
 BeforeAll {
-    $script:ModuleRoot = Split-Path -Parent $PSCommandPath
+    $script:ModuleRoot = $PSScriptRoot
     $script:ManifestPath = Join-Path $script:ModuleRoot 'DenonAvrController.psd1'
     Import-Module $script:ManifestPath -Force
 }
@@ -172,7 +176,7 @@ Describe 'Denon PowerShell config and alias parity' {
     InModuleScope DenonAvrController {
         It 'writes and removes Bash-compatible config key files' {
             $set = Set-DenonConfig -Key DENON_DEFAULT_IP -Value 192.0.2.55
-            $set.Path | Should -Be (Join-Path $script:TempRoot 'config')
+            $set.Path | Should -Be ([Environment]::GetEnvironmentVariable('DENON_CONFIG'))
             Get-Content -LiteralPath $set.Path -Raw | Should -Match 'DENON_DEFAULT_IP=192.0.2.55'
 
             $config = Get-DenonConfig -Key DENON_DEFAULT_IP
@@ -184,7 +188,7 @@ Describe 'Denon PowerShell config and alias parity' {
         }
 
         It 'applies source display aliases using the Bash tab-separated file format' {
-            Set-Content -LiteralPath (Join-Path $script:TempRoot 'source_aliases') -Value "1`t13`tLiving Room HEOS" -Encoding utf8
+            Set-Content -LiteralPath ([Environment]::GetEnvironmentVariable('DENON_SOURCE_ALIASES')) -Value "1`t13`tLiving Room HEOS" -Encoding utf8
             $sourceXml = [xml]'<SourceList><Zone zone="1" index="13"><Source index="13"><Name>HEOS Music</Name></Source></Zone></SourceList>'
 
             $source = Get-DenonSourceRowsFromXml -SourceXml $sourceXml -Zone 1

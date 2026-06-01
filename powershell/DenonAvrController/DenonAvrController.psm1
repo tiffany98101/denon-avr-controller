@@ -80,8 +80,8 @@ function Get-DenonPlatformPath {
                 $local = [Environment]::GetFolderPath('LocalApplicationData')
                 if (-not [string]::IsNullOrWhiteSpace($local)) { $local } else { Join-Path $HOME '.cache' }
             }
-            $profile = [Environment]::GetEnvironmentVariable('DENON_PROFILE')
-            $name = if ([string]::IsNullOrWhiteSpace($profile)) { 'denon_ip' } else { 'denon_ip.{0}' -f $profile }
+            $profileName = [Environment]::GetEnvironmentVariable('DENON_PROFILE')
+            $name = if ([string]::IsNullOrWhiteSpace($profileName)) { 'denon_ip' } else { 'denon_ip.{0}' -f $profileName }
             return (Join-Path $base $name)
         }
         'Data' {
@@ -464,6 +464,7 @@ function Invoke-DenonHttpClientGet {
         throw 'PowerShell DENON_CURL_PINNEDPUBKEY supports sha256//BASE64HASH pins.'
     }
 
+    $skipValidation = $SkipCertificateCheck
     $trustedCertificate = $null
     if (-not [string]::IsNullOrWhiteSpace($CaCert)) {
         if (-not (Test-Path -LiteralPath $CaCert -PathType Leaf)) {
@@ -482,6 +483,8 @@ function Invoke-DenonHttpClientGet {
     try {
         $handler.ServerCertificateCustomValidationCallback = {
             param($requestMessage, $certificate, $chain, $sslPolicyErrors)
+            $null = $requestMessage
+            $null = $chain
 
             try {
                 $certificate2 = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificate)
@@ -496,7 +499,7 @@ function Invoke-DenonHttpClientGet {
                     return (Test-DenonCertificateWithCustomTrust -Certificate $certificate2 -TrustedCertificate $trustedCertificate)
                 }
 
-                if ($SkipCertificateCheck) {
+                if ($skipValidation) {
                     return $true
                 }
 
@@ -1749,7 +1752,7 @@ function Set-DenonPower {
     )
 
     $receiver = Resolve-DenonReceiver
-    $code = if ($PSCmdlet.ParameterSetName -eq 'On') { '1' } else { '3' }
+    $code = if ($On.IsPresent) { '1' } elseif ($Off.IsPresent) { '3' } else { '3' }
     $state = if ($code -eq '1') { 'ON' } else { 'OFF' }
     $payload = '<MainZone><Power>{0}</Power></MainZone>' -f $code
 
@@ -1774,7 +1777,7 @@ function Set-DenonMute {
     )
 
     $receiver = Resolve-DenonReceiver
-    $code = if ($PSCmdlet.ParameterSetName -eq 'On') { '1' } else { '2' }
+    $code = if ($On.IsPresent) { '1' } elseif ($Off.IsPresent) { '2' } else { '2' }
     $muted = $code -eq '1'
     $payload = '<MainZone><Mute>{0}</Mute></MainZone>' -f $code
 
@@ -1977,7 +1980,7 @@ function Set-DenonZone2Power {
     )
 
     $receiver = Resolve-DenonReceiver
-    $code = if ($PSCmdlet.ParameterSetName -eq 'On') { '1' } else { '3' }
+    $code = if ($On.IsPresent) { '1' } elseif ($Off.IsPresent) { '3' } else { '3' }
     $state = if ($code -eq '1') { 'ON' } else { 'OFF' }
     $payload = '<Zone2><Power>{0}</Power></Zone2>' -f $code
 
@@ -2002,7 +2005,7 @@ function Set-DenonZone2Mute {
     )
 
     $receiver = Resolve-DenonReceiver
-    $code = if ($PSCmdlet.ParameterSetName -eq 'On') { '1' } else { '2' }
+    $code = if ($On.IsPresent) { '1' } elseif ($Off.IsPresent) { '2' } else { '2' }
     $muted = $code -eq '1'
     $payload = '<Zone2><Mute>{0}</Mute></Zone2>' -f $code
 
@@ -2943,6 +2946,9 @@ function Register-DenonArgumentCompleter {
 
     Register-ArgumentCompleter -CommandName Invoke-DenonCommand -ParameterName Argument -ScriptBlock {
         param($commandName, $parameterName, $wordToComplete)
+        $null = $commandName
+        $null = $parameterName
+
         $script:DenonCommandSurface |
             Where-Object { $_ -like "$wordToComplete*" } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }

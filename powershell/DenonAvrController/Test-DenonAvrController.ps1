@@ -87,4 +87,4 @@ finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host 'DenonAvrController validation passed'
+Write-Output 'DenonAvrController validation passed'
