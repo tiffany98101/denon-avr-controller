@@ -36,7 +36,7 @@ from typing import Any, Sequence
 UNKNOWN = "Unknown"
 PLACEHOLDER = "-"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-KEY_HELP = "Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  q quit"
+KEY_HELP = "Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  1-4 quick select  z zone  q quit"
 
 KEY_ACTIONS = {
     "\x1b[A": "volume_up",
@@ -44,8 +44,14 @@ KEY_ACTIONS = {
     "\x1b[C": "next",
     "\x1b[D": "previous",
     " ": "play_pause",
+    "1": "quick_select_1",
+    "2": "quick_select_2",
+    "3": "quick_select_3",
+    "4": "quick_select_4",
     "m": "mute_toggle",
     "M": "mute_toggle",
+    "z": "cycle_zone_target",
+    "Z": "cycle_zone_target",
     "q": "quit",
     "Q": "quit",
 }
@@ -963,13 +969,14 @@ class DashboardRenderer:
         height: int,
         events: Sequence[str] = (),
         key_help: bool = False,
+        control_target: str | None = None,
     ) -> str:
         width = max(28, width)
         height = max(8, height)
         warnings = self._dedupe_lines((*snapshot.warnings, *snapshot.errors))
         event_lines = self._dedupe_lines(events)
         lines: list[str] = []
-        lines.extend(self._header_lines(snapshot, width, len(warnings), key_help=key_help))
+        lines.extend(self._header_lines(snapshot, width, len(warnings), key_help=key_help, control_target=control_target))
 
         main_panel = Panel("Main Zone", tuple(self._zone_rows(snapshot.main)))
         zone2_panel = Panel("Zone 2", tuple(self._zone_rows(snapshot.zone2)))
@@ -1003,7 +1010,14 @@ class DashboardRenderer:
 
         return "\n".join(lines[:height])
 
-    def _header_lines(self, snapshot: DashboardSnapshot, width: int, warning_count: int, key_help: bool = False) -> list[str]:
+    def _header_lines(
+        self,
+        snapshot: DashboardSnapshot,
+        width: int,
+        warning_count: int,
+        key_help: bool = False,
+        control_target: str | None = None,
+    ) -> list[str]:
         provider = display_value(snapshot.provider)
         receiver = display_value(snapshot.receiver)
         ip = display_value(snapshot.ip)
@@ -1026,6 +1040,8 @@ class DashboardRenderer:
             pad_text(summary, width),
         ]
         if key_help:
+            if control_target:
+                lines.append(pad_text(f"Control Target: {control_target}", width))
             lines.append(pad_text(KEY_HELP, width))
         return lines
 
@@ -1124,6 +1140,7 @@ class DashboardApp:
                 height or terminal_height(),
                 events=events,
                 key_help=keyboard is not None,
+                control_target=commands.control_target if commands is not None else None,
             )
             if watch:
                 sys.stdout.write("\033[H\033[J")
@@ -1237,12 +1254,17 @@ class DashboardCommandController:
         self.clock = clock
         self.runner = runner
         self._last_command_at = -float("inf")
+        self.control_target = "Main"
 
     def handle(self, action: str, snapshot: DashboardSnapshot) -> DashboardCommandResult:
         if action == "quit":
             return DashboardCommandResult(quit=True)
         if not self._allowed_now():
             return DashboardCommandResult()
+
+        if action == "cycle_zone_target":
+            self.control_target = "Zone2" if self.control_target == "Main" else "Main"
+            return DashboardCommandResult(events=(f"Key: Control Target: {self.control_target}",))
 
         command = self._command_for_action(action, snapshot)
         if command is None:
@@ -1253,6 +1275,8 @@ class DashboardCommandController:
             return DashboardCommandResult(events=events)
         if action in {"next", "previous", "play_pause"}:
             return DashboardCommandResult(events=(*events, f"Transport command unavailable: {self._event_name(action, snapshot)}"))
+        if self.control_target == "Zone2" and action in {"volume_up", "volume_down", "mute_toggle"}:
+            return DashboardCommandResult(events=(*events, f"Zone2 command unavailable: {self._event_name(action, snapshot)}"))
         return DashboardCommandResult(events=(*events, f"Command unavailable: {self._event_name(action, snapshot)}"))
 
     def _allowed_now(self) -> bool:
@@ -1264,11 +1288,15 @@ class DashboardCommandController:
 
     def _command_for_action(self, action: str, snapshot: DashboardSnapshot) -> tuple[str, ...] | None:
         if action == "volume_up":
-            return ("up",)
+            return ("zone2", "up") if self.control_target == "Zone2" else ("up",)
         if action == "volume_down":
-            return ("down",)
+            return ("zone2", "down") if self.control_target == "Zone2" else ("down",)
         if action == "mute_toggle":
+            if self.control_target == "Zone2":
+                return ("zone2", "unmute") if self._zone2_muted(snapshot) else ("zone2", "mute")
             return ("toggle", "mute")
+        if action.startswith("quick_select_"):
+            return ("qs", action.rsplit("_", 1)[-1])
         if action == "next":
             return ("next",)
         if action == "previous":
@@ -1277,6 +1305,10 @@ class DashboardCommandController:
             state = _clean(snapshot.now_playing.state).lower()
             return ("pause",) if state in {"play", "playing"} else ("play",)
         return None
+
+    def _zone2_muted(self, snapshot: DashboardSnapshot) -> bool:
+        zone2 = snapshot.zone2 or ZoneSnapshot()
+        return _clean(zone2.mute).lower() in {"yes", "true", "1", "on", "muted"}
 
     def _event_name(self, action: str, snapshot: DashboardSnapshot) -> str:
         if action == "volume_up":
@@ -1288,9 +1320,13 @@ class DashboardCommandController:
         if action == "play_pause":
             state = _clean(snapshot.now_playing.state).lower()
             return "pause" if state in {"play", "playing"} else "play"
+        if action.startswith("quick_select_"):
+            return f"quick select {action.rsplit('_', 1)[-1]}"
         return action
 
     def _key_event_name(self, action: str) -> str:
+        if action.startswith("quick_select_"):
+            return f"Quick Select {action.rsplit('_', 1)[-1]}"
         return {
             "volume_up": "Volume Up",
             "volume_down": "Volume Down",

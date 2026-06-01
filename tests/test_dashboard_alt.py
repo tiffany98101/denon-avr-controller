@@ -205,6 +205,27 @@ def test_renderer_handles_direct_provider_snapshot():
     assert "Main Zone" in frame
 
 
+def test_renderer_shows_control_target_only_when_interactive_controls_are_active():
+    snapshot = complete_snapshot(provider="direct")
+    interactive = DashboardRenderer(color="never").render(
+        snapshot,
+        width=100,
+        height=40,
+        key_help=True,
+        control_target="Zone2",
+    )
+    non_interactive = DashboardRenderer(color="never").render(
+        snapshot,
+        width=100,
+        height=40,
+        control_target="Zone2",
+    )
+
+    assert "Control Target: Zone2" in interactive
+    assert "1-4 quick select  z zone" in interactive
+    assert "Control Target:" not in non_interactive
+
+
 def test_direct_provider_parses_main_zone_xml():
     provider = FakeDirectProvider({3: IDENTITY_XML, 4: POWER_XML, 7: SOURCE_XML, 12: VOLUME_XML})
     snapshot = provider.collect()
@@ -508,7 +529,12 @@ def test_dashboard_alt_parser_accepts_expected_options():
     ("\x1b[C", "next"),
     ("\x1b[D", "previous"),
     (" ", "play_pause"),
+    ("1", "quick_select_1"),
+    ("2", "quick_select_2"),
+    ("3", "quick_select_3"),
+    ("4", "quick_select_4"),
     ("m", "mute_toggle"),
+    ("z", "cycle_zone_target"),
     ("q", "quit"),
 ])
 def test_parse_key_sequence_maps_dashboard_controls(sequence, action):
@@ -558,6 +584,71 @@ def test_dashboard_command_throttle_is_deterministic_without_sleep():
     ]
 
 
+def test_dashboard_control_target_cycles_between_main_and_zone2():
+    controller = DashboardCommandController(str(SCRIPT))
+
+    first = controller.handle("cycle_zone_target", complete_snapshot())
+    assert controller.control_target == "Zone2"
+    assert first.events == ("Key: Control Target: Zone2",)
+
+    controller._last_command_at = -float("inf")
+    second = controller.handle("cycle_zone_target", complete_snapshot())
+    assert controller.control_target == "Main"
+    assert second.events == ("Key: Control Target: Main",)
+
+
+def test_dashboard_volume_and_mute_dispatch_use_selected_zone_target():
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    snapshot = complete_snapshot(zone2=ZoneSnapshot(power="ON", mute="No"))
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner, throttle_seconds=0)
+
+    assert controller.handle("volume_up", snapshot).events == ("Key: Volume Up",)
+    assert controller.handle("volume_down", snapshot).events == ("Key: Volume Down",)
+    assert controller.handle("mute_toggle", snapshot).events == ("Key: Mute Toggle",)
+
+    controller.handle("cycle_zone_target", snapshot)
+    assert controller.handle("volume_up", snapshot).events == ("Key: Volume Up",)
+    assert controller.handle("volume_down", snapshot).events == ("Key: Volume Down",)
+    assert controller.handle("mute_toggle", snapshot).events == ("Key: Mute Toggle",)
+    muted_snapshot = complete_snapshot(zone2=ZoneSnapshot(power="ON", mute="Yes"))
+    assert controller.handle("mute_toggle", muted_snapshot).events == ("Key: Mute Toggle",)
+
+    assert calls == [
+        [str(SCRIPT), "up"],
+        [str(SCRIPT), "down"],
+        [str(SCRIPT), "toggle", "mute"],
+        [str(SCRIPT), "zone2", "up"],
+        [str(SCRIPT), "zone2", "down"],
+        [str(SCRIPT), "zone2", "mute"],
+        [str(SCRIPT), "zone2", "unmute"],
+    ]
+
+
+@pytest.mark.parametrize(("action", "expected_command", "expected_event"), [
+    ("quick_select_1", [str(SCRIPT), "qs", "1"], "Key: Quick Select 1"),
+    ("quick_select_2", [str(SCRIPT), "qs", "2"], "Key: Quick Select 2"),
+    ("quick_select_3", [str(SCRIPT), "qs", "3"], "Key: Quick Select 3"),
+    ("quick_select_4", [str(SCRIPT), "qs", "4"], "Key: Quick Select 4"),
+])
+def test_dashboard_quick_select_hotkeys_dispatch_existing_command_path(action, expected_command, expected_event):
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner)
+    result = controller.handle(action, complete_snapshot())
+
+    assert result.events == (expected_event,)
+    assert calls == [expected_command]
+
+
 @pytest.mark.parametrize(("action", "event"), [
     ("volume_up", "Key: Volume Up"),
     ("volume_down", "Key: Volume Down"),
@@ -565,6 +656,10 @@ def test_dashboard_command_throttle_is_deterministic_without_sleep():
     ("next", "Key: Next"),
     ("play_pause", "Key: Play/Pause"),
     ("mute_toggle", "Key: Mute Toggle"),
+    ("quick_select_1", "Key: Quick Select 1"),
+    ("quick_select_2", "Key: Quick Select 2"),
+    ("quick_select_3", "Key: Quick Select 3"),
+    ("quick_select_4", "Key: Quick Select 4"),
 ])
 def test_dashboard_key_actions_report_recent_event_feedback(action, event):
     def fake_runner(command, **kwargs):
@@ -579,6 +674,17 @@ def test_dashboard_key_actions_report_recent_event_feedback(action, event):
     assert result.quit is False
     assert result.events == (event,)
     assert tracker.events == (f"18:30:00 {event}",)
+
+
+def test_dashboard_zone_target_key_reports_recent_event_feedback():
+    tracker = DashboardEventTracker()
+    controller = DashboardCommandController(str(SCRIPT))
+    result = controller.handle("cycle_zone_target", complete_snapshot())
+    for message in result.events:
+        tracker.record(message, timestamp=datetime(2026, 5, 21, 18, 30, 0))
+
+    assert result.events == ("Key: Control Target: Zone2",)
+    assert tracker.events == ("18:30:00 Key: Control Target: Zone2",)
 
 
 def test_dashboard_quit_key_has_no_recent_event_feedback():
@@ -599,6 +705,17 @@ def test_transport_command_failure_reports_recent_event_without_crashing():
 
     assert result.quit is False
     assert result.events == ("Key: Next", "Transport command unavailable: next")
+
+
+def test_zone2_command_failure_keeps_key_feedback_and_warning():
+    def fake_runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="unsupported")
+
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner, throttle_seconds=0)
+    controller.handle("cycle_zone_target", complete_snapshot())
+    result = controller.handle("volume_up", complete_snapshot())
+
+    assert result.events == ("Key: Volume Up", "Zone2 command unavailable: volume up")
 
 
 def test_dashboard_alt_help_is_discoverable_preview_text():
@@ -772,6 +889,8 @@ def test_json_mode_outputs_stable_snapshot_without_network(monkeypatch, capsys):
     assert "timestamp" in data
     assert "Keys:" not in output
     assert "Key:" not in output
+    assert "Control Target:" not in output
+    assert "quick select" not in output.lower()
 
 
 def test_json_rejects_watch(capsys):

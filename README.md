@@ -275,9 +275,11 @@ set `DENON_DASHBOARD_WIDTH` and `DENON_DASHBOARD_HEIGHT`.
 
 When `dashboard-alt --watch` is running in an interactive terminal, it accepts
 single-key controls without Enter: Up/Down adjust volume, Left/Right send
-previous/next, Space toggles play/pause, `m` toggles mute, and `q` quits the
-dashboard. These keys are disabled for non-TTY input and are not used by the
-legacy Bash dashboard.
+previous/next, Space toggles play/pause, `m` toggles mute, `1`-`4` recall Quick
+Select 1-4, `z` cycles the volume/mute control target between Main and Zone2,
+and `q` quits the dashboard. Transport keys keep using the active HEOS/player
+path. These keys are disabled for non-TTY input and are not used by the legacy
+Bash dashboard.
 
 ```bash
 denon dashboard-alt --provider auto
