@@ -1126,23 +1126,68 @@ class TestDashboardInteractiveKeys:
         assert r.returncode == 0
         assert event in r.stdout
 
-    @pytest.mark.parametrize(("key", "state", "call", "key_event", "transport_event"), [
-        (r"$'\033[D'", "Playing", "heos:prev", "Key: Previous", "Transport: Previous"),
-        (r"$'\033[C'", "Playing", "heos:next", "Key: Next", "Transport: Next"),
-        ("' '", "Playing", "heos:pause", "Key: Play/Pause", "Transport: Play/Pause"),
-        ("' '", "Paused", "heos:play", "Key: Play/Pause", "Transport: Play/Pause"),
+    @pytest.mark.parametrize(("key", "before_json", "after_json", "call", "key_event", "transport_event"), [
+        (
+            r"$'\033[D'",
+            '{"state":"play","song":"Song Two","artist":"Artist","album":"Album","mid":"spotify:media:2"}',
+            '{"state":"play","song":"Song One","artist":"Artist","album":"Album","mid":"spotify:media:1"}',
+            "heos:prev",
+            "Key: Previous",
+            "Transport verified: Previous",
+        ),
+        (
+            r"$'\033[C'",
+            '{"state":"play","song":"Song One","artist":"Artist","album":"Album","mid":"spotify:media:1"}',
+            '{"state":"play","song":"Song Two","artist":"Artist","album":"Album","mid":"spotify:media:2"}',
+            "heos:next",
+            "Key: Next",
+            "Transport verified: Next",
+        ),
+        (
+            "' '",
+            '{"state":"play","song":"Song One","artist":"Artist","album":"Album","mid":"spotify:media:1"}',
+            '{"state":"pause","song":"Song One","artist":"Artist","album":"Album","mid":"spotify:media:1"}',
+            "heos:pause",
+            "Key: Play/Pause",
+            "Transport verified: Play/Pause",
+        ),
+        (
+            "' '",
+            '{"state":"pause","song":"Song One","artist":"Artist","album":"Album","mid":"spotify:media:1"}',
+            '{"state":"play","song":"Song One","artist":"Artist","album":"Album","mid":"spotify:media:1"}',
+            "heos:play",
+            "Key: Play/Pause",
+            "Transport verified: Play/Pause",
+        ),
     ])
-    def test_main_dashboard_transport_keys_dispatch_and_report_success(self, key, state, call, key_event, transport_event):
+    def test_main_dashboard_transport_keys_dispatch_and_report_verified_success(self, key, before_json, after_json, call, key_event, transport_event):
         code = textwrap.dedent(f"""\
             calls=""
             dashboard_control_target="Main"
             dashboard_command_throttle_ms=0
+            DENON_DASHBOARD_TRANSPORT_VERIFY_ATTEMPTS=1
+            DENON_DASHBOARD_TRANSPORT_VERIFY_SLEEP=0
             dashboard_events=""
             last_dashboard_event=""
-            dash_transport_state="{state}"
+            dash_main_source="HEOS Music"
+            dash_transport_state="Playing"
+            status_calls_file=$(mktemp)
+            printf '0\\n' > "$status_calls_file"
+            _denon_dashboard_transport_status_json() {{
+              local status_calls
+              status_calls=$(cat "$status_calls_file")
+              status_calls=$((status_calls + 1))
+              printf '%s\\n' "$status_calls" > "$status_calls_file"
+              if (( status_calls == 1 )); then
+                printf '%s\\n' '{before_json}'
+              else
+                printf '%s\\n' '{after_json}'
+              fi
+            }}
             _denon_heos_control() {{ calls="${{calls}}heos:$1"$'\\n'; }}
 
             _denon_dashboard_handle_key {key}
+            rm -f "$status_calls_file"
             printf 'calls=%s\\n' "$calls"
             printf '%s\\n' "$dashboard_events"
         """)
@@ -1150,7 +1195,9 @@ class TestDashboardInteractiveKeys:
         assert r.returncode == 0
         assert call in r.stdout
         assert key_event in r.stdout
+        assert "Transport command sent:" in r.stdout
         assert transport_event in r.stdout
+        assert "Transport:" not in r.stdout
 
     def test_main_dashboard_q_quits_without_key_feedback(self):
         code = textwrap.dedent("""\
@@ -1173,6 +1220,7 @@ class TestDashboardInteractiveKeys:
             dashboard_events=""
             last_dashboard_event=""
             dashboard_stop_pending=0
+            dash_main_source="HEOS Music"
             _denon_heos_control() { return 1; }
 
             _denon_dashboard_handle_key $'\\033[C'
@@ -1182,7 +1230,7 @@ class TestDashboardInteractiveKeys:
         assert r.returncode == 0
         assert "stop=0" in r.stdout
         assert "Key: Next" in r.stdout
-        assert "Transport command unavailable: next" in r.stdout
+        assert "Transport command failed: next" in r.stdout
 
     def test_main_dashboard_failed_play_pause_reports_action_without_exiting(self):
         code = textwrap.dedent("""\
@@ -1191,6 +1239,7 @@ class TestDashboardInteractiveKeys:
             dashboard_events=""
             last_dashboard_event=""
             dashboard_stop_pending=0
+            dash_main_source="HEOS Music"
             dash_transport_state="Playing"
             _denon_heos_control() { return 1; }
 
@@ -1201,7 +1250,68 @@ class TestDashboardInteractiveKeys:
         assert r.returncode == 0
         assert "stop=0" in r.stdout
         assert "Key: Play/Pause" in r.stdout
-        assert "Transport command unavailable: play/pause" in r.stdout
+        assert "Transport command failed: play/pause" in r.stdout
+
+    def test_main_dashboard_successful_command_without_state_change_is_not_verified(self):
+        code = textwrap.dedent("""\
+            calls=0
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            DENON_DASHBOARD_TRANSPORT_VERIFY_ATTEMPTS=1
+            DENON_DASHBOARD_TRANSPORT_VERIFY_SLEEP=0
+            dashboard_events=""
+            last_dashboard_event=""
+            dashboard_stop_pending=0
+            dash_main_source="HEOS Music"
+            dash_transport_state="Playing"
+            _denon_dashboard_transport_status_json() {
+              printf '%s\\n' '{"state":"play","song":"Song One","artist":"Artist","album":"Album","mid":"spotify:media:1"}'
+            }
+            _denon_heos_control() { calls=$((calls + 1)); return 0; }
+
+            _denon_dashboard_handle_key $'\\033[C'
+            printf 'calls=%s\\n%s\\n' "$calls" "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "calls=1" in r.stdout
+        assert "Key: Next" in r.stdout
+        assert "Transport command sent: Next; no playback change verified" in r.stdout
+        assert "Transport verified: Next" not in r.stdout
+
+    def test_main_dashboard_missing_heos_player_reports_unavailable(self):
+        code = textwrap.dedent("""\
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            dash_main_source="HEOS Music"
+            _denon_heos_control() { printf 'Error: no HEOS player for receiver\\n' >&2; return 1; }
+
+            _denon_dashboard_handle_key $'\\033[C'
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Transport command unavailable: no HEOS player for receiver" in r.stdout
+
+    def test_main_dashboard_transport_unavailable_when_not_on_heos_source(self):
+        code = textwrap.dedent("""\
+            calls=0
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            dash_main_source="TV Audio"
+            _denon_heos_control() { calls=$((calls + 1)); return 0; }
+
+            _denon_dashboard_handle_key $'\\033[C'
+            printf 'calls=%s\\n%s\\n' "$calls" "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "calls=0" in r.stdout
+        assert "Transport command unavailable: next" in r.stdout
 
     def test_main_dashboard_transport_key_feedback_is_not_suppressed_by_throttle(self):
         code = textwrap.dedent("""\
@@ -1209,8 +1319,11 @@ class TestDashboardInteractiveKeys:
             dashboard_control_target="Main"
             dashboard_command_throttle_ms=200
             dashboard_test_now_ms=1000
+            DENON_DASHBOARD_TRANSPORT_VERIFY_ATTEMPTS=1
+            DENON_DASHBOARD_TRANSPORT_VERIFY_SLEEP=0
             dashboard_events=""
             last_dashboard_event=""
+            dash_main_source="HEOS Music"
             dash_transport_state="Playing"
             _denon_heos_control() { calls=$((calls + 1)); }
 
@@ -1222,20 +1335,24 @@ class TestDashboardInteractiveKeys:
         assert r.returncode == 0
         assert "calls=1" in r.stdout
         assert r.stdout.count("Key: Play/Pause") == 2
-        assert "Transport: Play/Pause" in r.stdout
-        assert "Transport command unavailable: play/pause" in r.stdout
+        assert "Transport command sent: Play/Pause; no playback change verified" in r.stdout
+        assert "Transport command throttled: play/pause" in r.stdout
 
     def test_main_dashboard_pending_numeric_buffer_does_not_block_controls(self):
         code = textwrap.dedent(f"""\
             calls=""
             dashboard_control_target="Main"
             dashboard_command_throttle_ms=0
+            DENON_DASHBOARD_TRANSPORT_VERIFY_ATTEMPTS=1
+            DENON_DASHBOARD_TRANSPORT_VERIFY_SLEEP=0
             dashboard_events=""
             last_dashboard_event=""
             dashboard_stop_pending=0
             dashboard_exit_status=9
+            dash_main_source="HEOS Music"
             dash_transport_state="Playing"
             {self.SOURCE_BODY}
+            _denon_dashboard_transport_status_json() {{ printf '%s\\n' '{{"state":"play","song":"Song One","artist":"Artist","album":"Album","mid":"spotify:media:1"}}'; }}
             _denon_heos_control() {{ calls="${{calls}}heos:$1"$'\\n'; }}
             _denon_toggle() {{ calls="${{calls}}toggle:$1"$'\\n'; }}
             _denon_dashboard_redraw() {{ :; }}

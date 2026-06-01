@@ -1555,16 +1555,13 @@ EOF
   }
 
   _denon_heos_control() {
-    local action="$1" code
+    local action="$1" helper_action
     case "$action" in
-      play) code="NS9A" ;;
-      pause) code="NS9B" ;;
-      stop) code="NS9C" ;;
-      next) code="NS9D" ;;
-      prev|previous) code="NS9E" ;;
+      play|pause|stop|next) helper_action="$action" ;;
+      prev|previous) helper_action="prev" ;;
       *) return 1 ;;
     esac
-    _denon_telnet "$code" && echo "Sent $action"
+    _denon_heos_helper "$helper_action" && echo "Sent $helper_action"
   }
 
   _denon_heos_helper() {
@@ -4222,7 +4219,15 @@ EOF
   }
 
   _denon_dashboard_heos_status() {
-    local players pid
+    local players pid helper_status
+
+    if [[ "${1:-}" != "players-only" ]]; then
+      helper_status=$(_denon_heos_helper status-json 2>/dev/null || printf '')
+      if [[ -n "$helper_status" ]]; then
+        printf '%s\n' "$helper_status"
+        return 0
+      fi
+    fi
 
     players=$(_denon_dashboard_heos_command 'heos://player/get_players')
     printf '%s\n' "$players"
@@ -4240,6 +4245,33 @@ EOF
 
     while IFS= read -r line; do
       case "$line" in
+        *'"pid"'*'"state"'*)
+          value=$(_denon_dashboard_json_scalar "$line" "pid"); _denon_is_heos_pid "$value" && dash_heos_pid="$value"
+          value=$(_denon_dashboard_json_scalar "$line" "player_model"); [[ -n "$value" ]] && dash_heos_model="$value"
+          value=$(_denon_dashboard_json_scalar "$line" "player_version"); [[ -n "$value" ]] && dash_heos_version="$value"
+          value=$(_denon_dashboard_json_scalar "$line" "network"); [[ -n "$value" ]] && dash_heos_network="$value"
+          value=$(_denon_dashboard_clean_field "$(_denon_dashboard_json_scalar "$line" "song")")
+          [[ -n "$value" ]] && dash_now_title="$value"
+          value=$(_denon_dashboard_clean_field "$(_denon_dashboard_json_scalar "$line" "artist")")
+          [[ -n "$value" ]] && dash_now_artist="$value"
+          value=$(_denon_dashboard_clean_field "$(_denon_dashboard_json_scalar "$line" "album")")
+          [[ -n "$value" ]] && dash_now_album="$value"
+          value=$(_denon_dashboard_clean_field "$(_denon_dashboard_json_scalar "$line" "station")")
+          [[ -n "$value" && "$value" != "$dash_now_title" ]] && dash_now_station="$value"
+          value=$(_denon_dashboard_clean_field "$(_denon_dashboard_json_scalar "$line" "type")")
+          [[ -n "$value" ]] && dash_now_type="$value"
+          sid=$(_denon_dashboard_json_scalar "$line" "sid")
+          mid=$(_denon_dashboard_json_scalar "$line" "mid")
+          service=$(_denon_dashboard_heos_service_name "$sid" "$mid")
+          [[ -n "$service" ]] && dash_now_service="$service"
+          value=$(_denon_dashboard_transport_name "$(_denon_dashboard_json_scalar "$line" "state")")
+          [[ -n "$value" ]] && dash_transport_state="$value"
+          if [[ -n "$dash_now_title$dash_now_artist$dash_now_album$dash_now_station" ]]; then
+            dash_now_available=1
+            dash_now_message="${dash_now_title:-${dash_now_station:-HEOS media}}"
+            [[ -z "$dash_now_artist" ]] || dash_now_message="$dash_now_message - $dash_now_artist"
+          fi
+          ;;
         *'"command": "player/get_players"'*)
           value=$(_denon_dashboard_json_scalar "$line" "pid"); _denon_is_heos_pid "$value" && dash_heos_pid="$value"
           value=$(_denon_dashboard_json_scalar "$line" "model"); [[ -n "$value" ]] && dash_heos_model="$value"
@@ -5613,6 +5645,156 @@ EOF
     esac
   }
 
+  _denon_dashboard_transport_status_json() {
+    _denon_heos_helper status-json 2>/dev/null
+  }
+
+  _denon_dashboard_transport_json_field() {
+    local json="$1"
+    local key="$2"
+    _denon_dashboard_json_scalar "$json" "$key"
+  }
+
+  _denon_dashboard_transport_json_state() {
+    local json="$1"
+    local value
+
+    value=$(_denon_dashboard_transport_json_field "$json" "state")
+    _denon_dashboard_transport_name "$value"
+  }
+
+  _denon_dashboard_transport_json_signature() {
+    local json="$1"
+    local song artist album station mid qid sid
+
+    song=$(_denon_dashboard_clean_field "$(_denon_dashboard_transport_json_field "$json" "song")")
+    artist=$(_denon_dashboard_clean_field "$(_denon_dashboard_transport_json_field "$json" "artist")")
+    album=$(_denon_dashboard_clean_field "$(_denon_dashboard_transport_json_field "$json" "album")")
+    station=$(_denon_dashboard_clean_field "$(_denon_dashboard_transport_json_field "$json" "station")")
+    mid=$(_denon_dashboard_clean_field "$(_denon_dashboard_transport_json_field "$json" "mid")")
+    qid=$(_denon_dashboard_clean_field "$(_denon_dashboard_transport_json_field "$json" "qid")")
+    sid=$(_denon_dashboard_clean_field "$(_denon_dashboard_transport_json_field "$json" "sid")")
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "$song" "$artist" "$album" "$station" "$mid" "$qid" "$sid"
+  }
+
+  _denon_dashboard_transport_signature_known() {
+    local signature="$1"
+    [[ "$signature" != "||||||" ]]
+  }
+
+  _denon_dashboard_transport_command_for_action() {
+    local action="$1"
+    local state="$2"
+
+    case "$action" in
+      previous) echo "prev" ;;
+      next) echo "next" ;;
+      play_pause)
+        case "$(_denon_lower "$state")" in
+          play|playing) echo "pause" ;;
+          *) echo "play" ;;
+        esac
+        ;;
+      *) return 1 ;;
+    esac
+  }
+
+  _denon_dashboard_transport_verified() {
+    local action="$1"
+    local command="$2"
+    local before_json="$3"
+    local after_json="$4"
+    local before_state after_state before_signature after_signature
+
+    case "$action" in
+      play_pause)
+        before_state=$(_denon_dashboard_transport_json_state "$before_json")
+        after_state=$(_denon_dashboard_transport_json_state "$after_json")
+        _denon_dashboard_event_changed_known "$before_state" "$after_state" || return 1
+        case "$command:$after_state" in
+          pause:Paused|play:Playing) return 0 ;;
+          *) return 1 ;;
+        esac
+        ;;
+      previous|next)
+        before_signature=$(_denon_dashboard_transport_json_signature "$before_json")
+        after_signature=$(_denon_dashboard_transport_json_signature "$after_json")
+        _denon_dashboard_transport_signature_known "$before_signature" || return 1
+        _denon_dashboard_transport_signature_known "$after_signature" || return 1
+        [[ "$before_signature" != "$after_signature" ]]
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+
+  _denon_dashboard_run_transport_action() {
+    local action="$1"
+    local before_json before_state command output output_file attempt attempts sleep_seconds after_json
+
+    dashboard_transport_result=""
+    dashboard_transport_error=""
+    dashboard_transport_command=""
+
+    _denon_dashboard_is_heos_source || {
+      dashboard_transport_result="unavailable"
+      dashboard_transport_error="not-heos-source"
+      return 1
+    }
+
+    before_json=$(_denon_dashboard_transport_status_json 2>/dev/null || printf '')
+    before_state=$(_denon_dashboard_transport_json_state "$before_json")
+    [[ -n "$before_state" ]] || before_state="${dash_transport_state:-}"
+    command=$(_denon_dashboard_transport_command_for_action "$action" "$before_state") || {
+      dashboard_transport_result="unavailable"
+      return 1
+    }
+    dashboard_transport_command="$command"
+
+    output_file=$(mktemp 2>/dev/null || printf '')
+    if [[ -n "$output_file" ]] && _denon_heos_control "$command" >"$output_file" 2>&1; then
+      output=$(<"$output_file")
+      rm -f "$output_file"
+    elif [[ -n "$output_file" ]]; then
+      output=$(<"$output_file")
+      rm -f "$output_file"
+      dashboard_transport_error="$output"
+      if printf '%s' "$output" | grep -qiE 'no HEOS player|invalid HEOS player|no HEOS player id'; then
+        dashboard_transport_result="no-player"
+      else
+        dashboard_transport_result="failed"
+      fi
+      return 1
+    else
+      if _denon_heos_control "$command" >/dev/null 2>&1; then
+        output=""
+      else
+        dashboard_transport_result="failed"
+        return 1
+      fi
+    fi
+
+    attempts="${DENON_DASHBOARD_TRANSPORT_VERIFY_ATTEMPTS:-3}"
+    sleep_seconds="${DENON_DASHBOARD_TRANSPORT_VERIFY_SLEEP:-0.75}"
+    attempt=0
+    while (( attempt < attempts )); do
+      attempt=$((attempt + 1))
+      if [[ "$sleep_seconds" != "0" && "$sleep_seconds" != "0.0" ]]; then
+        sleep "$sleep_seconds" 2>/dev/null || true
+      fi
+      after_json=$(_denon_dashboard_transport_status_json 2>/dev/null || printf '')
+      if [[ -n "$before_json" && -n "$after_json" ]] &&
+        _denon_dashboard_transport_verified "$action" "$command" "$before_json" "$after_json"; then
+        dashboard_transport_result="verified"
+        return 0
+      fi
+    done
+
+    dashboard_transport_result="sent-unverified"
+    return 0
+  }
+
   _denon_dashboard_add_command_warning() {
     local action="$1"
     local command_event
@@ -5826,13 +6008,32 @@ EOF
         key_event=$(_denon_dashboard_key_event_name "$action")
         _denon_dashboard_add_event "Key: $key_event"
         if ! _denon_dashboard_throttle_allows_command; then
-          _denon_dashboard_is_transport_action "$action" && _denon_dashboard_add_command_warning "$action"
+          _denon_dashboard_is_transport_action "$action" &&
+            _denon_dashboard_add_event "Transport command throttled: $(_denon_dashboard_command_event_name "$action")"
           return 0
         fi
-        if _denon_dashboard_run_action "$action" >/dev/null 2>&1; then
-          if _denon_dashboard_is_transport_action "$action"; then
-            _denon_dashboard_add_event "Transport: $(_denon_dashboard_transport_event_name "$action")"
-          fi
+        if _denon_dashboard_is_transport_action "$action"; then
+          _denon_dashboard_run_transport_action "$action" >/dev/null 2>&1 || true
+          case "${dashboard_transport_result:-}" in
+            verified)
+              _denon_dashboard_add_event "Transport command sent: $(_denon_dashboard_transport_event_name "$action")"
+              _denon_dashboard_add_event "Transport verified: $(_denon_dashboard_transport_event_name "$action")"
+              ;;
+            sent-unverified)
+              _denon_dashboard_add_event "Transport command sent: $(_denon_dashboard_transport_event_name "$action"); no playback change verified"
+              ;;
+            no-player)
+              _denon_dashboard_add_event "Transport command unavailable: no HEOS player for receiver"
+              ;;
+            failed)
+              _denon_dashboard_add_event "Transport command failed: $(_denon_dashboard_command_event_name "$action")"
+              ;;
+            *)
+              _denon_dashboard_add_command_warning "$action"
+              ;;
+          esac
+        elif _denon_dashboard_run_action "$action" >/dev/null 2>&1; then
+          :
         else
           _denon_dashboard_add_command_warning "$action"
         fi

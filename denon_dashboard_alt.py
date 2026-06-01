@@ -1310,6 +1310,8 @@ class DashboardCommandController:
         clock: Any = time.monotonic,
         runner: Any = subprocess.run,
         numeric_timeout_seconds: float = 0.75,
+        transport_verify_attempts: int = 3,
+        transport_verify_sleep: float = 0.75,
     ) -> None:
         self.script = str(script)
         self.throttle_seconds = throttle_seconds
@@ -1320,6 +1322,8 @@ class DashboardCommandController:
         self.numeric_timeout_seconds = numeric_timeout_seconds
         self._numeric_buffer = ""
         self._numeric_deadline: float | None = None
+        self.transport_verify_attempts = transport_verify_attempts
+        self.transport_verify_sleep = transport_verify_sleep
 
     def handle(self, action: str, snapshot: DashboardSnapshot) -> DashboardCommandResult:
         if action == "quit":
@@ -1339,12 +1343,12 @@ class DashboardCommandController:
         events = (f"Key: {self._key_event_name(action)}",)
         if not self._allowed_now():
             if self._is_transport_action(action):
-                return DashboardCommandResult(events=(*events, f"Transport command unavailable: {self._transport_command_name(action)}"))
+                return DashboardCommandResult(events=(*events, f"Transport command throttled: {self._transport_command_name(action)}"))
             return DashboardCommandResult(events=events)
+        if self._is_transport_action(action):
+            return DashboardCommandResult(events=self._transport_events(action, command, events))
         ok, message = self._run(command)
         if ok:
-            if self._is_transport_action(action):
-                return DashboardCommandResult(events=(*events, f"Transport: {self._transport_event_name(action)}"))
             return DashboardCommandResult(events=events)
         if action in {"next", "previous", "play_pause"}:
             return DashboardCommandResult(events=(*events, f"Transport command unavailable: {self._transport_command_name(action)}"))
@@ -1414,12 +1418,12 @@ class DashboardCommandController:
                 return ("zone2", "unmute") if self._zone2_muted(snapshot) else ("zone2", "mute")
             return ("toggle", "mute")
         if action == "next":
-            return ("next",)
+            return ("heos", "next")
         if action == "previous":
-            return ("prev",)
+            return ("heos", "prev")
         if action == "play_pause":
             state = _clean(snapshot.now_playing.state).lower()
-            return ("pause",) if state in {"play", "playing"} else ("play",)
+            return ("heos", "pause") if state in {"play", "playing"} else ("heos", "play")
         return None
 
     def _zone2_muted(self, snapshot: DashboardSnapshot) -> bool:
@@ -1463,6 +1467,76 @@ class DashboardCommandController:
             "play_pause": "Play/Pause",
             "mute_toggle": "Mute Toggle",
         }.get(action, action)
+
+    def _transport_events(
+        self,
+        action: str,
+        command: tuple[str, ...],
+        events: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        before = self._transport_status()
+        ok, message = self._run(command)
+        if not ok:
+            if "no heos player" in message.lower() or "invalid heos player" in message.lower():
+                return (*events, "Transport command unavailable: no HEOS player for receiver")
+            return (*events, f"Transport command failed: {self._transport_command_name(action)}")
+
+        for _ in range(max(1, self.transport_verify_attempts)):
+            if self.transport_verify_sleep:
+                time.sleep(self.transport_verify_sleep)
+            after = self._transport_status()
+            if before and after and self._transport_verified(action, command[-1], before, after):
+                return (
+                    *events,
+                    f"Transport command sent: {self._transport_event_name(action)}",
+                    f"Transport verified: {self._transport_event_name(action)}",
+                )
+        return (*events, f"Transport command sent: {self._transport_event_name(action)}; no playback change verified")
+
+    def _transport_status(self) -> dict[str, Any] | None:
+        ok, message = self._run(("heos", "status-json"))
+        if not ok:
+            return None
+        try:
+            data = json.loads(message)
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _transport_verified(
+        self,
+        action: str,
+        command: str,
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> bool:
+        if action == "play_pause":
+            before_state = self._transport_state(before)
+            after_state = self._transport_state(after)
+            if not before_state or before_state == after_state:
+                return False
+            return (command == "pause" and after_state == "paused") or (command == "play" and after_state == "playing")
+        if action in {"next", "previous"}:
+            before_signature = self._transport_signature(before)
+            after_signature = self._transport_signature(after)
+            return bool(before_signature and after_signature and before_signature != after_signature)
+        return False
+
+    def _transport_state(self, data: dict[str, Any]) -> str:
+        state = _clean(data.get("state")).lower()
+        return {
+            "play": "playing",
+            "playing": "playing",
+            "pause": "paused",
+            "paused": "paused",
+            "stop": "stopped",
+            "stopped": "stopped",
+        }.get(state, state)
+
+    def _transport_signature(self, data: dict[str, Any]) -> tuple[str, ...]:
+        fields = ("song", "artist", "album", "station", "mid", "qid", "sid")
+        signature = tuple(_clean(data.get(field)) for field in fields)
+        return signature if any(signature) else ()
 
     def _run(self, command: tuple[str, ...]) -> tuple[bool, str]:
         try:

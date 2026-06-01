@@ -5,7 +5,7 @@
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
 %global pre_tag       beta.5
-%global rpm_release   0.5.beta5
+%global rpm_release   0.6.beta5
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -123,6 +123,10 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
+* Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.6.beta5
+- Verify dashboard HEOS transport commands against selected AVR player state
+  and metadata before reporting success
+
 * Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.5.beta5
 - Improve dashboard transport feedback, Receiver Info rendering, and packaged
   helper discovery for dashboard-alt and HEOS helper scripts

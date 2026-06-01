@@ -675,23 +675,54 @@ def test_dashboard_volume_and_mute_dispatch_use_selected_zone_target():
     ]
 
 
-@pytest.mark.parametrize(("action", "expected_command", "expected_events"), [
-    ("previous", [str(SCRIPT), "prev"], ("Key: Previous", "Transport: Previous")),
-    ("next", [str(SCRIPT), "next"], ("Key: Next", "Transport: Next")),
-    ("play_pause", [str(SCRIPT), "pause"], ("Key: Play/Pause", "Transport: Play/Pause")),
+@pytest.mark.parametrize(("action", "expected_command", "before_status", "after_status", "expected_events"), [
+    (
+        "previous",
+        [str(SCRIPT), "heos", "prev"],
+        {"state": "play", "song": "Song Two", "artist": "Artist", "album": "Album", "mid": "spotify:media:2"},
+        {"state": "play", "song": "Song One", "artist": "Artist", "album": "Album", "mid": "spotify:media:1"},
+        ("Key: Previous", "Transport command sent: Previous", "Transport verified: Previous"),
+    ),
+    (
+        "next",
+        [str(SCRIPT), "heos", "next"],
+        {"state": "play", "song": "Song One", "artist": "Artist", "album": "Album", "mid": "spotify:media:1"},
+        {"state": "play", "song": "Song Two", "artist": "Artist", "album": "Album", "mid": "spotify:media:2"},
+        ("Key: Next", "Transport command sent: Next", "Transport verified: Next"),
+    ),
+    (
+        "play_pause",
+        [str(SCRIPT), "heos", "pause"],
+        {"state": "play", "song": "Song One", "artist": "Artist", "album": "Album", "mid": "spotify:media:1"},
+        {"state": "pause", "song": "Song One", "artist": "Artist", "album": "Album", "mid": "spotify:media:1"},
+        ("Key: Play/Pause", "Transport command sent: Play/Pause", "Transport verified: Play/Pause"),
+    ),
 ])
-def test_dashboard_transport_keys_dispatch_and_report_success(action, expected_command, expected_events):
+def test_dashboard_transport_keys_dispatch_and_report_verified_success(action, expected_command, before_status, after_status, expected_events):
     calls = []
+    statuses = [before_status, after_status]
 
     def fake_runner(command, **kwargs):
         calls.append(command)
+        if command == [str(SCRIPT), "heos", "status-json"]:
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(statuses.pop(0)), stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
-    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner, throttle_seconds=0)
+    controller = DashboardCommandController(
+        str(SCRIPT),
+        runner=fake_runner,
+        throttle_seconds=0,
+        transport_verify_attempts=1,
+        transport_verify_sleep=0,
+    )
     result = controller.handle(action, complete_snapshot(now_playing=NowPlayingSnapshot(state="Playing")))
 
     assert result.events == expected_events
-    assert calls == [expected_command]
+    assert calls == [
+        [str(SCRIPT), "heos", "status-json"],
+        expected_command,
+        [str(SCRIPT), "heos", "status-json"],
+    ]
 
 
 def source_hotkey_snapshot():
@@ -893,7 +924,7 @@ def test_transport_command_failure_reports_recent_event_without_crashing():
     result = controller.handle("next", complete_snapshot())
 
     assert result.quit is False
-    assert result.events == ("Key: Next", "Transport command unavailable: next")
+    assert result.events == ("Key: Next", "Transport command failed: next")
 
 
 def test_transport_key_feedback_is_not_suppressed_by_throttle():
@@ -905,6 +936,9 @@ def test_transport_key_feedback_is_not_suppressed_by_throttle():
 
     def fake_runner(command, **kwargs):
         calls.append(command)
+        if command == [str(SCRIPT), "heos", "status-json"]:
+            status = {"state": "pause" if len(calls) > 2 else "play", "song": "Song One", "mid": "spotify:media:1"}
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(status), stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
     controller = DashboardCommandController(
@@ -912,15 +946,21 @@ def test_transport_key_feedback_is_not_suppressed_by_throttle():
         runner=fake_runner,
         clock=fake_clock,
         throttle_seconds=0.2,
+        transport_verify_attempts=1,
+        transport_verify_sleep=0,
     )
     snapshot = complete_snapshot(now_playing=NowPlayingSnapshot(state="Playing"))
 
     first = controller.handle("play_pause", snapshot)
     second = controller.handle("play_pause", snapshot)
 
-    assert first.events == ("Key: Play/Pause", "Transport: Play/Pause")
-    assert second.events == ("Key: Play/Pause", "Transport command unavailable: play/pause")
-    assert calls == [[str(SCRIPT), "pause"]]
+    assert first.events == (
+        "Key: Play/Pause",
+        "Transport command sent: Play/Pause",
+        "Transport verified: Play/Pause",
+    )
+    assert second.events == ("Key: Play/Pause", "Transport command throttled: play/pause")
+    assert [str(SCRIPT), "heos", "pause"] in calls
 
 
 def test_pending_numeric_buffer_does_not_block_controls():
@@ -928,16 +968,29 @@ def test_pending_numeric_buffer_does_not_block_controls():
 
     def fake_runner(command, **kwargs):
         calls.append(command)
+        if command == [str(SCRIPT), "heos", "status-json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps({"state": "play", "song": "Song One", "mid": "spotify:media:1"}),
+                stderr="",
+            )
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
-    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner, throttle_seconds=0)
+    controller = DashboardCommandController(
+        str(SCRIPT),
+        runner=fake_runner,
+        throttle_seconds=0,
+        transport_verify_attempts=1,
+        transport_verify_sleep=0,
+    )
     snapshot = source_hotkey_snapshot()
 
     assert controller.handle("digit_1", snapshot).events == ()
-    assert controller.handle("play_pause", snapshot).events == ("Key: Play/Pause", "Transport: Play/Pause")
+    assert controller.handle("play_pause", snapshot).events == ("Key: Play/Pause", "Transport command sent: Play/Pause; no playback change verified")
     assert controller._numeric_buffer == ""
     assert controller.handle("digit_1", snapshot).events == ()
-    assert controller.handle("previous", snapshot).events == ("Key: Previous", "Transport: Previous")
+    assert controller.handle("previous", snapshot).events == ("Key: Previous", "Transport command sent: Previous; no playback change verified")
     assert controller._numeric_buffer == ""
     assert controller.handle("digit_1", snapshot).events == ()
     assert controller.handle("mute_toggle", snapshot).events == ("Key: Mute Toggle",)
@@ -949,8 +1002,8 @@ def test_pending_numeric_buffer_does_not_block_controls():
     assert controller.handle("quit", snapshot).quit is True
     assert controller._numeric_buffer == ""
     assert [str(SCRIPT), "source", "1"] not in calls
-    assert [str(SCRIPT), "pause"] in calls
-    assert [str(SCRIPT), "prev"] in calls
+    assert [str(SCRIPT), "heos", "pause"] in calls
+    assert [str(SCRIPT), "heos", "prev"] in calls
     assert [str(SCRIPT), "toggle", "mute"] in calls
 
 

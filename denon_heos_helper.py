@@ -46,6 +46,7 @@ Commands:
 def send(ip: str, path: str) -> dict[str, Any]:
     command = f"heos://{path}\r\n".encode()
     chunks: list[bytes] = []
+    last_error: Exception | None = None
     with socket.create_connection((ip, 1255), timeout=TIMEOUT) as sock:
         sock.settimeout(TIMEOUT)
         sock.sendall(command)
@@ -57,12 +58,20 @@ def send(ip: str, path: str) -> dict[str, Any]:
             if not chunk:
                 break
             chunks.append(chunk)
+            text = b"".join(chunks).decode("utf-8", "replace").strip()
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError as exc:
+                    last_error = exc
 
     text = b"".join(chunks).decode("utf-8", "replace").strip()
     if not text:
         raise RuntimeError("no HEOS response")
 
-    last_error: Exception | None = None
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -111,22 +120,50 @@ def validate_pid_list(value: str) -> str:
     return ",".join(pid.strip() for pid in pids)
 
 
-def get_pid(ip: str) -> str:
-    env_pid = os.environ.get("DENON_HEOS_PID", "").strip()
-    if env_pid:
-        return validate_pid(env_pid)
+def get_players(ip: str) -> list[dict[str, Any]]:
     data = send(ip, "player/get_players")
     require_ok(data)
     players = data.get("payload") or []
-    if not players:
-        raise RuntimeError("no HEOS player id configured or discovered")
-    raw_pid = players[0].get("pid")
+    if not isinstance(players, list):
+        raise RuntimeError("invalid HEOS player list")
+    return [player for player in players if isinstance(player, dict)]
+
+
+def _player_pid(player: dict[str, Any]) -> str:
+    raw_pid = player.get("pid")
     if raw_pid is None:
         raise RuntimeError("no HEOS player id configured or discovered")
     pid = str(raw_pid).strip()
     if not pid:
         raise RuntimeError("no HEOS player id configured or discovered")
     return validate_pid(pid)
+
+
+def select_player(ip: str, players: list[dict[str, Any]]) -> dict[str, Any]:
+    target_ip = str(ip).strip()
+    for player in players:
+        if str(player.get("ip", "")).strip() == target_ip:
+            _player_pid(player)
+            return player
+    if len(players) == 1:
+        _player_pid(players[0])
+        return players[0]
+    raise RuntimeError("no HEOS player for receiver")
+
+
+def get_player(ip: str) -> dict[str, Any]:
+    env_pid = os.environ.get("DENON_HEOS_PID", "").strip()
+    if env_pid:
+        pid = validate_pid(env_pid)
+        return {"pid": pid}
+    players = get_players(ip)
+    if not players:
+        raise RuntimeError("no HEOS player id configured or discovered")
+    return select_player(ip, players)
+
+
+def get_pid(ip: str) -> str:
+    return _player_pid(get_player(ip))
 
 
 def get_gid(ip: str) -> str:
@@ -232,6 +269,35 @@ def show_now(ip: str, pid: str) -> None:
         print(f"Queue ID: {payload.get('qid')}")
 
 
+def status_snapshot(ip: str) -> dict[str, Any]:
+    player = get_player(ip)
+    pid = _player_pid(player)
+    media = send(ip, f"player/get_now_playing_media?pid={quote(pid)}")
+    require_ok(media)
+    state = send(ip, f"player/get_play_state?pid={quote(pid)}")
+    require_ok(state)
+    payload = media.get("payload") or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "pid": pid,
+        "player_ip": str(player.get("ip", "")),
+        "player_name": str(player.get("name", "")),
+        "player_model": str(player.get("model", "")),
+        "player_version": str(player.get("version", "")),
+        "network": str(player.get("network", "")),
+        "state": message_value(state, "state"),
+        "type": str(payload.get("type", "")),
+        "song": str(payload.get("song", "")),
+        "artist": str(payload.get("artist", "")),
+        "album": str(payload.get("album", "")),
+        "station": str(payload.get("station", "")),
+        "mid": str(payload.get("mid", "")),
+        "qid": "" if payload.get("qid") is None else str(payload.get("qid")),
+        "sid": "" if payload.get("sid") is None else str(payload.get("sid")),
+    }
+
+
 def show_volume(ip: str, pid: str) -> None:
     data = send(ip, f"player/get_volume?pid={quote(validate_pid(pid))}")
     require_ok(data)
@@ -296,6 +362,8 @@ def run(ip: str, argv: list[str]) -> int:
     if cmd == "now":
         pid = get_pid(ip)
         show_now(ip, pid)
+    elif cmd == "status-json":
+        print(json.dumps(status_snapshot(ip), ensure_ascii=False, sort_keys=True))
     elif cmd == "get-volume" and len(argv) in {1, 2}:
         pid = validate_pid(argv[1]) if len(argv) == 2 else get_pid(ip)
         show_volume(ip, pid)
