@@ -388,8 +388,8 @@ Set-DenonReceiver -IpAddress 192.0.2.10 -SkipCertificateCheck
 ```
 
 The PowerShell module also honors `DENON_CURL_CACERT` and
-`DENON_CURL_PINNEDPUBKEY` with per-request .NET TLS validation. PowerShell
-public-key pins use the `sha256//BASE64HASH` form.
+`DENON_CURL_PINNEDPUBKEY` with compiled per-request .NET TLS validation.
+PowerShell public-key pins use the `sha256//BASE64HASH` form.
 
 Read-only examples:
 

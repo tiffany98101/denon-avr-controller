@@ -6,6 +6,97 @@ BeforeAll {
     $script:ModuleRoot = $PSScriptRoot
     $script:ManifestPath = Join-Path $script:ModuleRoot 'DenonAvrController.psd1'
     Import-Module $script:ManifestPath -Force
+
+    if (-not ('DenonAvrController.Tests.TlsTestServer' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading;
+
+namespace DenonAvrController.Tests
+{
+    public sealed class TlsTestServer : IDisposable
+    {
+        private readonly X509Certificate2 certificate;
+        private readonly string body;
+        private TcpListener listener;
+        private Thread thread;
+
+        public TlsTestServer(X509Certificate2 certificate, string body)
+        {
+            this.certificate = certificate;
+            this.body = body;
+        }
+
+        public Uri Uri { get; private set; }
+        public Exception Error { get; private set; }
+
+        public void Start()
+        {
+            listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            Uri = new Uri("https://127.0.0.1:" + port.ToString() + "/test");
+            thread = new Thread(Run);
+            thread.IsBackground = true;
+            thread.Start();
+        }
+
+        private void Run()
+        {
+            try
+            {
+                using (TcpClient client = listener.AcceptTcpClient())
+                using (SslStream ssl = new SslStream(client.GetStream(), false))
+                {
+                    ssl.AuthenticateAsServer(certificate, false, SslProtocols.Tls12, false);
+                    using (StreamReader reader = new StreamReader(ssl, Encoding.ASCII, false, 1024, true))
+                    {
+                        string line;
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            if (line.Length == 0)
+                            {
+                                break;
+                            }
+                        }
+                    }
+
+                    byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
+                    string header = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + bodyBytes.Length.ToString() + "\r\nConnection: close\r\n\r\n";
+                    byte[] headerBytes = Encoding.ASCII.GetBytes(header);
+                    ssl.Write(headerBytes, 0, headerBytes.Length);
+                    ssl.Write(bodyBytes, 0, bodyBytes.Length);
+                    ssl.Flush();
+                }
+            }
+            catch (Exception ex)
+            {
+                Error = ex;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (listener != null)
+            {
+                listener.Stop();
+            }
+            if (thread != null && thread.IsAlive)
+            {
+                thread.Join(2000);
+            }
+        }
+    }
+}
+'@
+    }
 }
 
 Describe 'DenonAvrController manifest and exports' {
@@ -112,6 +203,64 @@ Describe 'Denon HEOS player id validation' {
         It 'rejects empty or protocol-injection HEOS player ids' {
             foreach ($value in @('', $null, '1&state=play', "1`r`nheos://player/play_next", 'abc', '1,2')) {
                 Test-DenonHeosPlayerId -PlayerId $value | Should -BeFalse
+            }
+        }
+    }
+}
+
+Describe 'Denon PowerShell TLS validation' {
+    InModuleScope DenonAvrController {
+        It 'uses a compiled callback for pinned public key HTTPS requests' {
+            $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+            $certificate = $null
+            try {
+                $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+                    'CN=localhost',
+                    $rsa,
+                    [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+                )
+                $request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $false))
+                $certificate = $request.CreateSelfSigned([DateTimeOffset]::Now.AddDays(-1), [DateTimeOffset]::Now.AddDays(1))
+                $pin = Get-DenonPinnedPublicKeyHash -Certificate $certificate
+
+                $server = [DenonAvrController.Tests.TlsTestServer]::new($certificate, 'denon-ok')
+                try {
+                    $server.Start()
+                    Invoke-DenonHttpClientGet -Uri $server.Uri.AbsoluteUri -TimeoutSeconds 5 -SkipCertificateCheck $true -PinnedPublicKey "sha256//$pin" | Should -Be 'denon-ok'
+                }
+                finally {
+                    if ($null -ne $server) { $server.Dispose() }
+                }
+
+                $server = [DenonAvrController.Tests.TlsTestServer]::new($certificate, 'denon-ok')
+                try {
+                    $server.Start()
+                    { Invoke-DenonHttpClientGet -Uri $server.Uri.AbsoluteUri -TimeoutSeconds 5 -SkipCertificateCheck $true -PinnedPublicKey 'sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' } | Should -Throw
+                }
+                finally {
+                    if ($null -ne $server) { $server.Dispose() }
+                }
+
+                $certPath = Join-Path ([System.IO.Path]::GetTempPath()) ('denon-test-{0}.cer' -f [System.Guid]::NewGuid().ToString('N'))
+                try {
+                    [System.IO.File]::WriteAllBytes($certPath, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+                    $server = [DenonAvrController.Tests.TlsTestServer]::new($certificate, 'denon-ca-ok')
+                    try {
+                        $server.Start()
+                        Invoke-DenonHttpClientGet -Uri $server.Uri.AbsoluteUri -TimeoutSeconds 5 -SkipCertificateCheck $false -CaCert $certPath | Should -Be 'denon-ca-ok'
+                    }
+                    finally {
+                        if ($null -ne $server) { $server.Dispose() }
+                    }
+                }
+                finally {
+                    Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
+                }
+            }
+            finally {
+                if ($null -ne $certificate) { $certificate.Dispose() }
+                $rsa.Dispose()
             }
         }
     }

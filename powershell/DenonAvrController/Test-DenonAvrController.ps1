@@ -26,6 +26,8 @@ Assert-True ($manifest.PowerShellVersion.ToString() -eq '7.0') 'PowerShellVersio
 
 $moduleSource = Get-Content -LiteralPath (Join-Path $moduleRoot 'DenonAvrController.psm1') -Raw
 Assert-True ($moduleSource -match 'HttpClientHandler') 'custom TLS validation should use HttpClientHandler'
+Assert-True ($moduleSource -match 'DenonAvrController\.PowerShell\.TlsValidator') 'custom TLS validation should use the compiled validator'
+Assert-True ($moduleSource -notmatch 'ServerCertificateCustomValidationCallback\s*=\s*\{') 'custom TLS validation must not use a PowerShell scriptblock callback'
 Assert-True ($moduleSource -notmatch 'ServicePointManager') 'custom TLS validation must not use ServicePointManager on PowerShell 7'
 
 Import-Module $manifestPath -Force

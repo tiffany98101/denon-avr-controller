@@ -370,6 +370,164 @@ function Test-DenonHeosPlayerId {
     -not [string]::IsNullOrWhiteSpace($PlayerId) -and $PlayerId -match '^-?[0-9]+$'
 }
 
+function Initialize-DenonTlsValidatorType {
+    [CmdletBinding()]
+    param()
+
+    if ('DenonAvrController.PowerShell.TlsValidator' -as [type]) {
+        return
+    }
+
+    Add-Type -TypeDefinition @'
+using System;
+using System.Net.Http;
+using System.Net.Security;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+
+namespace DenonAvrController.PowerShell
+{
+    public sealed class TlsValidator
+    {
+        private readonly string expectedPin;
+        private readonly X509Certificate2 trustedCertificate;
+        private readonly bool skipCertificateCheck;
+
+        public TlsValidator(string expectedPin, X509Certificate2 trustedCertificate, bool skipCertificateCheck)
+        {
+            this.expectedPin = expectedPin;
+            this.trustedCertificate = trustedCertificate;
+            this.skipCertificateCheck = skipCertificateCheck;
+        }
+
+        public Func<HttpRequestMessage, X509Certificate2, X509Chain, SslPolicyErrors, bool> CreateCallback()
+        {
+            return Validate;
+        }
+
+        public bool Validate(HttpRequestMessage requestMessage, X509Certificate2 certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+        {
+            try
+            {
+                if (certificate == null)
+                {
+                    return false;
+                }
+
+                using (var certificate2 = new X509Certificate2(certificate))
+                {
+                    if (!String.IsNullOrWhiteSpace(expectedPin))
+                    {
+                        string actualPin = GetPinnedPublicKeyHash(certificate2);
+                        if (!String.Equals(actualPin, expectedPin, StringComparison.Ordinal))
+                        {
+                            return false;
+                        }
+                    }
+
+                    if (trustedCertificate != null)
+                    {
+                        return TestCertificateWithCustomTrust(certificate2, trustedCertificate);
+                    }
+
+                    if (skipCertificateCheck)
+                    {
+                        return true;
+                    }
+
+                    return sslPolicyErrors == SslPolicyErrors.None;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static string GetPinnedPublicKeyHash(X509Certificate2 certificate)
+        {
+            byte[] publicKey = null;
+
+            using (RSA rsa = certificate.GetRSAPublicKey())
+            {
+                if (rsa != null)
+                {
+                    publicKey = rsa.ExportSubjectPublicKeyInfo();
+                }
+            }
+
+            if (publicKey == null)
+            {
+                using (ECDsa ecdsa = certificate.GetECDsaPublicKey())
+                {
+                    if (ecdsa != null)
+                    {
+                        publicKey = ecdsa.ExportSubjectPublicKeyInfo();
+                    }
+                }
+            }
+
+            if (publicKey == null)
+            {
+                using (DSA dsa = certificate.GetDSAPublicKey())
+                {
+                    if (dsa != null)
+                    {
+                        publicKey = dsa.ExportSubjectPublicKeyInfo();
+                    }
+                }
+            }
+
+            if (publicKey == null)
+            {
+                publicKey = certificate.GetPublicKey();
+            }
+
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                return Convert.ToBase64String(sha256.ComputeHash(publicKey));
+            }
+        }
+
+        public static bool TestCertificateWithCustomTrust(X509Certificate2 certificate, X509Certificate2 trustedCertificate)
+        {
+            if (String.Equals(certificate.GetCertHashString(), trustedCertificate.GetCertHashString(), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            using (var chain = new X509Chain())
+            {
+                chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
+
+                PropertyInfo trustModeProperty = chain.ChainPolicy.GetType().GetProperty("TrustMode");
+                PropertyInfo customTrustStoreProperty = chain.ChainPolicy.GetType().GetProperty("CustomTrustStore");
+
+                if (trustModeProperty != null && customTrustStoreProperty != null)
+                {
+                    object customRootTrust = Enum.Parse(trustModeProperty.PropertyType, "CustomRootTrust");
+                    trustModeProperty.SetValue(chain.ChainPolicy, customRootTrust, null);
+                    var customTrustStore = customTrustStoreProperty.GetValue(chain.ChainPolicy, null) as X509Certificate2Collection;
+                    if (customTrustStore != null)
+                    {
+                        customTrustStore.Add(trustedCertificate);
+                    }
+                }
+                else
+                {
+                    chain.ChainPolicy.ExtraStore.Add(trustedCertificate);
+                }
+
+                return chain.Build(certificate);
+            }
+        }
+    }
+}
+'@
+}
+
 function Get-DenonPinnedPublicKeyHash {
     [CmdletBinding()]
     param(
@@ -377,40 +535,8 @@ function Get-DenonPinnedPublicKeyHash {
         [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
     )
 
-    $sha256 = [System.Security.Cryptography.SHA256]::Create()
-    $publicKey = $null
-    try {
-        $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($Certificate)
-        if ($null -ne $rsa) {
-            try { $publicKey = $rsa.ExportSubjectPublicKeyInfo() }
-            finally { $rsa.Dispose() }
-        }
-
-        if ($null -eq $publicKey) {
-            $ecdsa = [System.Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey($Certificate)
-            if ($null -ne $ecdsa) {
-                try { $publicKey = $ecdsa.ExportSubjectPublicKeyInfo() }
-                finally { $ecdsa.Dispose() }
-            }
-        }
-
-        if ($null -eq $publicKey) {
-            $dsa = [System.Security.Cryptography.X509Certificates.DSACertificateExtensions]::GetDSAPublicKey($Certificate)
-            if ($null -ne $dsa) {
-                try { $publicKey = $dsa.ExportSubjectPublicKeyInfo() }
-                finally { $dsa.Dispose() }
-            }
-        }
-
-        if ($null -eq $publicKey) {
-            $publicKey = $Certificate.GetPublicKey()
-        }
-
-        [Convert]::ToBase64String($sha256.ComputeHash($publicKey))
-    }
-    finally {
-        $sha256.Dispose()
-    }
+    Initialize-DenonTlsValidatorType
+    [DenonAvrController.PowerShell.TlsValidator]::GetPinnedPublicKeyHash($Certificate)
 }
 
 function Test-DenonCertificateWithCustomTrust {
@@ -423,26 +549,8 @@ function Test-DenonCertificateWithCustomTrust {
         [System.Security.Cryptography.X509Certificates.X509Certificate2]$TrustedCertificate
     )
 
-    if ($Certificate.GetCertHashString() -eq $TrustedCertificate.GetCertHashString()) {
-        return $true
-    }
-
-    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
-    try {
-        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
-        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
-        if ($chain.ChainPolicy.PSObject.Properties.Name -contains 'TrustMode') {
-            $chain.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust
-            [void]$chain.ChainPolicy.CustomTrustStore.Add($TrustedCertificate)
-        }
-        else {
-            [void]$chain.ChainPolicy.ExtraStore.Add($TrustedCertificate)
-        }
-        $chain.Build($Certificate)
-    }
-    finally {
-        $chain.Dispose()
-    }
+    Initialize-DenonTlsValidatorType
+    [DenonAvrController.PowerShell.TlsValidator]::TestCertificateWithCustomTrust($Certificate, $TrustedCertificate)
 }
 
 function Invoke-DenonHttpClientGet {
@@ -478,37 +586,13 @@ function Invoke-DenonHttpClientGet {
         $expectedPin = $PinnedPublicKey -replace '^sha256//', ''
     }
 
+    Initialize-DenonTlsValidatorType
+
     $handler = [System.Net.Http.HttpClientHandler]::new()
     $client = $null
     try {
-        $handler.ServerCertificateCustomValidationCallback = {
-            param($requestMessage, $certificate, $chain, $sslPolicyErrors)
-            $null = $requestMessage
-            $null = $chain
-
-            try {
-                $certificate2 = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificate)
-                if (-not [string]::IsNullOrWhiteSpace($expectedPin)) {
-                    $actualPin = Get-DenonPinnedPublicKeyHash -Certificate $certificate2
-                    if ($actualPin -ne $expectedPin) {
-                        return $false
-                    }
-                }
-
-                if ($null -ne $trustedCertificate) {
-                    return (Test-DenonCertificateWithCustomTrust -Certificate $certificate2 -TrustedCertificate $trustedCertificate)
-                }
-
-                if ($skipValidation) {
-                    return $true
-                }
-
-                return ($sslPolicyErrors -eq [System.Net.Security.SslPolicyErrors]::None)
-            }
-            catch {
-                return $false
-            }
-        }
+        $validator = [DenonAvrController.PowerShell.TlsValidator]::new($expectedPin, $trustedCertificate, $skipValidation)
+        $handler.ServerCertificateCustomValidationCallback = $validator.CreateCallback()
 
         $client = [System.Net.Http.HttpClient]::new($handler)
         $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
