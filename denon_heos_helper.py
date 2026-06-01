@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 
 TIMEOUT = float(os.environ.get("DENON_HEOS_TIMEOUT", "1.5"))
-PID_RE = re.compile(r"^[0-9]+$")
+PID_RE = re.compile(r"^-?[0-9]+$")
 
 
 def usage() -> int:
@@ -119,8 +119,14 @@ def get_pid(ip: str) -> str:
     require_ok(data)
     players = data.get("payload") or []
     if not players:
-        raise RuntimeError("no HEOS players returned")
-    return validate_pid(str(players[0].get("pid", "")).strip())
+        raise RuntimeError("no HEOS player id configured or discovered")
+    raw_pid = players[0].get("pid")
+    if raw_pid is None:
+        raise RuntimeError("no HEOS player id configured or discovered")
+    pid = str(raw_pid).strip()
+    if not pid:
+        raise RuntimeError("no HEOS player id configured or discovered")
+    return validate_pid(pid)
 
 
 def get_gid(ip: str) -> str:
@@ -286,25 +292,26 @@ def run(ip: str, argv: list[str]) -> int:
     if not argv:
         return usage()
     cmd = argv[0].lower()
-    if cmd == "get-volume" and len(argv) == 2:
-        pid = validate_pid(argv[1])
-    else:
-        pid = get_pid(ip)
 
     if cmd == "now":
+        pid = get_pid(ip)
         show_now(ip, pid)
     elif cmd == "get-volume" and len(argv) in {1, 2}:
+        pid = validate_pid(argv[1]) if len(argv) == 2 else get_pid(ip)
         show_volume(ip, pid)
     elif cmd in {"play", "pause", "stop"}:
+        pid = get_pid(ip)
         data = send(ip, f"player/set_play_state?pid={quote(pid)}&state={cmd}")
         require_ok(data)
         print(f"HEOS {cmd}")
     elif cmd in {"next", "prev", "previous"}:
+        pid = get_pid(ip)
         action = "play_next" if cmd == "next" else "play_previous"
         data = send(ip, f"player/{action}?pid={quote(pid)}")
         require_ok(data)
         print(f"HEOS {cmd}")
     elif cmd == "queue":
+        pid = get_pid(ip)
         sub = argv[1].lower() if len(argv) > 1 else ""
         if not sub:
             show_queue(queue_items(ip, pid))
@@ -382,6 +389,7 @@ def run(ip: str, argv: list[str]) -> int:
         path = f"browse/search?sid={quote(sid)}&search={quote(query)}&scid={quote(scid)}&range=0,49"
         show_browse(send(ip, path))
     elif cmd == "play-stream" and len(argv) >= 4:
+        pid = get_pid(ip)
         sid, cid, mid = argv[1], argv[2], argv[3]
         path = f"browse/play_stream?pid={quote(pid)}&sid={quote(sid)}&cid={quote(cid)}&mid={quote(mid)}"
         if len(argv) > 4:
@@ -390,16 +398,19 @@ def run(ip: str, argv: list[str]) -> int:
         require_ok(data)
         print("HEOS stream requested")
     elif cmd == "repeat" and len(argv) == 2:
+        pid = get_pid(ip)
         repeat_map = {"off": "off", "all": "on_all", "one": "on_one"}
         if argv[1].lower() not in repeat_map:
             return usage()
         set_play_mode(ip, pid, repeat=repeat_map[argv[1].lower()])
     elif cmd == "shuffle" and len(argv) == 2:
+        pid = get_pid(ip)
         state = argv[1].lower()
         if state not in {"on", "off"}:
             return usage()
         set_play_mode(ip, pid, shuffle=state)
     elif cmd == "update":
+        pid = get_pid(ip)
         print_json(send(ip, f"player/check_update?pid={quote(pid)}"))
     else:
         return usage()
