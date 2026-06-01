@@ -47,11 +47,18 @@ Up/Down adjust volume, Left/Right send previous/next, Space toggles
 play/pause,
 .B m
 toggles mute,
-number keys select visible Main Zone sources from the source list,
+typing the source number shown in the Main Zone Sources list selects that
+source,
 .B z
 cycles the volume/mute control target between Main and Zone2, and
 .B q
 quits the dashboard.
+Multi\-digit source numbers such as
+.BR 10 ,
+.BR 11 ,
+and
+.B 13
+are supported.
 Transport keys keep using the active HEOS/player path.
 These keys are disabled for non\-TTY input and one\-shot output.
 Quick Select remains available through
@@ -83,7 +90,9 @@ The existing shell dashboard remains the default for
 When
 .B dashboard\-alt \-\-watch
 runs in an interactive terminal, it supports the same keyboard controls as
-.BR dashboard .
+.BR dashboard ,
+including typing the source number shown in the Sources list.
+Multi\-digit source numbers are supported.
 .SS Power and volume
 .TP
 .BR on | off

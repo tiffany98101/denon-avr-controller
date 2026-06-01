@@ -258,9 +258,10 @@ Read-only status and dashboard:
 
 When `dashboard --watch` is running in an interactive terminal, it accepts
 single-key controls without Enter: Up/Down adjust volume, Left/Right send
-previous/next, Space toggles play/pause, `m` toggles mute, number keys select
-visible Main Zone sources from the source list, `z` cycles the volume/mute
-control target between Main and Zone2, and `q` quits the dashboard. Transport
+previous/next, Space toggles play/pause, `m` toggles mute, typing the source
+number shown in the Main Zone Sources list selects that source, `z` cycles the
+volume/mute control target between Main and Zone2, and `q` quits the dashboard.
+Multi-digit source numbers such as `10`, `11`, and `13` are supported. Transport
 keys keep using the active HEOS/player path. These keys are disabled for
 non-TTY input and one-shot output. Quick Select remains available through
 `denon qs <n>`.
@@ -283,7 +284,8 @@ layout on medium widths, and a compact stacked layout on narrow terminals. Use
 set `DENON_DASHBOARD_WIDTH` and `DENON_DASHBOARD_HEIGHT`.
 
 When `dashboard-alt --watch` is running in an interactive terminal, it supports
-the same keyboard controls as the main dashboard.
+the same keyboard controls as the main dashboard, including typing the source
+number shown in the Sources list. Multi-digit source numbers are supported.
 
 ```bash
 denon dashboard-alt --provider auto

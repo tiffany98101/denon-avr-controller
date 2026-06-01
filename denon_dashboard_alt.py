@@ -36,7 +36,8 @@ from typing import Any, Sequence
 UNKNOWN = "Unknown"
 PLACEHOLDER = "-"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-KEY_HELP = "Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  number source  z zone  q quit"
+KEY_HELP = "Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  type source #  z zone  q quit"
+KEY_HELP_NARROW = "Keys: ↑/↓ vol  ←/→ prev/next  Space play/pause  m mute  src #  z zone  q quit"
 
 KEY_ACTIONS = {
     "\x1b[A": "volume_up",
@@ -1048,7 +1049,8 @@ class DashboardRenderer:
         if key_help:
             if control_target:
                 lines.append(pad_text(f"Control Target: {control_target}", width))
-            lines.append(pad_text(KEY_HELP, width))
+            help_text = KEY_HELP if visible_width(KEY_HELP) <= width else KEY_HELP_NARROW
+            lines.append(pad_text(help_text, width))
         return lines
 
     def _zone_rows(self, zone: ZoneSnapshot | None) -> list[str]:

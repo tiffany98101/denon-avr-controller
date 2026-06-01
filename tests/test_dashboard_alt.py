@@ -222,8 +222,22 @@ def test_renderer_shows_control_target_only_when_interactive_controls_are_active
     )
 
     assert "Control Target: Zone2" in interactive
-    assert "number source  z zone" in interactive
+    assert "type source #  z zone" in interactive
+    assert "number source" not in interactive
     assert "Control Target:" not in non_interactive
+
+
+def test_renderer_uses_compact_source_number_help_when_narrow():
+    frame = DashboardRenderer(color="never").render(
+        complete_snapshot(provider="direct"),
+        width=80,
+        height=40,
+        key_help=True,
+        control_target="Main",
+    )
+
+    assert "src #  z zone" in frame
+    assert "number source" not in frame
 
 
 def test_direct_provider_parses_main_zone_xml():

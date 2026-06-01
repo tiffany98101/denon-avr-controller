@@ -1293,7 +1293,22 @@ class TestDashboardDiagnostics:
         assert r.returncode == 0
         assert "Control Target: Zone2" in r.stdout
         assert "Keys: ↑/↓ volume" in r.stdout
-        assert "number source  z zone" in r.stdout
+        assert "type source #  z zone" in r.stdout
+        assert "number source" not in r.stdout
+
+    def test_dashboard_interactive_output_uses_compact_source_number_help_when_narrow(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dashboard_diagnostics=0
+            dashboard_control_target="Main"
+            dashboard_keyboard_active=1
+            watch=1
+            DENON_DASHBOARD_WIDTH=80
+            _denon_dashboard_render
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "src #  z zone" in r.stdout
+        assert "number source" not in r.stdout
 
     def test_dashboard_body_display_values_are_normalized(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\
