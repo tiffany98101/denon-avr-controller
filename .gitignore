@@ -48,3 +48,6 @@ __pycache__/
 
 # Local RPM build tree (make srpm output)
 rpmbuild/
+
+# Local handoff scratch
+handoff.md
