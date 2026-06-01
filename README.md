@@ -367,6 +367,14 @@ Import-Module ./powershell/DenonAvrController/DenonAvrController.psd1 -Force
 Get-Command -Module DenonAvrController
 ```
 
+The module mirrors the Bash command surface where PowerShell can do so
+portably: status/info, sources, power/mute/volume, Zone 2, raw config, data
+summary/dump/capability helpers, HEOS helper workflows, snapshots, profiles,
+presets, config/cache files, sleep timers, Quick Select, sound mode,
+Audyssey/tone controls, transport commands, and a Bash-style
+`Invoke-DenonCommand` shim. The full-screen Bash dashboard renderer and the
+Avahi/ARP discovery tiers remain Bash-specific.
+
 Configure the receiver for the current PowerShell session:
 
 ```powershell
