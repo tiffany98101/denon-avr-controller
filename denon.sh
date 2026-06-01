@@ -3,14 +3,14 @@
 # Version: 1.2.0-beta.3
 DENON_CONTROLLER_NAME="${DENON_CONTROLLER_NAME:-denon-avr-controller}"
 DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.3}"
-# Source this from ~/.zshrc or ~/.bashrc:
+# Source this from bash, or run it directly:
 #   source ~/denon.sh
 #
-# Or run it directly:
+# Direct use:
 #   ./denon.sh status
 #
 # For testing without discovery:
-#   export DENON_IP=192.168.1.100
+#   export DENON_IP=192.0.2.10
 
 _denon_lower() {
   printf '%s' "${1,,}"
@@ -6580,7 +6580,7 @@ EOF
       ;;
     setip)
       if [[ -z "$2" ]] || ! _denon_is_ipv4 "$2"; then
-        echo "Error: setip requires an IPv4 address, for example: denon setip 192.168.1.23" >&2
+        echo "Error: setip requires an IPv4 address, for example: denon setip 192.0.2.10" >&2
         return 1
       fi
       mkdir -p "$HOME/.cache"

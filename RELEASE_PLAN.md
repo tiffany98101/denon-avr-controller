@@ -6,43 +6,43 @@ Baseline used for this audit:
 
 - Remote fetched: `origin` (`git@github.com:tiffany98101/denon-avr-controller.git`)
 - Current branch: `main`
-- Current committed `HEAD`: `5ab7422 ARCHITECTURE.md v2: reconcile with local working tree`
-- Fetched public mirror ref: `origin/main`
-- Result: `HEAD` and `origin/main` are currently the same commit.
+- Release-readiness baseline: post-hardening local branch after the cleanup/security/performance phases
+- Fetched public mirror ref at audit time: `origin/main` = `8272a6d feat: improve dashboard-alt renderer layout`
+- Result: local `HEAD` is ahead of `origin/main`; review `git log --oneline origin/main..HEAD` before any release push.
 
 ### Commits in `origin/main..HEAD`
 
-There are no commits in `origin/main..HEAD` after `git fetch origin`.
+The hardening/completion commits below are expected in `origin/main..HEAD` after `git fetch origin` unless they have already been pushed. Release-readiness documentation fix commits may appear after these.
 
 | Commit | Summary | Classification | Notes |
 |---|---|---|---|
-| _none_ | _No committed divergence from `origin/main`_ | SAFE TO PUSH | Nothing to push for committed history. |
+| `a7ac76a` | Add Denon shell completion installer | RELEASE CANDIDATE | Includes user-level bash/zsh/fish completion install flow. |
+| `691d6ba` | fix: validate HEOS player ids and detect write failures | RELEASE CANDIDATE | Security/correctness hardening. |
+| `1ad3c38` | fix: restore HEOS discovery with pid validation | RELEASE CANDIDATE | Regression fix for HEOS discovery/default behavior. |
+| `ff67376` | fix: improve bash portability helpers | RELEASE CANDIDATE | Bash-runtime portability cleanup. |
+| `2a5c9d3` | fix: improve mute fallback and probe classification | RELEASE CANDIDATE | Accuracy/reliability cleanup. |
+| `23b30cb` | perf: reduce shell helper overhead | RELEASE CANDIDATE | Low-risk helper performance cleanup. |
+| `4bf5c58` | security: make AVR TLS verification configurable | RELEASE CANDIDATE | TLS compatibility mode is now explicit and configurable. |
 
 ### Files newly present in the public mirror
 
-Because `origin/main` already equals `HEAD`, the public mirror already contains the major v1.2.0-beta.3 tree shape: MPRIS daemon, test harness, RPM packaging, completions, man page, PowerShell module, docs, screenshots, and research references.
-
-No committed files are currently “local only” relative to `origin/main`.
+The public mirror may lag the local release branch. Treat `origin/main..HEAD` as the authoritative review set.
 
 ### Dirty working tree not covered by `origin/main..HEAD`
 
-These changes are local working-tree changes, not committed divergence. They must be reviewed, committed, and pushed separately if they are intended for the next public release.
-
-| Path | State | Classification | Notes |
-|---|---:|---|---|
-| `ARCHITECTURE.md` | modified | NEEDS REVIEW | Contains per-profile cache and write-race decision record updates. Good release material, but this is not yet committed. |
-| `denon.sh` | modified | NEEDS REVIEW | Contains per-profile IP cache, `--no-verify`, and `DENON_LOCK=1` implementation. Needs normal release validation before public push. |
-| `tests/test_profile_ip_cache.py` | untracked | NEEDS REVIEW | New pytest coverage for profile-scoped cache behavior. Must be added with the implementation if released. |
-| `tests/test_no_verify_and_locking.py` | untracked | NEEDS REVIEW | New pytest coverage for no-verify and lock behavior. Must be added with the implementation if released. |
-| `RELEASE_PLAN.md` | untracked | NEEDS REVIEW | Planning artifact from this task. Decide whether this belongs in the repo or should remain local. |
+Before tagging or pushing, rerun `git status --short` and account for every
+modified or untracked path. A release commit should contain only intentional
+documentation, tests, packaging metadata, or code changes.
 
 ### Public-safety scan findings
 
-Current committed tree contains example/private LAN IPs and one personal local path. These are not necessarily secrets, but they fail the requested pre-push hygiene checklist as written and should be cleaned or explicitly waived before the next public release.
+Current committed tree contains some example/private LAN IPs in research and
+PowerShell documentation. These are not necessarily secrets, but they should be
+cleaned or explicitly waived before the next public release.
 
-- `README.md` contains `/home/administrator/organized_projects/denon/denon_main`.
-- `README.md` contains live-looking examples such as `192.168.1.162`.
-- `man/denon.1`, `denon.sh`, `denon-mpris.service`, PowerShell docs, and research docs contain `192.168.1.100` or `192.168.1.23` examples.
+- README and man-page user examples should use documentation addresses such as `192.0.2.10`.
+- Research artifacts may retain sanitized live-probe addresses if they are intentionally historical.
+- `denon-mpris.service`, PowerShell docs, and research docs contain `192.168.1.100` examples.
 - `references/appcommand_get_verbs.json` says a live probe came from `192.168.1.100`.
 - No `.env`, credential, secret, or token files were found by filename scan.
 
@@ -73,7 +73,7 @@ Run this before any push or release tag:
 - [ ] README examples use documentation IPs such as `192.0.2.10`, not a real LAN address
 - [ ] `ARCHITECTURE.md` §7.11 will be updated post-push to reflect the mirror state
 - [ ] `bash -n denon.sh`
-- [ ] `zsh -n denon.sh`
+- [ ] `zsh -n completions/zsh/_denon`
 - [ ] `pytest -q`
 - [ ] `shellcheck -s bash denon.sh` if ShellCheck is installed
 - [ ] `make -f .copr/Makefile srpm outdir=/tmp/copr-out` or `make srpm` succeeds after the tag/version decision
@@ -133,7 +133,10 @@ Release blocker: `v1.2.0-beta.3` already exists and is behind `HEAD`. These note
 - `data` command family: fields, dump, discover, capabilities, and summary.
 - `dashboard` diagnostics, watch mode, color controls, source lists, now-playing details, and event logging.
 - Snapshot and diff workflow for receiver XML state.
-- Bash and zsh completions.
+- Bash, zsh, and fish completions plus the `denon completion install` user installer.
+- HEOS player IDs are validated as signed decimal IDs before `pid=...` command construction.
+- Write commands fail cleanly on rejected/non-2xx `set_config` responses.
+- HTTPS/TLS verification is explicit: default AVR-compatible `-k`, with opt-in strict/system trust, custom CA, or pinned public key.
 - Fedora RPM/COPR packaging files.
 - Per-profile IP cache path: `~/.cache/denon_ip.<profile>` when `DENON_PROFILE` is active.
 - Global `--no-verify` flag for batch write operations.
@@ -165,80 +168,22 @@ Release blocker: `v1.2.0-beta.3` already exists and is behind `HEAD`. These note
 
 ## 5. README.md delta
 
-Committed `README.md` is identical to `origin/main:README.md` after fetch. There is no committed README delta to push right now.
+Current `README.md` includes the post-hardening user-visible behavior:
 
-Recommended README updates before the next public release:
+- bash runtime versus bash/zsh/fish completion support
+- completion installer usage
+- `set_config`/write failure behavior
+- HEOS signed-decimal player-id validation wording
+- TLS compatibility mode and opt-in hardening variables
+- documentation-address examples for the main Bash CLI paths
 
-### Remove local workspace path
-
-Before:
-
-```text
-For local development in this workspace, the active repository path is:
-
-/home/administrator/organized_projects/denon/denon_main
-```
-
-After:
-
-```text
-For local development, run commands from the repository root.
-```
-
-### Replace live-looking IP examples
-
-Before:
-
-```bash
-export DENON_IP=192.168.1.162
-./denon.sh setip 192.168.1.162
-DENON_IP=192.168.1.162
-DENON_DEFAULT_IP=192.168.1.162
-Set-DenonReceiver -IpAddress 192.168.1.162
-Environment=DENON_IP=192.168.1.162
-```
-
-After:
-
-```bash
-export DENON_IP=192.0.2.10
-./denon.sh setip 192.0.2.10
-DENON_IP=192.0.2.10
-DENON_DEFAULT_IP=192.0.2.10
-Set-DenonReceiver -IpAddress 192.0.2.10
-Environment=DENON_IP=192.0.2.10
-```
-
-Use `192.0.2.0/24` documentation addresses consistently across README, man page, PowerShell docs, service comments, and research templates unless a research artifact intentionally records a sanitized example.
-
-### Add profile cache documentation
-
-Add under Configuration:
-
-```text
-If `DENON_PROFILE=<name>` is set, discovery and `denon setip` use
-`~/.cache/denon_ip.<name>`. Without `DENON_PROFILE`, the cache remains
-`~/.cache/denon_ip`.
-```
-
-### Add batch/write-race controls
-
-Add under Usage or Advanced Configuration:
-
-```text
-Write commands verify receiver state by default. For batch scripts that want to
-issue writes without readback polling, pass `--no-verify`; pretty output is
-marked `(unverified)` and JSON output includes `"verified": false`.
-
-To serialize concurrent CLI writes, set `DENON_LOCK=1`. This uses `flock` on
-the active IP cache path and honors `DENON_LOCK_TIMEOUT` (default 3 seconds).
-Reads do not take the lock.
-```
+Use `192.0.2.0/24` documentation addresses consistently in user-facing examples
+unless a research artifact intentionally records a sanitized historical probe.
 
 ### Current README sections that are accurate
 
 - Project status and feature overview for the committed v1.2.0-beta.3 tree.
-- Bash CLI installation/wrapper guidance, except for the local workspace path.
+- Bash CLI installation/wrapper guidance and bash/zsh/fish completion installer guidance.
 - Discovery cascade including Avahi/mDNS.
 - Data inventory and diagnostics examples.
 - Dashboard and HEOS examples.
@@ -267,9 +212,8 @@ git status --short
 git log --oneline origin/main..HEAD
 pytest -q
 bash -n denon.sh
-zsh -n denon.sh
+zsh -n completions/zsh/_denon
 shellcheck -s bash denon.sh
 make -f .copr/Makefile srpm outdir=/tmp/copr-out
 # review all output, then decide whether to push/tag
 ```
-

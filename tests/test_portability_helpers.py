@@ -199,10 +199,14 @@ def test_docs_clarify_bash_runtime_vs_zsh_fish_completions():
     readme = README.read_text(encoding="utf-8")
     architecture = ARCHITECTURE.read_text(encoding="utf-8")
     manpage = MANPAGE.read_text(encoding="utf-8")
+    script = SCRIPT.read_text(encoding="utf-8")
     assert "runtime script requires bash" in readme
     assert "does not mean `denon.sh` is sourced or executed as zsh/fish" in readme
     assert "Bash runtime, not POSIX `sh` or native zsh/fish" in architecture
     assert "zsh and fish support is provided through shell completion files" in manpage
+    assert ".zshrc" not in script
+    assert "source this from bash" in script.lower()
+    assert "signed\n  decimal IDs" in readme
 
 
 def test_lower_uses_bash_parameter_expansion_without_tr(tmp_path):

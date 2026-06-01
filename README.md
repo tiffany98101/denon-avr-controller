@@ -50,10 +50,10 @@ cd denon-avr-controller
 chmod +x denon.sh denon_automated_test.sh denon_heos_helper.py
 ```
 
-For local development in this workspace, the active repository path is:
+For local development, run commands from the repository root:
 
 ```text
-/home/administrator/organized_projects/denon/denon_main
+denon-avr-controller/
 ```
 
 Run the script directly:
@@ -193,7 +193,7 @@ the tool. Most commands use the Bash CLI's normal receiver lookup order:
 Recommended setup:
 
 ```bash
-export DENON_IP=192.168.1.162
+export DENON_IP=192.0.2.10
 ./denon.sh doctor
 ./denon.sh status
 ```
@@ -201,7 +201,7 @@ export DENON_IP=192.168.1.162
 To store a local cached IP instead:
 
 ```bash
-./denon.sh setip 192.168.1.162
+./denon.sh setip 192.0.2.10
 ./denon.sh status
 ```
 
@@ -212,8 +212,8 @@ a cached IP.
 Common configuration variables:
 
 ```bash
-DENON_IP=192.168.1.162
-DENON_DEFAULT_IP=192.168.1.162
+DENON_IP=192.0.2.10
+DENON_DEFAULT_IP=192.0.2.10
 DENON_SCAN_LAN=1
 DENON_MAX_VOLUME_DB=-10
 DENON_VOLUME_STEP_DB=1
@@ -370,13 +370,13 @@ Get-Command -Module DenonAvrController
 Configure the receiver for the current PowerShell session:
 
 ```powershell
-Set-DenonReceiver -IpAddress 192.168.1.162
+Set-DenonReceiver -IpAddress 192.0.2.10
 ```
 
 If the receiver's HTTPS certificate is not trusted:
 
 ```powershell
-Set-DenonReceiver -IpAddress 192.168.1.162 -SkipCertificateCheck
+Set-DenonReceiver -IpAddress 192.0.2.10 -SkipCertificateCheck
 ```
 
 Read-only examples:
@@ -536,7 +536,7 @@ Then add:
 
 ```ini
 [Service]
-Environment=DENON_IP=192.168.1.162
+Environment=DENON_IP=192.0.2.10
 ```
 
 **Status and logs:**
@@ -556,8 +556,8 @@ make uninstall-mpris
 
 - AVR HTTP polling runs on a worker thread; a stalled AVR response never
   blocks D-Bus.
-- HEOS player IDs learned from receiver responses are accepted only as decimal
-  numeric IDs before they are used in HEOS command construction.
+- HEOS player IDs learned from receiver responses are accepted only as signed
+  decimal IDs before they are used in HEOS command construction.
 - HEOS events (play state, now-playing, repeat, shuffle) are pushed over a
   persistent TCP connection to port 1255 with exponential-backoff reconnect.
 - `PropertiesChanged` signals fire only on real state transitions, not every
