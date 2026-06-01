@@ -65,6 +65,7 @@ _denon() {
         'doctor:Check dependencies and connectivity'
         'config:Get or set configuration values'
         'profile:Save and restore receiver state profiles'
+        'completion:Generate shell completion scripts'
         'version:Print version string'
         'help:Show usage summary'
     )
@@ -165,6 +166,22 @@ _denon() {
                     ;;
                 profile)
                     compadd -- list show path set unset active
+                    ;;
+                completion)
+                    if (( CURRENT == 3 )); then
+                        local -a completion_cmds
+                        completion_cmds=(
+                            'bash:Generate bash completion script'
+                            'zsh:Generate zsh completion script'
+                            'fish:Generate fish completion script'
+                            'install:Install shell completion'
+                        )
+                        _describe 'completion command' completion_cmds
+                    elif [[ ${words[3]} == install && ${words[CURRENT-1]} == --shell ]]; then
+                        compadd -- bash zsh fish
+                    elif [[ ${words[3]} == install ]]; then
+                        compadd -- --shell --force
+                    fi
                     ;;
                 dashboard)
                     compadd -- --color --unicode --ascii --interval --watch --diagnostics

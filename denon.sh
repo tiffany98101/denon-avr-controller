@@ -469,6 +469,10 @@ Discovery and setup:
   denon discover
   denon setip <ip>
 
+Shell integration:
+  denon completion install
+  denon completion bash|zsh|fish
+
 Configuration:
   DENON_IP
   DENON_DEFAULT_IP
@@ -6120,6 +6124,264 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
         ;;
     esac
   }
+
+  _denon_completion_usage() {
+    cat <<'EOF'
+Usage: denon completion <command>
+
+Generate or install shell completion scripts.
+
+Commands:
+  denon completion bash
+  denon completion zsh
+  denon completion fish
+  denon completion install
+EOF
+  }
+
+  _denon_completion_source_path() {
+    local shell="$1"
+    local script_path script_dir name path
+    script_path=$(_denon_script_path 2>/dev/null || printf '')
+    script_dir=""
+    [[ -n "$script_path" ]] && script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd -P)
+
+    case "$shell" in
+      bash) name="completions/bash/denon" ;;
+      zsh) name="completions/zsh/_denon" ;;
+      fish) name="completions/fish/denon.fish" ;;
+      *) return 1 ;;
+    esac
+
+    if [[ -n "$script_dir" && -r "$script_dir/$name" ]]; then
+      printf '%s\n' "$script_dir/$name"
+      return 0
+    fi
+
+    case "$shell" in
+      bash)
+        for path in /usr/local/share/bash-completion/completions/denon /usr/share/bash-completion/completions/denon; do
+          [[ -r "$path" ]] && { printf '%s\n' "$path"; return 0; }
+        done
+        ;;
+      zsh)
+        for path in /usr/local/share/zsh/site-functions/_denon /usr/share/zsh/site-functions/_denon; do
+          [[ -r "$path" ]] && { printf '%s\n' "$path"; return 0; }
+        done
+        ;;
+      fish)
+        for path in /usr/local/share/fish/vendor_completions.d/denon.fish /usr/share/fish/vendor_completions.d/denon.fish; do
+          [[ -r "$path" ]] && { printf '%s\n' "$path"; return 0; }
+        done
+        ;;
+    esac
+
+    return 1
+  }
+
+  _denon_completion_fallback() {
+    local shell="$1"
+    case "$shell" in
+      bash)
+        cat <<'EOF'
+# bash completion for denon-avr-controller
+_denon_complete() {
+  local cur prev
+  COMPREPLY=()
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+  local top_cmds="status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono"
+  case "$prev" in
+    denon) COMPREPLY=( $(compgen -W "$top_cmds" -- "$cur") ); return ;;
+    completion) COMPREPLY=( $(compgen -W "bash zsh fish install" -- "$cur") ); return ;;
+    install) COMPREPLY=( $(compgen -W "--shell --force" -- "$cur") ); return ;;
+    --shell) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;
+  esac
+}
+complete -F _denon_complete denon
+EOF
+        ;;
+      zsh)
+        cat <<'EOF'
+#compdef denon
+_denon() {
+  local -a top_cmds completion_cmds install_opts shells
+  top_cmds=(status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono)
+  completion_cmds=(bash zsh fish install)
+  install_opts=(--shell --force)
+  shells=(bash zsh fish)
+  if (( CURRENT == 2 )); then
+    compadd -- "${top_cmds[@]}"
+  elif [[ ${words[2]} == completion && $CURRENT == 3 ]]; then
+    compadd -- "${completion_cmds[@]}"
+  elif [[ ${words[2]} == completion && ${words[3]} == install && ${words[CURRENT-1]} == --shell ]]; then
+    compadd -- "${shells[@]}"
+  elif [[ ${words[2]} == completion && ${words[3]} == install ]]; then
+    compadd -- "${install_opts[@]}"
+  fi
+}
+_denon "$@"
+EOF
+        ;;
+      fish)
+        cat <<'EOF'
+# fish completion for denon-avr-controller
+set -l denon_commands status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono
+complete -c denon -f
+complete -c denon -n "__fish_use_subcommand" -a "$denon_commands"
+complete -c denon -n "__fish_seen_subcommand_from completion; and not __fish_seen_subcommand_from bash zsh fish install" -a "bash zsh fish install"
+complete -c denon -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install" -l shell -xa "bash zsh fish"
+complete -c denon -n "__fish_seen_subcommand_from completion; and __fish_seen_subcommand_from install" -l force
+EOF
+        ;;
+      *) return 1 ;;
+    esac
+  }
+
+  _denon_completion_print() {
+    local shell="$1"
+    local path
+    path=$(_denon_completion_source_path "$shell" 2>/dev/null || printf '')
+    if [[ -n "$path" ]]; then
+      cat "$path"
+    else
+      _denon_completion_fallback "$shell"
+    fi
+  }
+
+  _denon_completion_detect_shell() {
+    local explicit="$1"
+    local shell_name parent_name
+
+    if [[ -n "$explicit" ]]; then
+      case "$explicit" in
+        bash|zsh|fish) printf '%s\n' "$explicit"; return 0 ;;
+        *) echo "Error: unsupported shell '$explicit' (expected bash, zsh, or fish)" >&2; return 1 ;;
+      esac
+    fi
+
+    shell_name=$(basename "${SHELL:-}" 2>/dev/null || printf '')
+    case "$shell_name" in
+      bash|zsh|fish) printf '%s\n' "$shell_name"; return 0 ;;
+    esac
+
+    if command -v ps >/dev/null 2>&1; then
+      parent_name=$(ps -p "${PPID:-0}" -o comm= 2>/dev/null | awk '{print $1}' | xargs basename 2>/dev/null || printf '')
+      case "$parent_name" in
+        bash|zsh|fish) printf '%s\n' "$parent_name"; return 0 ;;
+      esac
+    fi
+
+    echo "Error: could not detect shell; rerun with --shell bash, --shell zsh, or --shell fish" >&2
+    return 1
+  }
+
+  _denon_completion_install_path() {
+    local shell="$1"
+    case "$shell" in
+      bash) printf '%s/.local/share/bash-completion/completions/denon\n' "$HOME" ;;
+      zsh) printf '%s/.local/share/zsh/site-functions/_denon\n' "$HOME" ;;
+      fish) printf '%s/.config/fish/completions/denon.fish\n' "$HOME" ;;
+      *) return 1 ;;
+    esac
+  }
+
+  _denon_completion_reload_note() {
+    local shell="$1"
+    local path="$2"
+    case "$shell" in
+      bash) printf 'Restart your shell, or run: source %s\n' "$path" ;;
+      zsh)
+        printf 'Restart your shell, or run: autoload -Uz compinit && compinit\n'
+        printf 'Note: ensure %s is in your zsh fpath.\n' "$(dirname "$path")"
+        ;;
+      fish) printf 'Restart fish, or run: source %s\n' "$path" ;;
+    esac
+  }
+
+  _denon_completion_install() {
+    local shell="" force=0 arg target tmp
+    while (($#)); do
+      arg="$1"
+      case "$arg" in
+        --shell)
+          if [[ -z "${2:-}" ]]; then
+            echo "Error: --shell requires bash, zsh, or fish" >&2
+            return 2
+          fi
+          shell="$2"
+          shift 2
+          ;;
+        --shell=*)
+          shell="${arg#--shell=}"
+          shift
+          ;;
+        --force)
+          force=1
+          shift
+          ;;
+        -h|--help|help)
+          cat <<'EOF'
+Usage: denon completion install [--shell bash|zsh|fish] [--force]
+
+Install shell completion for the current user.
+EOF
+          return 0
+          ;;
+        *)
+          echo "Error: unknown completion install option: $arg" >&2
+          return 2
+          ;;
+      esac
+    done
+
+    shell=$(_denon_completion_detect_shell "$shell") || return 1
+    target=$(_denon_completion_install_path "$shell") || return 1
+    mkdir -p "$(dirname "$target")" || return 1
+    tmp=$(mktemp "${TMPDIR:-/tmp}/denon-completion.XXXXXX") || return 1
+    _denon_completion_print "$shell" >"$tmp" || { rm -f "$tmp"; return 1; }
+
+    if [[ -e "$target" ]]; then
+      if cmp -s "$tmp" "$target"; then
+        rm -f "$tmp"
+        printf 'Completion already installed: %s\n' "$target"
+        _denon_completion_reload_note "$shell" "$target"
+        return 0
+      fi
+      if (( ! force )); then
+        rm -f "$tmp"
+        printf 'Completion file already exists and differs: %s\n' "$target" >&2
+        printf 'Rerun with --force to overwrite it.\n' >&2
+        return 1
+      fi
+    fi
+
+    mv "$tmp" "$target" || { rm -f "$tmp"; return 1; }
+    chmod 0644 "$target" 2>/dev/null || true
+    printf 'Installed %s completion: %s\n' "$shell" "$target"
+    _denon_completion_reload_note "$shell" "$target"
+  }
+
+  _denon_completion_cmd() {
+    local subcmd
+    subcmd=$(_denon_lower "${1:-}")
+    case "$subcmd" in
+      ""|-h|--help|help)
+        _denon_completion_usage
+        ;;
+      bash|zsh|fish)
+        _denon_completion_print "$subcmd"
+        ;;
+      install)
+        _denon_completion_install "${@:2}"
+        ;;
+      *)
+        _denon_completion_usage >&2
+        return 1
+        ;;
+    esac
+  }
+
   # ── Init ──────────────────────────────────────────────────────────────────
 
   if [[ -n "${DENON_PROFILE:-}" ]]; then
@@ -6188,6 +6450,10 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
       ;;
     config)
       _denon_config_cmd "${@:2}"
+      return $?
+      ;;
+    completion)
+      _denon_completion_cmd "${@:2}"
       return $?
       ;;
     profile)
@@ -6536,7 +6802,7 @@ _denon_completion() {
     sleep qs quick quick-select
     on off xbox xfinity bluray tv phono heos vol up down mute unmute toggle movie game night music mode
     dyn-eq dyn-vol cinema-eq multeq bass treble
-    play pause stop next prev previous track now dashboard dashboard-alt zone2 preset watch-event discover doctor setip config profile help
+    play pause stop next prev previous track now dashboard dashboard-alt zone2 preset watch-event discover doctor setip config profile completion help
   )
   modes=(stereo direct pure movie music game auto)
   zone2_commands=(status sources source rename-source clear-source-name on off mute unmute vol volume up down sleep)
@@ -6629,6 +6895,20 @@ _denon_completion() {
     raw)
       if (( CURRENT == 3 )); then
         _describe -t raw-commands 'raw command' raw_commands
+        return
+      fi
+      ;;
+    completion)
+      if (( CURRENT == 3 )); then
+        _values 'completion command' bash zsh fish install
+        return
+      fi
+      if [[ "${words[3]}" == "install" ]]; then
+        if [[ "${words[CURRENT-1]}" == "--shell" ]]; then
+          _values 'shell' bash zsh fish
+        else
+          _values 'completion install option' --shell --force
+        fi
         return
       fi
       ;;

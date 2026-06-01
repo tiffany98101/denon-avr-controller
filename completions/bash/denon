@@ -1,9 +1,17 @@
 # bash completion for denon-avr-controller
+# shellcheck shell=bash
 # Install: source this file, or place it in /usr/share/bash-completion/completions/denon
 
+# shellcheck disable=SC2034
 _denon_complete() {
     local cur prev words cword
-    _init_completion || return
+    if declare -F _init_completion >/dev/null 2>&1; then
+        _init_completion || return
+    else
+        COMPREPLY=()
+        cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+    fi
 
     local top_cmds=(
         status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt
@@ -15,7 +23,7 @@ _denon_complete() {
         bass treble
         play pause stop next prev previous track now
         sleep qs preset watch-event
-        discover setip doctor config profile
+        discover setip doctor config profile completion
         version help
     )
 
@@ -102,6 +110,18 @@ _denon_complete() {
             ;;
         profile)
             COMPREPLY=( $(compgen -W "list show path set unset active" -- "$cur") )
+            return
+            ;;
+        completion)
+            COMPREPLY=( $(compgen -W "bash zsh fish install" -- "$cur") )
+            return
+            ;;
+        install)
+            COMPREPLY=( $(compgen -W "--shell --force" -- "$cur") )
+            return
+            ;;
+        --shell)
+            COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") )
             return
             ;;
         dashboard)

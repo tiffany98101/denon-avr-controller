@@ -49,7 +49,7 @@ all work automatically.
 
 Key features:
   - Auto-discovery via ARP / mDNS — no static IP required
-  - Bash and Zsh tab completion
+  - Bash, Zsh, and Fish tab completion
   - MPRIS2 bridge published as a systemd user unit (denon-mpris.service)
   - Zone 2 control, sleep timer, presets, snapshot/diff
 
@@ -87,6 +87,10 @@ install -Dm644 completions/bash/denon \
 install -Dm644 completions/zsh/_denon \
     %{buildroot}%{_datadir}/zsh/site-functions/_denon
 
+# Fish completion → /usr/share/fish/vendor_completions.d/denon.fish
+install -Dm644 completions/fish/denon.fish \
+    %{buildroot}%{_datadir}/fish/vendor_completions.d/denon.fish
+
 # Man page → /usr/share/man/man1/denon.1
 install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
@@ -99,6 +103,7 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 %{_userunitdir}/denon-mpris.service
 %{_datadir}/bash-completion/completions/denon
 %{_datadir}/zsh/site-functions/_denon
+%{_datadir}/fish/vendor_completions.d/denon.fish
 %{_mandir}/man1/denon.1*
 
 
@@ -112,4 +117,4 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 %changelog
 * Wed May 20 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.3.beta3
 - Initial RPM packaging for Fedora/Copr
-- Includes bash/zsh completion, man page, and systemd user unit
+- Includes bash/zsh/fish completion, man page, and systemd user unit

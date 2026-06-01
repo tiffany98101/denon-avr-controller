@@ -30,7 +30,7 @@ denon_main/
 ├── denon-mpris.service          # User-scope systemd unit
 ├── denon_automated_test.sh      # Bash-level integration tests
 ├── tests/                       # pytest-based unit tests (use DENON_UNIT_TEST=1)
-├── completions/                 # Shell completions (bash + zsh)
+├── completions/                 # Shell completions (bash + zsh + fish)
 ├── man/                         # Man pages
 ├── docs/                        # Long-form documentation
 ├── scripts/                     # Build / dev helpers

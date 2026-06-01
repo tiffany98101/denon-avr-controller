@@ -114,6 +114,29 @@ rm "$HOME/.local/bin/denon"
 hash -r
 ```
 
+### Shell Completions
+
+RPM/package installs still place completion files in the normal system
+locations for bash, zsh, and fish. For a per-user install from a checkout or
+wrapper, use:
+
+```bash
+denon completion install
+denon completion install --shell bash
+```
+
+The installer writes to the standard user-level completion path for the selected
+shell, creates directories as needed, and will not overwrite a different file
+unless you pass `--force`. Restart your shell after installing, or reload the
+completion file according to your shell.
+
+To install manually, print a completion script and redirect it:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+denon completion bash > ~/.local/share/bash-completion/completions/denon
+```
+
 ### Optional KDE/Fedora Tray Launcher
 
 The CLI can be launched from a small optional system tray helper. This does not

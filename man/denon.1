@@ -150,6 +150,15 @@ Manage named receiver\-state profiles.
 .TP
 .B data \fBfields|summary|dump|capabilities|discover\fR
 Low\-level field access.
+.TP
+.B completion \fBbash|zsh|fish|install\fR
+Print shell completion scripts, or install completion for the current user.
+.B completion install
+auto\-detects bash, zsh, or fish; use
+.B \-\-shell
+to choose explicitly and
+.B \-\-force
+to overwrite a different existing user completion file.
 .SH ENVIRONMENT
 .TP
 .B DENON_IP
@@ -170,6 +179,20 @@ and
 deleted on each new
 .B discover
 run.
+.TP
+.I ~/.local/share/bash-completion/completions/denon
+Per\-user bash completion target used by
+.BR "denon completion install" .
+.TP
+.I ~/.local/share/zsh/site-functions/_denon
+Per\-user zsh completion target used by
+.BR "denon completion install" .
+The directory may need to be present in
+.BR fpath .
+.TP
+.I ~/.config/fish/completions/denon.fish
+Per\-user fish completion target used by
+.BR "denon completion install" .
 .SH EXAMPLES
 .EX
 denon status
@@ -180,8 +203,14 @@ DENON_IP=192.168.1.162 denon off
 denon dashboard-alt \-\-provider auto
 denon dashboard-alt \-\-provider direct \-\-json
 denon dashboard-alt \-\-compare-providers
+denon completion install
+denon completion install \-\-shell bash
+denon completion bash > ~/.local/share/bash\-completion/completions/denon
 systemctl \-\-user enable \-\-now denon\-mpris.service
 .EE
+.PP
+After installing completions, restart the shell or reload completion for that
+shell.
 .SH AUTHOR
 Tiffany Von Arnim <tiffany.vonarnim@gmail.com>
 .SH SEE ALSO
