@@ -46,14 +46,14 @@ cleaned or explicitly waived before the next public release.
 - `references/appcommand_get_verbs.json` says a live probe came from `192.168.1.100`.
 - No `.env`, credential, secret, or token files were found by filename scan.
 
-Important release metadata issue:
+Release metadata status:
 
-- `VERSION` is `1.2.0-beta.3`.
-- Tag `v1.2.0-beta.3` already exists and points behind current `HEAD`.
-- `make tag` would try to create `v1.2.0-beta.3` again and fail unless the maintainer intentionally changes version metadata first.
-- The RPM spec also points at `v1.2.0-beta.3` via `%global tag_name v%{version_base}-%{pre_tag}`.
+- `VERSION` is `1.2.0-beta.4`.
+- Tag `v1.2.0-beta.4` is the intended release tag.
+- Confirm the tag does not already exist locally or remotely immediately before tagging.
+- The RPM spec points at `v1.2.0-beta.4` via `%global tag_name v%{version_base}-%{pre_tag}`.
 
-Decision needed before tagging: choose the next public version, likely `1.2.0-beta.4` or `1.2.0`, and update `VERSION`, `rpm/denon-avr-controller.spec`, and changelog/release notes together.
+Before tagging, verify `VERSION`, `rpm/denon-avr-controller.spec`, and release notes all still match `1.2.0-beta.4`.
 
 ## 2. Pre-push checklist
 
@@ -62,63 +62,44 @@ Run this before any push or release tag:
 - [ ] `git fetch origin`
 - [ ] `git status --short` is understood; no accidental untracked files
 - [ ] `git log --oneline origin/main..HEAD` contains only commits intended for public release
-- [ ] No `DENON_IP` literals with private IPs in committed files: grep for `192.168.`, `10.`, and `172.16-31.`
+- [ ] No live/private IPs in README or man-page user examples; any remaining research or service examples are intentional and documented above
 - [ ] No personal home paths such as `/home/administrator` in code or docs
 - [ ] No `.env`, credentials, tokens, private keys, receiver dumps, or local logs staged
 - [ ] `VERSION` matches the intended public version
 - [ ] `rpm/denon-avr-controller.spec` `%global version_base`, `%global pre_tag`, `%global rpm_release`, `Source0`, and `%changelog` match the intended public version
 - [ ] The intended git tag does not already exist locally or remotely
-- [ ] CHANGELOG entry exists for the version
+- [ ] `RELEASE_NOTES.md` or changelog entry exists for the version
 - [ ] README.md describes what users see in the public repo, not local-only workspace paths
 - [ ] README examples use documentation IPs such as `192.0.2.10`, not a real LAN address
 - [ ] `ARCHITECTURE.md` §7.11 will be updated post-push to reflect the mirror state
 - [ ] `bash -n denon.sh`
+- [ ] `bash -n completions/bash/denon`
 - [ ] `zsh -n completions/zsh/_denon`
+- [ ] `fish -n completions/fish/denon.fish` if fish is installed
+- [ ] `python3 -m py_compile denon_heos_helper.py denon_dashboard_alt.py denon_mpris.py`
 - [ ] `pytest -q`
 - [ ] `shellcheck -s bash denon.sh` if ShellCheck is installed
 - [ ] `make -f .copr/Makefile srpm outdir=/tmp/copr-out` or `make srpm` succeeds after the tag/version decision
 
-## 3. Suggested commit/PR sequence
+## 3. Suggested release sequence
 
 ### Recommendation
 
-Use several smaller logical PRs for the remaining dirty-tree work. Do not use an umbrella PR for the already-committed v1.2.0-beta.3 tree, because `origin/main` already contains that history.
+Use one focused release-prep commit for v1.2.0-beta.4 metadata and release
+notes after the hardening commits have passed validation.
 
-The public mirror is already at local committed `HEAD`. The next useful sequence is:
+The next useful sequence is:
 
-1. Release hygiene PR
-   - Remove local workspace path from `README.md`.
-   - Replace live/private IP examples with documentation addresses.
-   - Add or update `CHANGELOG.md`.
-   - Decide whether to keep `RELEASE_PLAN.md` in repo or leave it local.
-
-2. Per-profile IP cache PR
-   - Include `denon.sh`, `ARCHITECTURE.md`, and `tests/test_profile_ip_cache.py`.
-   - This should land as one coherent behavior change because it changes cache path semantics for profiled users.
-
-3. Concurrent write mitigation PR
-   - Include `denon.sh`, `ARCHITECTURE.md`, and `tests/test_no_verify_and_locking.py`.
-   - Keep MPRIS daemon debounce out of scope, but leave the documented TODO.
-
-4. Version/tag preparation PR
-   - Update `VERSION`.
-   - Update `rpm/denon-avr-controller.spec` globals and `%changelog`.
-   - Update release notes/CHANGELOG for the chosen version.
-   - Run SRPM generation locally before tagging.
-
-Why smaller PRs:
-
-- The public mirror already has the big MPRIS/test/RPM/data-family sync, so an umbrella sync PR would mix already-public work with new unreleased behavior.
-- The dirty-tree changes have separable risk: cache path behavior, write serialization, and release hygiene.
-- Smaller PRs make it easier to revert one behavior without backing out unrelated docs or packaging.
-
-If the maintainer wants a single release branch anyway, use one branch containing the four groups above, but preserve the logical commits.
+1. Commit the v1.2.0-beta.4 metadata and release notes.
+2. Run the validation commands in §2.
+3. Optionally build/inspect the SRPM.
+4. Create and push `v1.2.0-beta.4` manually.
 
 ## 4. Draft release notes
 
-Current `VERSION`: `1.2.0-beta.3`
+Current `VERSION`: `1.2.0-beta.4`
 
-Release blocker: `v1.2.0-beta.3` already exists and is behind `HEAD`. These notes should be used for the maintainer-selected next version, not blindly tagged as `v1.2.0-beta.3`.
+These notes correspond to the intended `v1.2.0-beta.4` tag.
 
 ### Highlights
 
@@ -182,7 +163,7 @@ unless a research artifact intentionally records a sanitized historical probe.
 
 ### Current README sections that are accurate
 
-- Project status and feature overview for the committed v1.2.0-beta.3 tree.
+- Project status and feature overview for the committed v1.2.0-beta.4 tree.
 - Bash CLI installation/wrapper guidance and bash/zsh/fish completion installer guidance.
 - Discovery cascade including Avahi/mDNS.
 - Data inventory and diagnostics examples.

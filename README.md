@@ -4,7 +4,7 @@ A practical CLI/dashboard tool for controlling and inspecting Denon AVR receiver
 
 ## Current Status
 
-Current version: `v1.2.0-beta.3`.
+Current version: `v1.2.0-beta.4`.
 
 The project currently supports a Bash shell CLI, a terminal dashboard, safe receiver diagnostics/data inventory commands, HEOS playback metadata/control where the receiver exposes it, and a native PowerShell module. It is a local-network receiver control and diagnostics tool; it does not use a cloud service.
 

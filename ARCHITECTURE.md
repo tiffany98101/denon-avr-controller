@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — `denon-avr-controller`
 
-> **Status:** Living document. Reflects the codebase as of `denon.sh` v1.2.0-beta.3 (~6,473 lines), `denon_heos_helper.py`, `denon_mpris.py`, the systemd user unit, and the Makefile-driven packaging workflow.
+> **Status:** Living document. Reflects the codebase as of `denon.sh` v1.2.0-beta.4 (~6,473 lines), `denon_heos_helper.py`, `denon_mpris.py`, the systemd user unit, and the Makefile-driven packaging workflow.
 > **Audience:** Maintainer (you) and any future contributor or AI agent proposing changes. Every PR must be evaluated against this document. If a change conflicts with the rules here, *this document must be updated first* — never silently violated.
 > **Revision note:** This is v2. The v1 baseline (committed `6dcc504`) was written against the GitHub public state, which lagged the working tree substantially. v2 reconciles the doc to the local truth. Sections that were wrong or obsolete in v1 are marked **[v1 superseded]** with the corrected understanding.
 
@@ -382,7 +382,7 @@ The Makefile and `rpm/` directory target Fedora COPR. The script itself runs on 
 
 ### 7.11 Drift between local working tree and public mirror
 
-This is the meta-issue that produced the v1→v2 reconciliation in the first place. The local tree is at v1.2.0-beta.3, ~6,500 lines, with the MPRIS daemon, test harness, RPM packaging, and `data` family. The public `github.com/tiffany98101/denon-avr-controller` mirror is materially older.
+This is the meta-issue that produced the v1→v2 reconciliation in the first place. The local tree is at v1.2.0-beta.4, ~6,500 lines, with the MPRIS daemon, test harness, RPM packaging, and `data` family. The public `github.com/tiffany98101/denon-avr-controller` mirror is materially older.
 
 The drift is a project-management concern more than a code one, but it has architectural consequences: anyone reading the public repo gets a misleading picture of how the project is structured. **Recommended posture:** push to public on each tagged release (`make tag` → `git push --tags` → `git push`), not just when convenient. The COPR build pipeline already implicitly assumes this. Long drift periods like the current one make the public README and help text dishonest.
 
