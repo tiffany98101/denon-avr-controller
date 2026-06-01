@@ -1126,6 +1126,32 @@ class TestDashboardInteractiveKeys:
         assert r.returncode == 0
         assert event in r.stdout
 
+    @pytest.mark.parametrize(("key", "state", "call", "key_event", "transport_event"), [
+        (r"$'\033[D'", "Playing", "heos:prev", "Key: Previous", "Transport: Previous"),
+        (r"$'\033[C'", "Playing", "heos:next", "Key: Next", "Transport: Next"),
+        ("' '", "Playing", "heos:pause", "Key: Play/Pause", "Transport: Play/Pause"),
+        ("' '", "Paused", "heos:play", "Key: Play/Pause", "Transport: Play/Pause"),
+    ])
+    def test_main_dashboard_transport_keys_dispatch_and_report_success(self, key, state, call, key_event, transport_event):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            dash_transport_state="{state}"
+            _denon_heos_control() {{ calls="${{calls}}heos:$1"$'\\n'; }}
+
+            _denon_dashboard_handle_key {key}
+            printf 'calls=%s\\n' "$calls"
+            printf '%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert call in r.stdout
+        assert key_event in r.stdout
+        assert transport_event in r.stdout
+
     def test_main_dashboard_q_quits_without_key_feedback(self):
         code = textwrap.dedent("""\
             dashboard_stop_pending=0
@@ -1157,6 +1183,95 @@ class TestDashboardInteractiveKeys:
         assert "stop=0" in r.stdout
         assert "Key: Next" in r.stdout
         assert "Transport command unavailable: next" in r.stdout
+
+    def test_main_dashboard_failed_play_pause_reports_action_without_exiting(self):
+        code = textwrap.dedent("""\
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            dashboard_stop_pending=0
+            dash_transport_state="Playing"
+            _denon_heos_control() { return 1; }
+
+            _denon_dashboard_handle_key ' '
+            printf 'stop=%s\\n%s\\n' "$dashboard_stop_pending" "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "stop=0" in r.stdout
+        assert "Key: Play/Pause" in r.stdout
+        assert "Transport command unavailable: play/pause" in r.stdout
+
+    def test_main_dashboard_transport_key_feedback_is_not_suppressed_by_throttle(self):
+        code = textwrap.dedent("""\
+            calls=0
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=200
+            dashboard_test_now_ms=1000
+            dashboard_events=""
+            last_dashboard_event=""
+            dash_transport_state="Playing"
+            _denon_heos_control() { calls=$((calls + 1)); }
+
+            _denon_dashboard_handle_key ' '
+            _denon_dashboard_handle_key ' '
+            printf 'calls=%s\\n%s\\n' "$calls" "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "calls=1" in r.stdout
+        assert r.stdout.count("Key: Play/Pause") == 2
+        assert "Transport: Play/Pause" in r.stdout
+        assert "Transport command unavailable: play/pause" in r.stdout
+
+    def test_main_dashboard_pending_numeric_buffer_does_not_block_controls(self):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            dashboard_stop_pending=0
+            dashboard_exit_status=9
+            dash_transport_state="Playing"
+            {self.SOURCE_BODY}
+            _denon_heos_control() {{ calls="${{calls}}heos:$1"$'\\n'; }}
+            _denon_toggle() {{ calls="${{calls}}toggle:$1"$'\\n'; }}
+            _denon_dashboard_redraw() {{ :; }}
+
+            _denon_dashboard_handle_key 1
+            _denon_dashboard_handle_key ' '
+            printf 'after_space_buffer=%s\\n' "$dashboard_numeric_buffer"
+            _denon_dashboard_handle_key 1
+            _denon_dashboard_handle_key $'\\033[D'
+            printf 'after_left_buffer=%s\\n' "$dashboard_numeric_buffer"
+            _denon_dashboard_handle_key 1
+            _denon_dashboard_handle_key m
+            printf 'after_m_buffer=%s\\n' "$dashboard_numeric_buffer"
+            _denon_dashboard_handle_key 1
+            _denon_dashboard_handle_key z
+            printf 'after_z_buffer=%s target=%s\\n' "$dashboard_numeric_buffer" "$dashboard_control_target"
+            _denon_dashboard_handle_key 1
+            _denon_dashboard_handle_key q
+            printf 'after_q_buffer=%s stop=%s status=%s\\n' "$dashboard_numeric_buffer" "$dashboard_stop_pending" "$dashboard_exit_status"
+            printf 'calls=%s\\n' "$calls"
+            printf 'events=%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "after_space_buffer=" in r.stdout
+        assert "after_left_buffer=" in r.stdout
+        assert "after_m_buffer=" in r.stdout
+        assert "after_z_buffer= target=Zone2" in r.stdout
+        assert "after_q_buffer= stop=1 status=0" in r.stdout
+        assert "heos:pause" in r.stdout
+        assert "heos:prev" in r.stdout
+        assert "toggle:mute" in r.stdout
+        assert "Key: Play/Pause" in r.stdout
+        assert "Key: Previous" in r.stdout
+        assert "Key: Mute Toggle" in r.stdout
+        assert "Key: Control Target: Zone2" in r.stdout
 
     def test_main_dashboard_throttle_suppresses_held_key_events(self):
         code = textwrap.dedent("""\
@@ -1292,9 +1407,9 @@ class TestDashboardDiagnostics:
         r = _bash(code)
         assert r.returncode == 0
         assert "Control Target: Zone2" in r.stdout
-        assert "Keys: ↑/↓ volume" in r.stdout
-        assert "type source #  z zone" in r.stdout
+        assert "Keys: ↑/↓ Volume  ←/→ Prev/Next  Space Play/Pause  M Mute  Source: Type # From List  Z Zone  Q Quit" in r.stdout
         assert "number source" not in r.stdout
+        assert "type source #" not in r.stdout
 
     def test_dashboard_interactive_output_uses_compact_source_number_help_when_narrow(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\
@@ -1302,13 +1417,14 @@ class TestDashboardDiagnostics:
             dashboard_control_target="Main"
             dashboard_keyboard_active=1
             watch=1
-            DENON_DASHBOARD_WIDTH=80
+            DENON_DASHBOARD_WIDTH=98
             _denon_dashboard_render
         """)
         r = _bash(code)
         assert r.returncode == 0
-        assert "src #  z zone" in r.stdout
+        assert "Keys: ↑/↓ Vol  ←/→ Prev/Next  Space Play/Pause  M Mute  Src: # From List  Z Zone  Q Quit" in r.stdout
         assert "number source" not in r.stdout
+        assert "type source #" not in r.stdout
 
     def test_dashboard_body_display_values_are_normalized(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\
@@ -1320,13 +1436,43 @@ class TestDashboardDiagnostics:
         """)
         r = _bash(code)
         assert r.returncode == 0
-        assert "HEOS:     3.88.614 Wi-Fi" in r.stdout
+        assert "IP:       192.0.2.10" in r.stdout
+        assert "Version: Unknown" in r.stdout
+        assert "HEOS:    3.88.614 Wi-Fi" in r.stdout
         assert "Zone:   Zone 2" in r.stdout
         assert "Title:   No Metadata For Current Source" in r.stdout
         assert "No State Changes Yet" in r.stdout
         assert "wifi" not in r.stdout
         assert "ZONE2" not in r.stdout
         assert "No state changes yet" not in r.stdout
+
+    def test_dashboard_receiver_info_renders_present_ip_and_version(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dash_avr_version="1.64"
+            _denon_dashboard_layout 120 40
+            _denon_dashboard_build_bodies
+            printf '%s\\n' "$dash_receiver_body"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "Receiver: Denon AVR-X1600H" in r.stdout
+        assert "IP:       192.0.2.10" in r.stdout
+        assert "Version: 1.64" in r.stdout
+        assert "HEOS:    3.88.614 Wi-Fi" in r.stdout
+
+    def test_dashboard_receiver_info_missing_ip_and_version_render_unknown(self):
+        code = textwrap.dedent(self.DASHBOARD_STATE + """\
+            dash_ip=""
+            dash_avr_version="unavailable_on_tested_read_only_surfaces"
+            _denon_dashboard_layout 120 40
+            _denon_dashboard_build_bodies
+            printf '%s\\n' "$dash_receiver_body"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "IP:       Unknown" in r.stdout
+        assert "Version: Unknown" in r.stdout
+        assert "HEOS:    3.88.614 Wi-Fi" in r.stdout
 
     def test_static_dashboard_unicode_render_starts_with_top_border(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\

@@ -9,6 +9,7 @@ SCRIPT = ROOT / "denon.sh"
 README = ROOT / "README.md"
 ARCHITECTURE = ROOT / "ARCHITECTURE.md"
 MANPAGE = ROOT / "man" / "denon.1"
+RPM_SPEC = ROOT / "rpm" / "denon-avr-controller.spec"
 
 
 def _bash(code: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
@@ -193,6 +194,55 @@ def test_help_mentions_bash_runtime_and_shell_completions():
     assert "runtime script requires bash" in r.stdout
     assert "Shell completions are available for bash, zsh, and fish" in r.stdout
     assert "sourced from bash/zsh" not in r.stdout
+
+
+def test_helper_lookup_prefers_explicit_environment_override(tmp_path):
+    helper = tmp_path / "custom_heos.py"
+    helper.write_text("# helper\n", encoding="utf-8")
+    code = "_denon_helper_path \"$DENON_HEOS_HELPER\" denon_heos_helper.py"
+    r = _bash(code, {"DENON_HEOS_HELPER": str(helper)})
+
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == str(helper)
+
+
+def test_helper_lookup_prefers_script_directory_for_source_tree_use(tmp_path):
+    script_dir = tmp_path / "checkout"
+    script_dir.mkdir()
+    helper = script_dir / "denon_heos_helper.py"
+    helper.write_text("# helper\n", encoding="utf-8")
+
+    r = _bash(
+        "_denon_helper_path '' denon_heos_helper.py",
+        {"DENON_SCRIPT_PATH": str(script_dir / "denon.sh")},
+    )
+
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == str(helper)
+
+
+def test_helper_lookup_falls_back_to_packaged_libexec_path(tmp_path):
+    script_dir = tmp_path / "installed-bin"
+    script_dir.mkdir()
+
+    r = _bash(
+        "_denon_helper_path '' denon_dashboard_alt.py",
+        {"DENON_SCRIPT_PATH": str(script_dir / "denon")},
+    )
+
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "/usr/libexec/denon-avr-controller/denon_dashboard_alt.py"
+
+
+def test_rpm_spec_packages_runtime_python_helpers_under_libexec():
+    spec = RPM_SPEC.read_text(encoding="utf-8")
+
+    assert "install -Dm755 denon_dashboard_alt.py" in spec
+    assert "install -Dm755 denon_heos_helper.py" in spec
+    assert "%{_libexecdir}/denon-avr-controller/denon_dashboard_alt.py" in spec
+    assert "%{_libexecdir}/denon-avr-controller/denon_heos_helper.py" in spec
+    assert "%{_bindir}/denon_dashboard_alt.py" not in spec
+    assert "%{_bindir}/denon_heos_helper.py" not in spec
 
 
 def test_docs_clarify_bash_runtime_vs_zsh_fish_completions():

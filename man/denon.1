@@ -60,6 +60,8 @@ and
 .B 13
 are supported.
 Transport keys keep using the active HEOS/player path.
+The dashboard records each transport keypress in Recent Events and reports an
+unavailable warning when the receiver or service does not accept the command.
 These keys are disabled for non\-TTY input and one\-shot output.
 Quick Select remains available through
 .BR "denon qs <n>" .
@@ -92,7 +94,13 @@ When
 runs in an interactive terminal, it supports the same keyboard controls as
 .BR dashboard ,
 including typing the source number shown in the Sources list.
-Multi\-digit source numbers are supported.
+Multi\-digit source numbers such as
+.BR 10 ,
+.BR 11 ,
+and
+.B 13
+are supported, and transport keypresses are shown in Recent Events with a
+warning if dispatch is unavailable.
 .SS Power and volume
 .TP
 .BR on | off

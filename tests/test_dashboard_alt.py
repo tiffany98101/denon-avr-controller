@@ -126,6 +126,7 @@ def complete_snapshot(**overrides):
     data = {
         "receiver": "Denon AVR-X1600H",
         "ip": "192.0.2.10",
+        "version": "1.64",
         "main": ZoneSnapshot(
             power="ON",
             source="HEOS Music",
@@ -152,6 +153,8 @@ def complete_snapshot(**overrides):
             SourceSnapshot(index="6", name="TV Audio"),
             SourceSnapshot(index="13", name="HEOS Music", active=True),
         ),
+        "heos_version": "3.88.614",
+        "network": "wifi",
         "timestamp": datetime(2026, 5, 21, 18, 30, 0),
     }
     data.update(overrides)
@@ -222,22 +225,50 @@ def test_renderer_shows_control_target_only_when_interactive_controls_are_active
     )
 
     assert "Control Target: Zone2" in interactive
-    assert "type source #  z zone" in interactive
+    assert "Keys: ↑/↓ Volume  ←/→ Prev/Next  Space Play/Pause  M Mute  Source: Type # From List  Z Zone  Q Quit" in interactive
     assert "number source" not in interactive
+    assert "type source #" not in interactive
     assert "Control Target:" not in non_interactive
 
 
 def test_renderer_uses_compact_source_number_help_when_narrow():
     frame = DashboardRenderer(color="never").render(
         complete_snapshot(provider="direct"),
-        width=80,
+        width=98,
         height=40,
         key_help=True,
         control_target="Main",
     )
 
-    assert "src #  z zone" in frame
+    assert "Keys: ↑/↓ Vol  ←/→ Prev/Next  Space Play/Pause  M Mute  Src: # From List  Z Zone  Q Quit" in frame
     assert "number source" not in frame
+    assert "type source #" not in frame
+
+
+def test_renderer_receiver_info_uses_consistent_field_names():
+    frame = DashboardRenderer(color="never").render(
+        complete_snapshot(),
+        width=100,
+        height=40,
+    )
+
+    assert "Receiver Info" in frame
+    assert "Receiver: Denon AVR-X1600H" in frame
+    assert "IP: 192.0.2.10" in frame
+    assert "Version: 1.64" in frame
+    assert "HEOS: 3.88.614 Wi-Fi" in frame
+
+
+def test_renderer_receiver_info_missing_ip_and_version_render_unknown():
+    frame = DashboardRenderer(color="never").render(
+        complete_snapshot(ip="", version="unavailable_on_tested_read_only_surfaces", heos_version="3.88.614", network="wifi"),
+        width=100,
+        height=40,
+    )
+
+    assert "IP: Unknown" in frame
+    assert "Version: Unknown" in frame
+    assert "HEOS: 3.88.614 Wi-Fi" in frame
 
 
 def test_direct_provider_parses_main_zone_xml():
@@ -590,7 +621,7 @@ def test_dashboard_command_throttle_is_deterministic_without_sleep():
     snapshot = complete_snapshot()
 
     assert controller.handle("volume_up", snapshot).events == ("Key: Volume Up",)
-    assert controller.handle("volume_up", snapshot).event is None
+    assert controller.handle("volume_up", snapshot).events == ("Key: Volume Up",)
     now[0] += 0.21
     assert controller.handle("volume_up", snapshot).events == ("Key: Volume Up",)
     assert calls == [
@@ -642,6 +673,25 @@ def test_dashboard_volume_and_mute_dispatch_use_selected_zone_target():
         [str(SCRIPT), "zone2", "mute"],
         [str(SCRIPT), "zone2", "unmute"],
     ]
+
+
+@pytest.mark.parametrize(("action", "expected_command", "expected_events"), [
+    ("previous", [str(SCRIPT), "prev"], ("Key: Previous", "Transport: Previous")),
+    ("next", [str(SCRIPT), "next"], ("Key: Next", "Transport: Next")),
+    ("play_pause", [str(SCRIPT), "pause"], ("Key: Play/Pause", "Transport: Play/Pause")),
+])
+def test_dashboard_transport_keys_dispatch_and_report_success(action, expected_command, expected_events):
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner, throttle_seconds=0)
+    result = controller.handle(action, complete_snapshot(now_playing=NowPlayingSnapshot(state="Playing")))
+
+    assert result.events == expected_events
+    assert calls == [expected_command]
 
 
 def source_hotkey_snapshot():
@@ -811,8 +861,8 @@ def test_dashboard_key_actions_report_recent_event_feedback(action, event):
         tracker.record(message, timestamp=datetime(2026, 5, 21, 18, 30, 0))
 
     assert result.quit is False
-    assert result.events == (event,)
-    assert tracker.events == (f"18:30:00 {event}",)
+    assert event in result.events
+    assert f"18:30:00 {event}" in tracker.events
 
 
 def test_dashboard_zone_target_key_reports_recent_event_feedback():
@@ -844,6 +894,64 @@ def test_transport_command_failure_reports_recent_event_without_crashing():
 
     assert result.quit is False
     assert result.events == ("Key: Next", "Transport command unavailable: next")
+
+
+def test_transport_key_feedback_is_not_suppressed_by_throttle():
+    calls = []
+    now = [100.0]
+
+    def fake_clock():
+        return now[0]
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(
+        str(SCRIPT),
+        runner=fake_runner,
+        clock=fake_clock,
+        throttle_seconds=0.2,
+    )
+    snapshot = complete_snapshot(now_playing=NowPlayingSnapshot(state="Playing"))
+
+    first = controller.handle("play_pause", snapshot)
+    second = controller.handle("play_pause", snapshot)
+
+    assert first.events == ("Key: Play/Pause", "Transport: Play/Pause")
+    assert second.events == ("Key: Play/Pause", "Transport command unavailable: play/pause")
+    assert calls == [[str(SCRIPT), "pause"]]
+
+
+def test_pending_numeric_buffer_does_not_block_controls():
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner, throttle_seconds=0)
+    snapshot = source_hotkey_snapshot()
+
+    assert controller.handle("digit_1", snapshot).events == ()
+    assert controller.handle("play_pause", snapshot).events == ("Key: Play/Pause", "Transport: Play/Pause")
+    assert controller._numeric_buffer == ""
+    assert controller.handle("digit_1", snapshot).events == ()
+    assert controller.handle("previous", snapshot).events == ("Key: Previous", "Transport: Previous")
+    assert controller._numeric_buffer == ""
+    assert controller.handle("digit_1", snapshot).events == ()
+    assert controller.handle("mute_toggle", snapshot).events == ("Key: Mute Toggle",)
+    assert controller._numeric_buffer == ""
+    assert controller.handle("digit_1", snapshot).events == ()
+    assert controller.handle("cycle_zone_target", snapshot).events == ("Key: Control Target: Zone2",)
+    assert controller._numeric_buffer == ""
+    assert controller.handle("digit_1", snapshot).events == ()
+    assert controller.handle("quit", snapshot).quit is True
+    assert controller._numeric_buffer == ""
+    assert [str(SCRIPT), "source", "1"] not in calls
+    assert [str(SCRIPT), "pause"] in calls
+    assert [str(SCRIPT), "prev"] in calls
+    assert [str(SCRIPT), "toggle", "mute"] in calls
 
 
 def test_zone2_command_failure_keeps_key_feedback_and_warning():

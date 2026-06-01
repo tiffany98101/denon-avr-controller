@@ -72,6 +72,12 @@ install -Dm755 denon.sh %{buildroot}%{_bindir}/denon
 # MPRIS2 D-Bus bridge → /usr/bin/denon-mpris
 install -Dm755 denon_mpris.py %{buildroot}%{_bindir}/denon-mpris
 
+# Python helpers used by /usr/bin/denon → /usr/libexec/denon-avr-controller/
+install -Dm755 denon_dashboard_alt.py \
+    %{buildroot}%{_libexecdir}/denon-avr-controller/denon_dashboard_alt.py
+install -Dm755 denon_heos_helper.py \
+    %{buildroot}%{_libexecdir}/denon-avr-controller/denon_heos_helper.py
+
 # Systemd user unit → /usr/lib/systemd/user/
 # Patch ExecStart from the ~-relative dev path to the system binary path.
 install -Dm644 denon-mpris.service \
@@ -100,6 +106,8 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 %doc README.md RELEASE_NOTES.md
 %{_bindir}/denon
 %{_bindir}/denon-mpris
+%{_libexecdir}/denon-avr-controller/denon_dashboard_alt.py
+%{_libexecdir}/denon-avr-controller/denon_heos_helper.py
 %{_userunitdir}/denon-mpris.service
 %{_datadir}/bash-completion/completions/denon
 %{_datadir}/zsh/site-functions/_denon
@@ -116,6 +124,8 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 %changelog
 * Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.5.beta5
+- Improve dashboard transport feedback, Receiver Info rendering, and packaged
+  helper discovery for dashboard-alt and HEOS helper scripts
 - Compile the PowerShell TLS validator so custom CA and sha256// public-key
   pinning work on PowerShell 7; add Pester TLS coverage and analyzer validation
 

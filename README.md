@@ -262,9 +262,10 @@ previous/next, Space toggles play/pause, `m` toggles mute, typing the source
 number shown in the Main Zone Sources list selects that source, `z` cycles the
 volume/mute control target between Main and Zone2, and `q` quits the dashboard.
 Multi-digit source numbers such as `10`, `11`, and `13` are supported. Transport
-keys keep using the active HEOS/player path. These keys are disabled for
-non-TTY input and one-shot output. Quick Select remains available through
-`denon qs <n>`.
+keys keep using the active HEOS/player path, and the dashboard records each
+transport keypress plus an unavailable warning when the receiver or service does
+not accept the command. These keys are disabled for non-TTY input and one-shot
+output. Quick Select remains available through `denon qs <n>`.
 
 Experimental alternative dashboard:
 
@@ -285,7 +286,9 @@ set `DENON_DASHBOARD_WIDTH` and `DENON_DASHBOARD_HEIGHT`.
 
 When `dashboard-alt --watch` is running in an interactive terminal, it supports
 the same keyboard controls as the main dashboard, including typing the source
-number shown in the Sources list. Multi-digit source numbers are supported.
+number shown in the Sources list. Multi-digit source numbers such as `10`,
+`11`, and `13` are supported, and transport keypresses are shown in Recent
+Events with a warning if dispatch is unavailable.
 
 ```bash
 denon dashboard-alt --provider auto

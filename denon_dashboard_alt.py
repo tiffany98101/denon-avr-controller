@@ -36,8 +36,8 @@ from typing import Any, Sequence
 UNKNOWN = "Unknown"
 PLACEHOLDER = "-"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-KEY_HELP = "Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  type source #  z zone  q quit"
-KEY_HELP_NARROW = "Keys: ↑/↓ vol  ←/→ prev/next  Space play/pause  m mute  src #  z zone  q quit"
+KEY_HELP = "Keys: ↑/↓ Volume  ←/→ Prev/Next  Space Play/Pause  M Mute  Source: Type # From List  Z Zone  Q Quit"
+KEY_HELP_NARROW = "Keys: ↑/↓ Vol  ←/→ Prev/Next  Space Play/Pause  M Mute  Src: # From List  Z Zone  Q Quit"
 
 KEY_ACTIONS = {
     "\x1b[A": "volume_up",
@@ -94,11 +94,13 @@ class SourceSnapshot:
 class DashboardSnapshot:
     receiver: str = UNKNOWN
     ip: str = UNKNOWN
+    version: str | None = None
     provider: str = UNKNOWN
     main: ZoneSnapshot = field(default_factory=ZoneSnapshot)
     zone2: ZoneSnapshot | None = None
     now_playing: NowPlayingSnapshot = field(default_factory=NowPlayingSnapshot)
     sources: tuple[SourceSnapshot, ...] = ()
+    heos_version: str | None = None
     network: str | None = None
     player: str | None = None
     heos_status: str | None = None
@@ -118,6 +120,25 @@ def _clean(value: Any) -> str:
 
 def _display(value: Any, default: str = UNKNOWN) -> str:
     return _clean(value) or default
+
+
+def _display_network(value: Any) -> str:
+    text = _clean(value)
+    if not text:
+        return UNKNOWN
+    if text.lower() == "wifi":
+        return "Wi-Fi"
+    return text
+
+
+def _display_receiver_version(value: Any) -> str:
+    text = _clean(value)
+    if not text:
+        return UNKNOWN
+    lowered = text.lower()
+    if lowered == "unavailable" or "unavailable" in lowered:
+        return UNKNOWN
+    return text
 
 
 def _display_mute(value: Any) -> str:
@@ -494,6 +515,7 @@ class DirectDashboardProvider(DashboardProvider):
         return DashboardSnapshot(
             receiver=_display(_find_text(identity_root, "FriendlyName"), "Denon AVR"),
             ip=ip,
+            version=UNKNOWN,
             provider="direct",
             main=main,
             zone2=zone2,
@@ -551,6 +573,7 @@ class ShellDashboardProvider(DashboardProvider):
         errors: list[str] = []
         receiver = UNKNOWN
         ip = UNKNOWN
+        version = UNKNOWN
         main = ZoneSnapshot()
         zone2: ZoneSnapshot | None = None
         sources: list[SourceSnapshot] = []
@@ -565,6 +588,7 @@ class ShellDashboardProvider(DashboardProvider):
                 info = {}
             receiver = _display(info.get("receiver"))
             ip = _display(info.get("ip"))
+            version = _display(info.get("version"))
             main_data = info.get("mainZone") or {}
             zone2_data = info.get("zone2") or {}
             main = ZoneSnapshot(
@@ -632,6 +656,7 @@ class ShellDashboardProvider(DashboardProvider):
         return DashboardSnapshot(
             receiver=receiver,
             ip=ip,
+            version=version,
             provider="shell",
             main=main,
             zone2=zone2,
@@ -984,9 +1009,11 @@ class DashboardRenderer:
         event_lines = self._dedupe_lines(events)
         lines: list[str] = []
         lines.extend(self._header_lines(snapshot, width, len(warnings), key_help=key_help, control_target=control_target))
+        warning_panel_height = min(8, len(warnings) + 3) if height >= 50 else 4
 
         main_panel = Panel("Main Zone", tuple(self._zone_rows(snapshot.main)))
         zone2_panel = Panel("Zone 2", tuple(self._zone_rows(snapshot.zone2)))
+        receiver_panel = Panel("Receiver Info", tuple(self._receiver_rows(snapshot)))
         now_panel = Panel("Now Playing / Audio", tuple(self._now_rows(snapshot)))
         sources_panel = Panel("Sources", tuple(self._source_rows(snapshot)))
         events_panel = Panel("Recent Events", tuple(event_lines[:8]) or ("No state changes yet",))
@@ -995,19 +1022,27 @@ class DashboardRenderer:
 
         if width >= 100:
             lines.extend(render_two_column_row(main_panel, zone2_panel, width, unicode=self.unicode))
-            lines.extend(render_panel(now_panel.title, now_panel.lines, width, unicode=self.unicode))
-            lines.extend(render_two_column_row(sources_panel, events_panel, width, height=16, unicode=self.unicode))
+            lines.extend(render_panel(receiver_panel.title, receiver_panel.lines, width, height=7, unicode=self.unicode))
             if warnings:
-                lines.extend(render_panel(warnings_panel.title, warnings_panel.lines, width, height=min(8, len(warning_lines) + 3), unicode=self.unicode))
+                lines.extend(render_panel(now_panel.title, now_panel.lines, width, height=5, unicode=self.unicode))
+                lines.extend(render_two_column_row(sources_panel, events_panel, width, height=16, unicode=self.unicode))
+                lines.extend(render_panel(warnings_panel.title, warnings_panel.lines, width, height=warning_panel_height, unicode=self.unicode))
+            else:
+                lines.extend(render_panel(now_panel.title, now_panel.lines, width, unicode=self.unicode))
+                lines.extend(render_two_column_row(sources_panel, events_panel, width, height=16, unicode=self.unicode))
         elif width >= 70:
             lines.extend(render_two_column_row(main_panel, zone2_panel, width, unicode=self.unicode))
-            lines.extend(render_panel(now_panel.title, now_panel.lines, width, unicode=self.unicode))
-            lines.extend(render_panel(sources_panel.title, sources_panel.lines, width, height=8, unicode=self.unicode))
+            lines.extend(render_panel(receiver_panel.title, receiver_panel.lines, width, height=7, unicode=self.unicode))
             if warnings:
-                lines.extend(render_panel(warnings_panel.title, warnings_panel.lines, width, height=min(8, len(warning_lines) + 3), unicode=self.unicode))
+                lines.extend(render_panel(warnings_panel.title, warnings_panel.lines, width, height=warning_panel_height, unicode=self.unicode))
+                lines.extend(render_panel(now_panel.title, now_panel.lines, width, height=5, unicode=self.unicode))
+                lines.extend(render_panel(sources_panel.title, sources_panel.lines, width, height=6, unicode=self.unicode))
+            else:
+                lines.extend(render_panel(now_panel.title, now_panel.lines, width, unicode=self.unicode))
+                lines.extend(render_panel(sources_panel.title, sources_panel.lines, width, height=8, unicode=self.unicode))
             lines.extend(render_panel(events_panel.title, events_panel.lines, width, height=7, unicode=self.unicode))
         else:
-            compact_panels = [main_panel, zone2_panel, now_panel, sources_panel]
+            compact_panels = [main_panel, zone2_panel, receiver_panel, now_panel, sources_panel]
             if warnings:
                 compact_panels.append(warnings_panel)
             compact_panels.append(events_panel)
@@ -1061,6 +1096,18 @@ class DashboardRenderer:
             render_status_kv("Source", f"{display_value(zone.source)}{self._index_suffix(zone.source_index)}", 0),
             render_status_kv("Volume", zone.volume, 0),
             render_status_kv("Mute", zone.mute, 0),
+        ]
+
+    def _receiver_rows(self, snapshot: DashboardSnapshot) -> list[str]:
+        heos = _display(snapshot.heos_version)
+        network = _display_network(snapshot.network)
+        if network != UNKNOWN:
+            heos = f"{heos} {network}"
+        return [
+            f"Receiver: {_display(snapshot.receiver)}",
+            f"IP: {_display(snapshot.ip)}",
+            f"Version: {_display_receiver_version(snapshot.version)}",
+            f"HEOS: {heos}",
         ]
 
     def _now_rows(self, snapshot: DashboardSnapshot) -> list[str]:
@@ -1281,8 +1328,6 @@ class DashboardCommandController:
         if action.startswith("digit_"):
             return self._handle_digit(action.rsplit("_", 1)[-1], snapshot)
         self._reset_numeric_buffer()
-        if not self._allowed_now():
-            return DashboardCommandResult()
 
         if action == "cycle_zone_target":
             self.control_target = "Zone2" if self.control_target == "Main" else "Main"
@@ -1291,12 +1336,18 @@ class DashboardCommandController:
         command = self._command_for_action(action, snapshot)
         if command is None:
             return DashboardCommandResult()
-        ok, message = self._run(command)
         events = (f"Key: {self._key_event_name(action)}",)
+        if not self._allowed_now():
+            if self._is_transport_action(action):
+                return DashboardCommandResult(events=(*events, f"Transport command unavailable: {self._transport_command_name(action)}"))
+            return DashboardCommandResult(events=events)
+        ok, message = self._run(command)
         if ok:
+            if self._is_transport_action(action):
+                return DashboardCommandResult(events=(*events, f"Transport: {self._transport_event_name(action)}"))
             return DashboardCommandResult(events=events)
         if action in {"next", "previous", "play_pause"}:
-            return DashboardCommandResult(events=(*events, f"Transport command unavailable: {self._event_name(action, snapshot)}"))
+            return DashboardCommandResult(events=(*events, f"Transport command unavailable: {self._transport_command_name(action)}"))
         if self.control_target == "Zone2" and action in {"volume_up", "volume_down", "mute_toggle"}:
             return DashboardCommandResult(events=(*events, f"Zone2 command unavailable: {self._event_name(action, snapshot)}"))
         return DashboardCommandResult(events=(*events, f"Command unavailable: {self._event_name(action, snapshot)}"))
@@ -1383,9 +1434,25 @@ class DashboardCommandController:
         if action == "mute_toggle":
             return "mute toggle"
         if action == "play_pause":
-            state = _clean(snapshot.now_playing.state).lower()
-            return "pause" if state in {"play", "playing"} else "play"
+            return "play/pause"
         return action
+
+    def _is_transport_action(self, action: str) -> bool:
+        return action in {"next", "previous", "play_pause"}
+
+    def _transport_event_name(self, action: str) -> str:
+        return {
+            "previous": "Previous",
+            "next": "Next",
+            "play_pause": "Play/Pause",
+        }.get(action, action)
+
+    def _transport_command_name(self, action: str) -> str:
+        return {
+            "previous": "previous",
+            "next": "next",
+            "play_pause": "play/pause",
+        }.get(action, action)
 
     def _key_event_name(self, action: str) -> str:
         return {

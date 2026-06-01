@@ -369,7 +369,7 @@ Receiver status:
   denon doctor               Check dependencies, route, cache, and receiver reachability
   denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
-                             Watch keys: ↑/↓ volume, ←/→ prev/next, Space play/pause, m mute, type source #, z zone, q quit
+                             Watch keys: ↑/↓ Volume, ←/→ Prev/Next, Space Play/Pause, M Mute, Source: Type # From List, Z Zone, Q Quit
   denon dashboard-alt [--compare-providers|--json] [--provider auto|direct|shell] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show the experimental Python dashboard preview; denon dashboard remains the stable default
                              Examples: denon dashboard-alt --provider auto
@@ -504,6 +504,7 @@ Configuration:
   DENON_HEOS_PID
   DENON_HEOS_GID
   DENON_HEOS_HELPER
+  DENON_DASHBOARD_ALT_HELPER
   DENON_HEOS_TIMEOUT
   DENON_DATA_DISCOVERY_MAX_TYPE=30
   DENON_DEBUG=1
@@ -665,6 +666,27 @@ EOF
       return 0
     fi
     return 1
+  }
+
+  _denon_helper_path() {
+    local explicit_path="$1"
+    local helper_name="$2"
+    local script_path script_dir candidate
+
+    if [[ -n "$explicit_path" ]]; then
+      printf '%s\n' "$explicit_path"
+      return 0
+    fi
+
+    script_path=$(_denon_script_path) || script_path="$PWD/denon.sh"
+    script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
+    candidate="${script_dir:-$PWD}/$helper_name"
+    if [[ -r "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+
+    printf '/usr/libexec/denon-avr-controller/%s\n' "$helper_name"
   }
 
   _denon_trim() {
@@ -1546,10 +1568,8 @@ EOF
   }
 
   _denon_heos_helper() {
-    local helper script_path script_dir
-    script_path=$(_denon_script_path) || script_path="$PWD/denon.sh"
-    script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
-    helper="${DENON_HEOS_HELPER:-${script_dir:-$PWD}/denon_heos_helper.py}"
+    local helper
+    helper=$(_denon_helper_path "${DENON_HEOS_HELPER:-}" "denon_heos_helper.py")
     if [[ ! -r "$helper" ]]; then
       echo "Error: HEOS helper not found: $helper" >&2
       return 1
@@ -1562,10 +1582,9 @@ EOF
   }
 
   _denon_dashboard_alt() {
-    local helper script_path script_dir
+    local helper script_path
     script_path=$(_denon_script_path) || script_path="$PWD/denon.sh"
-    script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
-    helper="${DENON_DASHBOARD_ALT_HELPER:-${script_dir:-$PWD}/denon_dashboard_alt.py}"
+    helper=$(_denon_helper_path "${DENON_DASHBOARD_ALT_HELPER:-}" "denon_dashboard_alt.py")
     if [[ ! -r "$helper" ]]; then
       echo "Error: alternative dashboard helper not found: $helper" >&2
       return 1
@@ -3914,8 +3933,8 @@ EOF
       [[ "$line" == *:* ]] || continue
       value=$(_denon_trim "$value")
       case "$label" in
-        Receiver) dash_receiver="$value" ;;
-        IP) dash_ip="$value" ;;
+        Receiver) [[ -n "$value" ]] && dash_receiver="$value" ;;
+        IP) [[ -n "$value" ]] && dash_ip="$value" ;;
         "Main Zone Power") dash_main_power="$value" ;;
         "Main Zone Source")
           dash_main_source=$(_denon_clean_source_name "$value")
@@ -4361,7 +4380,14 @@ EOF
     value=$(_denon_dashboard_summary_value "$summary_json" "system.heos_sign_in.raw"); [[ -n "$value" ]] && dash_diag_heos_sign_in="$value"
     value=$(_denon_dashboard_summary_value "$summary_json" "system.gui_type.raw"); [[ -n "$value" ]] && dash_diag_gui_type="$value"
     value=$(_denon_dashboard_summary_value "$summary_json" "system.webui_type.raw"); [[ -n "$value" ]] && dash_diag_webui_type="$value"
-    value=$(_denon_dashboard_summary_value "$summary_json" "firmware.installed_avr_mainboard_firmware"); [[ -n "$value" ]] && dash_diag_avr_firmware="$value"
+    value=$(_denon_dashboard_summary_value "$summary_json" "firmware.installed_avr_mainboard_firmware")
+    if [[ -n "$value" ]]; then
+      dash_diag_avr_firmware="$value"
+      case "$(_denon_lower "$value")" in
+        unavailable|unavailable_*|*unavailable*) ;;
+        *) dash_avr_version="$value" ;;
+      esac
+    fi
     value=$(_denon_dashboard_summary_value "$summary_json" "firmware.heos_version.value"); [[ -n "$value" ]] && dash_diag_heos_firmware="$value"
   }
 
@@ -4381,6 +4407,7 @@ EOF
     dash_main_muted="Unknown"
     dash_sound_mode="Unknown"
     dash_transport_state=""
+    dash_avr_version="Unknown"
     # shellcheck disable=SC2034 # Parsed for dashboard diagnostics/future display; not rendered today.
     dash_heos_pid=""
     # shellcheck disable=SC2034 # Parsed for dashboard diagnostics/future display; not rendered today.
@@ -5263,21 +5290,15 @@ EOF
     if [[ "$dash_heos_network_label" != "Unknown" ]]; then
       dash_heos_label="$dash_heos_label $dash_heos_network_label"
     fi
-    dash_receiver_body=$(printf 'Receiver: %s\nIP:       %s\nHEOS:     %s' \
-      "${dash_receiver:-Unknown}" "${dash_ip:-Unknown}" "$dash_heos_label")
+    dash_receiver_body=$(printf 'Receiver: %s\nIP:       %s\nVersion: %s\nHEOS:    %s' \
+      "$(_denon_display_unknown "$dash_receiver")" "$(_denon_display_unknown "$dash_ip")" \
+      "$(_denon_dashboard_receiver_version_label "${dash_avr_version:-}")" "$dash_heos_label")
     if [[ -n "${dash_diag_model_type:-}" ]]; then
       dash_receiver_body="$dash_receiver_body"$'\n'"Model Type: ${dash_diag_model_type}"
     fi
     if [[ -n "${dash_diag_brand_code:-}" ]]; then
       dash_receiver_body="$dash_receiver_body"$'\n'"Brand Code: ${dash_diag_brand_code}"
     fi
-    if [[ -n "${dash_diag_avr_firmware:-}" ]]; then
-      dash_receiver_body="$dash_receiver_body"$'\n'"AVR FW:   ${dash_diag_avr_firmware}"
-    fi
-    if [[ -n "${dash_diag_heos_firmware:-}" ]]; then
-      dash_receiver_body="$dash_receiver_body"$'\n'"HEOS FW:  ${dash_diag_heos_firmware} (separate HEOS firmware)"
-    fi
-
     if [[ "${dashboard_diagnostics:-0}" == "1" ]]; then
       dash_diag_body=$(printf 'Brand:  raw=%s label=%s\nModel:  raw=%s label=%s\nMain Volume: scale %s / limit %s\nZone 2 Volume: scale %s / limit %s\nLocks: setup %s / menu %s\nPreset: raw=%s label=%s\nModes: advanced %s / CI %s\nHEOS Sign-In: raw=%s label=%s\nUI: gui %s / web %s\nAVR FW: %s\nHEOS FW: %s separate' \
         "$(_denon_display_unknown "$dash_diag_brand_code")" "$(_denon_display_unknown "$(_denon_data_raw_label "${dash_diag_brand_code:-}")")" \
@@ -5303,6 +5324,14 @@ EOF
 
   _denon_tool_version_label() {
     printf '%s v%s' "${DENON_CONTROLLER_NAME:-denon-avr-controller}" "${DENON_CONTROLLER_VERSION:-unknown}"
+  }
+
+  _denon_dashboard_receiver_version_label() {
+    local value="$1"
+    case "$(_denon_lower "$(_denon_trim "$value")")" in
+      ""|unknown|null|none|n/a|na|-|unavailable|unavailable_*|*unavailable*) echo "Unknown" ;;
+      *) _denon_display_unknown "$value" ;;
+    esac
   }
 
   _denon_dashboard_compose_footer_line() {
@@ -5379,16 +5408,25 @@ EOF
     printf '%s' "$updated | $version_info$notes"
   }
 
+  _denon_dashboard_key_help_text() {
+    local width="$1"
+    local full="Keys: ↑/↓ Volume  ←/→ Prev/Next  Space Play/Pause  M Mute  Source: Type # From List  Z Zone  Q Quit"
+    local compact="Keys: ↑/↓ Vol  ←/→ Prev/Next  Space Play/Pause  M Mute  Src: # From List  Z Zone  Q Quit"
+
+    if (( $(_denon_dashboard_visible_width "$full") <= width )); then
+      printf '%s' "$full"
+    else
+      printf '%s' "$compact"
+    fi
+  }
+
   _denon_dashboard_render_footer() {
     local width="$1"
     local hints="" hint_width left_width left footer
 
     if [[ "${watch:-0}" == "1" ]]; then
       if [[ "${dashboard_keyboard_active:-0}" == "1" ]]; then
-        hints="Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  type source #  z zone  q quit"
-        if (( $(_denon_dashboard_visible_width "$hints") > width )); then
-          hints="Keys: ↑/↓ vol  ←/→ prev/next  Space play/pause  m mute  src #  z zone  q quit"
-        fi
+        hints=$(_denon_dashboard_key_help_text "$width")
         _denon_dashboard_fit "Control Target: ${dashboard_control_target:-Main}" "$width"
         printf '\n'
         _denon_dashboard_fit "$hints" "$width"
@@ -5552,14 +5590,48 @@ EOF
       volume_down) echo "volume down" ;;
       previous) echo "previous" ;;
       next) echo "next" ;;
-      play_pause)
-        case "$(_denon_lower "${dash_transport_state:-}")" in
-          play|playing) echo "pause" ;;
-          *) echo "play" ;;
-        esac
-        ;;
+      play_pause) echo "play/pause" ;;
       mute_toggle) echo "mute toggle" ;;
       *) echo "$action" ;;
+    esac
+  }
+
+  _denon_dashboard_transport_event_name() {
+    local action="$1"
+    case "$action" in
+      previous) echo "Previous" ;;
+      next) echo "Next" ;;
+      play_pause) echo "Play/Pause" ;;
+      *) echo "$action" ;;
+    esac
+  }
+
+  _denon_dashboard_is_transport_action() {
+    case "$1" in
+      previous|next|play_pause) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+
+  _denon_dashboard_add_command_warning() {
+    local action="$1"
+    local command_event
+
+    command_event=$(_denon_dashboard_command_event_name "$action")
+    case "$action" in
+      previous|next|play_pause)
+        _denon_dashboard_add_event "Transport command unavailable: $command_event"
+        ;;
+      volume_up|volume_down|mute_toggle)
+        if [[ "${dashboard_control_target:-Main}" == "Zone2" ]]; then
+          _denon_dashboard_add_event "Zone2 command unavailable: $command_event"
+        else
+          _denon_dashboard_add_event "Command unavailable: $command_event"
+        fi
+        ;;
+      *)
+        _denon_dashboard_add_event "Command unavailable: $command_event"
+        ;;
     esac
   }
 
@@ -5720,7 +5792,7 @@ EOF
 
   _denon_dashboard_handle_key() {
     local key="$1"
-    local action key_event command_event
+    local action key_event
 
     action=$(_denon_dashboard_parse_key "$key" 2>/dev/null) || return 0
     if [[ "$action" != digit_* && -n "${dashboard_numeric_buffer:-}" ]]; then
@@ -5738,7 +5810,6 @@ EOF
         _denon_dashboard_redraw
         ;;
       cycle_zone_target)
-        _denon_dashboard_throttle_allows_command || return 0
         if [[ "${dashboard_control_target:-Main}" == "Main" ]]; then
           dashboard_control_target="Zone2"
         else
@@ -5752,26 +5823,18 @@ EOF
         _denon_dashboard_handle_digit "${action#digit_}"
         ;;
       *)
-        _denon_dashboard_throttle_allows_command || return 0
         key_event=$(_denon_dashboard_key_event_name "$action")
         _denon_dashboard_add_event "Key: $key_event"
-        if ! _denon_dashboard_run_action "$action" >/dev/null 2>&1; then
-          command_event=$(_denon_dashboard_command_event_name "$action")
-          case "$action" in
-            previous|next|play_pause)
-              _denon_dashboard_add_event "Transport command unavailable: $command_event"
-              ;;
-            volume_up|volume_down|mute_toggle)
-              if [[ "${dashboard_control_target:-Main}" == "Zone2" ]]; then
-                _denon_dashboard_add_event "Zone2 command unavailable: $command_event"
-              else
-                _denon_dashboard_add_event "Command unavailable: $command_event"
-              fi
-              ;;
-            *)
-              _denon_dashboard_add_event "Command unavailable: $command_event"
-              ;;
-          esac
+        if ! _denon_dashboard_throttle_allows_command; then
+          _denon_dashboard_is_transport_action "$action" && _denon_dashboard_add_command_warning "$action"
+          return 0
+        fi
+        if _denon_dashboard_run_action "$action" >/dev/null 2>&1; then
+          if _denon_dashboard_is_transport_action "$action"; then
+            _denon_dashboard_add_event "Transport: $(_denon_dashboard_transport_event_name "$action")"
+          fi
+        else
+          _denon_dashboard_add_command_warning "$action"
         fi
         ;;
     esac
@@ -5783,9 +5846,9 @@ EOF
     local rest=""
 
     [[ -t 0 ]] || return 1
-    if read -rsn1 -t "$timeout" key 2>/dev/null; then
+    if IFS= read -rsn1 -t "$timeout" key 2>/dev/null; then
       if [[ "$key" == $'\033' ]]; then
-        read -rsn2 -t 0.02 rest 2>/dev/null || rest=""
+        IFS= read -rsn2 -t 0.05 rest 2>/dev/null || rest=""
         key="$key$rest"
       fi
       _denon_dashboard_handle_key "$key"
@@ -6356,7 +6419,7 @@ EOF
         DENON_VOLUME_STEP_DB|DENON_SOURCE_ALIASES|DENON_CURL_CONNECT_TIMEOUT|\
         DENON_CURL_MAX_TIME|DENON_CURL_INSECURE|DENON_CURL_CACERT|\
         DENON_CURL_PINNEDPUBKEY|DENON_SSDP_TIMEOUT|DENON_SSDP_MX|DENON_HEOS_PID|\
-        DENON_HEOS_GID|DENON_HEOS_HELPER|DENON_HEOS_TIMEOUT|DENON_DEBUG|\
+        DENON_HEOS_GID|DENON_HEOS_HELPER|DENON_DASHBOARD_ALT_HELPER|DENON_HEOS_TIMEOUT|DENON_DEBUG|\
         DENON_CACHE_TTL_SECONDS|NO_COLOR)
           if [[ -z "${!key+set}" ]]; then
             export "$key"="$val"
@@ -6374,7 +6437,7 @@ EOF
 DENON_VOLUME_STEP_DB DENON_SOURCE_ALIASES DENON_CURL_CONNECT_TIMEOUT \
 DENON_CURL_MAX_TIME DENON_CURL_INSECURE DENON_CURL_CACERT \
 DENON_CURL_PINNEDPUBKEY DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
-DENON_HEOS_GID DENON_HEOS_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
+DENON_HEOS_GID DENON_HEOS_HELPER DENON_DASHBOARD_ALT_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
 DENON_CACHE_TTL_SECONDS NO_COLOR"
 
     case "$subcmd" in
@@ -6503,7 +6566,7 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
 DENON_VOLUME_STEP_DB DENON_SOURCE_ALIASES DENON_CURL_CONNECT_TIMEOUT \
 DENON_CURL_MAX_TIME DENON_CURL_INSECURE DENON_CURL_CACERT \
 DENON_CURL_PINNEDPUBKEY DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
-DENON_HEOS_GID DENON_HEOS_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
+DENON_HEOS_GID DENON_HEOS_HELPER DENON_DASHBOARD_ALT_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
 DENON_CACHE_TTL_SECONDS NO_COLOR"
 
     case "$subcmd" in
