@@ -33,7 +33,8 @@ The Bash CLI has the widest feature coverage. The PowerShell module covers commo
 ## Requirements
 
 - Local network access to a compatible Denon AVR.
-- Bash CLI: `bash`, `curl`, `awk`, `sed`, `grep`, `tr`, `mktemp`; `ip`, `arp`, `nc`, and `zsh` are useful for discovery, telnet queries, and shell-loading checks; `avahi-tools` (`avahi-browse`) enables fast mDNS discovery on Fedora (`sudo dnf install avahi-tools`).
+- Bash CLI runtime: `bash`, `curl`, `awk`, `sed`, `grep`, `tr`, `mktemp`; `ip`, `arp`, and `nc` are useful for discovery and telnet queries; `avahi-tools` (`avahi-browse`) enables fast mDNS discovery on Fedora (`sudo dnf install avahi-tools`).
+- Shell completions are available for bash, zsh, and fish. Completion support does not mean `denon.sh` is sourced or executed as zsh/fish; the runtime script requires bash.
 - HEOS helper workflows: `python3`.
 - Tests: `pytest`.
 - PowerShell module: `pwsh` / PowerShell 7+ preferred; Windows PowerShell 5.1 should work for core module commands.
@@ -128,7 +129,10 @@ denon completion install --shell bash
 The installer writes to the standard user-level completion path for the selected
 shell, creates directories as needed, and will not overwrite a different file
 unless you pass `--force`. Restart your shell after installing, or reload the
-completion file according to your shell.
+completion file according to your shell. These completion files support zsh and
+fish users at the interactive shell level; `denon.sh` itself is still a bash
+runtime script and should be run directly or through the installed `denon`
+wrapper.
 
 To install manually, print a completion script and redirect it:
 

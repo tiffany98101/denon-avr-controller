@@ -8,7 +8,7 @@
 
 ## 1. What this project is (and what it is not)
 
-`denon-avr-controller` is an **operator's CLI plus a sanctioned optional desktop bridge** for a Denon AVR sitting on a trusted home LAN. It wraps the receiver's three native control surfaces — the HTTPS XML config API, the legacy Telnet ASCII protocol, and the HEOS JSON-over-TCP protocol — behind a single sourced Bash function called `denon`. A separate Python MPRIS2 daemon (`denon-mpris`) optionally bridges the receiver to the user's desktop session over D-Bus.
+`denon-avr-controller` is an **operator's CLI plus a sanctioned optional desktop bridge** for a Denon AVR sitting on a trusted home LAN. It wraps the receiver's three native control surfaces — the HTTPS XML config API, the legacy Telnet ASCII protocol, and the HEOS JSON-over-TCP protocol — behind a bash runtime script and a single sourced Bash function called `denon`. A separate Python MPRIS2 daemon (`denon-mpris`) optionally bridges the receiver to the user's desktop session over D-Bus.
 
 It is **not**:
 - A daemon for the AVR's full state machine. The MPRIS bridge is narrow (media-key control + Now Playing surface), not a general control daemon.
@@ -80,7 +80,7 @@ Realistic invocation profile: the user types `denon vol -35` or a scene script f
 Concrete consequences:
 
 - **Bash, not Python**, for the primary control plane. Bash process startup is ~5 ms; Python is ~50 ms.
-- **Sourceable single file.** `source denon.sh` makes `denon` behave like a shell builtin. No `$PATH` lookup, no interpreter spawn.
+- **Sourceable single file.** `source denon.sh` from bash makes `denon` behave like a shell builtin. No `$PATH` lookup, no interpreter spawn.
 - **TTL-bounded IP cache** at `~/.cache/denon_ip` when unprofiled, or `~/.cache/denon_ip.<profile>` when `DENON_PROFILE` is active (default 1 hour via `DENON_CACHE_TTL_SECONDS`). Discovery runs at most once per hour on the steady-state path.
 - **Bounded timeouts everywhere.** `DENON_CURL_CONNECT_TIMEOUT=2`, `DENON_CURL_MAX_TIME=4`, `DENON_SSDP_TIMEOUT=2`. No command can hang on a dead receiver.
 - **Lazy Python.** The HEOS helper is only invoked for queue/group/browse/search — commands the Telnet sideband cannot express. Basic transport (`heos play`, `heos pause`) uses Telnet codes (NS9A/B/C/D/E) and does not pay the Python startup cost.
@@ -235,8 +235,8 @@ The redefinition cost per call (a few hundred microseconds in Bash) is the price
 
 These are hard constraints. A change that violates one is, by definition, not in scope for this project — it's a different project.
 
-1. **Single-file, sourceable.** The script must work as both `./denon.sh status` and `source ./denon.sh && denon status`. No multi-file Bash packaging. No build step for the script itself.
-2. **Bash + Zsh, not POSIX `sh`.** Bash 4+ idioms (`[[ ]]`, `${var,,}`, arrays) are allowed and used. Zsh sourcing must keep working — `$ZSH_VERSION` branches exist for a reason. New code must not break either shell.
+1. **Single-file, sourceable from bash.** The script must work as both `./denon.sh status` and `source ./denon.sh && denon status` under bash. No multi-file Bash packaging. No build step for the script itself.
+2. **Bash runtime, not POSIX `sh` or native zsh/fish.** Bash 4+ idioms (`[[ ]]`, `${var,,}`, arrays, dynamic file descriptors) are allowed and used. The project ships bash, zsh, and fish completion files, but completion support does not make `denon.sh` a zsh/fish runtime script.
 3. **No heavy dependencies for the script.** Required: `bash`, `curl`, `awk`, `sed`, `grep`, `ip`, `nc`. Optional: `jq`, `shellcheck`, `avahi-utils` (for the mDNS tier of discovery), `python3` (for HEOS helper and MPRIS bridge). Adding any other required dependency to the script requires explicit justification in this document.
 4. **Pipeable.** stdout is parseable. The default human output is line-oriented. `--json` produces a single JSON document. No prompts, no spinners, no curses TUIs on the primary commands. `dashboard --watch` is the sanctioned exception, and it must remain optional.
 5. **Bounded timeouts on every network call.** No command can hang. All `curl` and `nc` calls go through `_denon_curl` or `_denon_telnet`/`_denon_telnet_query`, which apply timeouts from environment variables with safe defaults.

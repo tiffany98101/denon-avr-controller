@@ -186,6 +186,12 @@ denon() {
     esac
   }
 
+  _denon_close_fd() {
+    local fd="$1"
+    [[ "$fd" =~ ^[0-9]+$ ]] || return 1
+    exec {fd}>&-
+  }
+
   _denon_acquire_write_lock() {
     [[ "${DENON_LOCK:-0}" == "1" ]] || return 0
 
@@ -202,7 +208,7 @@ denon() {
     exec {denon_write_lock_fd}>>"$lock_path"
     if ! flock -w "$lock_timeout" "$denon_write_lock_fd"; then
       echo "Error: timed out waiting ${lock_timeout}s for Denon write lock: $lock_path" >&2
-      eval "exec ${denon_write_lock_fd}>&-"
+      _denon_close_fd "$denon_write_lock_fd" || true
       return 75
     fi
     DENON_WRITE_LOCK_FD="$denon_write_lock_fd"
@@ -211,7 +217,7 @@ denon() {
   _denon_release_write_lock() {
     if [[ -n "${DENON_WRITE_LOCK_FD:-}" ]]; then
       flock -u "$DENON_WRITE_LOCK_FD" 2>/dev/null || true
-      eval "exec ${DENON_WRITE_LOCK_FD}>&-"
+      _denon_close_fd "$DENON_WRITE_LOCK_FD" || true
       DENON_WRITE_LOCK_FD=""
     fi
   }
@@ -505,7 +511,8 @@ Notes:
   Live data/dump modes use GET/query-only network paths and may expose serial numbers, MAC addresses,
   network identifiers, account-related fields, or other receiver-provided sensitive data.
   Examples: denon data fields --all | denon data fields --available | denon data summary | denon data dump --readable | denon data dump --json | denon data dump --raw | denon data capabilities --json
-  The script can be run directly or sourced from bash/zsh.
+  The runtime script requires bash and can be run directly or via the installed denon wrapper.
+  Shell completions are available for bash, zsh, and fish.
   Pass --quiet or -q before or after any command to suppress stdout output.
   Pass --silent before or after any command to suppress both stdout and stderr.
   Pass --no-verify before or after any write command to skip set-then-verify polling.
@@ -517,6 +524,10 @@ EOF
   _denon_debug() {
     [[ "${DENON_DEBUG:-0}" == "1" ]] || return 0
     printf '[denon] %s\n' "$*" >&2
+  }
+
+  _denon_iso_now() {
+    date '+%Y-%m-%dT%H:%M:%S%z'
   }
 
   _denon_curl() {
@@ -665,6 +676,10 @@ EOF
     printf '%s' "$1" | sed -n 's:.*<Zone2>.*<Mute>\([^<]*\)</Mute>.*</Zone2>.*:\1:p'
   }
 
+  _denon_xml_split_tags() {
+    awk '{ gsub(/></, ">\n<"); print }'
+  }
+
   _denon_main_volume_raw() {
     _denon_extract_main_volume_raw "$(_denon_get_vol_xml)"
   }
@@ -674,7 +689,7 @@ EOF
     local xml="$2"
 
     printf '%s' "$xml" |
-      sed 's/></>\n</g' |
+      _denon_xml_split_tags |
       awk -v zone="$zone" '
         $0 ~ "<Zone zone=\"" zone "\" " { in_zone=1; next }
         in_zone && /<\/Zone>/ { in_zone=0 }
@@ -1914,13 +1929,13 @@ EOF
     done
     {
       echo "receiver_ip=$IP"
-      echo "generated_at=$(date -Is 2>/dev/null || date)"
+      echo "generated_at=$(_denon_iso_now)"
     } >"$outdir/metadata.txt"
     echo "Snapshot saved to $outdir"
   }
 
   _denon_normalize_xml() {
-    sed 's/></>\n</g' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$'
+    _denon_xml_split_tags <"$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$'
   }
 
   _denon_snapshot_diff() {
@@ -2166,7 +2181,7 @@ EOF
     local xml="$1"
 
     printf '%s' "$xml" |
-      sed 's/></>\n</g' |
+      _denon_xml_split_tags |
       awk '
         function tag_name(line, out) {
           out=line
@@ -3152,7 +3167,7 @@ EOF
     local xml="$2"
 
     printf '%s' "$xml" |
-      sed 's/></>\n</g' |
+      _denon_xml_split_tags |
       awk -v source="$source_endpoint" '
         function tag_name(line, out) {
           out=line
@@ -3565,7 +3580,20 @@ EOF
   }
 
   _denon_ms_now() {
-    date +%s%3N 2>/dev/null || echo 0
+    local value
+    value=$(date +%s%3N 2>/dev/null || printf '')
+    if [[ "$value" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+      value=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null || printf '')
+      if [[ "$value" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$value"
+        return 0
+      fi
+    fi
+    printf '0\n'
   }
 
   _denon_probe_candidate() {

@@ -12,6 +12,12 @@ denon \- command\-line controller for Denon and Marantz AVR receivers
 .B denon
 controls Denon/Marantz AV receivers over the local network using the
 receiver's built\-in HTTP/XML API.
+The runtime script requires
+.BR bash ;
+zsh and fish support is provided through shell completion files, not by
+executing
+.B denon.sh
+as those shells.
 The receiver is discovered automatically via ARP and mDNS on first run;
 the found IP is cached in
 .IR ~/.cache/denon_ip .
@@ -159,6 +165,8 @@ auto\-detects bash, zsh, or fish; use
 to choose explicitly and
 .B \-\-force
 to overwrite a different existing user completion file.
+Completion support for zsh and fish is interactive shell integration only; the
+command runtime remains bash.
 .SH ENVIRONMENT
 .TP
 .B DENON_IP
