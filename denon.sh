@@ -243,7 +243,9 @@ denon() {
       cache_age=$(( $(date +%s) - cache_mtime ))
       if (( cache_age <= cache_ttl )); then
         cached_ip=$(<"$cache")
-        if _denon_is_receiver "$cached_ip"; then
+        if ! _denon_is_ipv4 "$cached_ip"; then
+          _denon_debug "ignoring invalid cached receiver IP: $cached_ip"
+        elif _denon_is_receiver "$cached_ip"; then
           printf '%s' "$cached_ip"
           return 0
         fi
@@ -325,6 +327,20 @@ denon() {
 
   _denon_is_number() {
     printf '%s' "$1" | awk '/^-?[0-9]+([.][0-9]+)?$/ { found=1 } END { exit found ? 0 : 1 }'
+  }
+
+  _denon_validate_volume_raw() {
+    local raw="$1"
+    local label="${2:-volume}"
+
+    if ! _denon_is_unsigned_integer "$raw"; then
+      echo "Error: ${label} raw volume must be numeric" >&2
+      return 1
+    fi
+    if awk -v raw="$raw" 'BEGIN { exit !(raw > 980) }'; then
+      echo "Error: ${label} raw volume is above the supported Denon range" >&2
+      return 1
+    fi
   }
 
   _denon_is_signed_step() {
@@ -602,7 +618,7 @@ EOF
       --data-urlencode "type=$type" \
       --data-urlencode "data=$data") || return 1
     case "$http_code" in
-      ""|2??) return 0 ;;
+      2??) return 0 ;;
       *)
         _denon_debug "set_config HTTP status $http_code"
         return 1
@@ -1100,6 +1116,20 @@ EOF
     printf 'Volume set to %s dB%s\n' "$db" "$(_denon_unverified_suffix)"
   }
 
+  _denon_set_zone2_volume_raw() {
+    local raw="$1"
+    local db
+
+    _denon_validate_volume_raw "$raw" "Zone 2" || return 1
+
+    # Type 12 XML reports Zone 2 volume as the same 0.1 dB raw offset used by
+    # Main Zone, so the same hearing-safety dB cap applies after conversion.
+    db=$(_denon_raw_to_db "$raw")
+    _denon_apply_volume_limit "$db" || return 1
+
+    _denon_set_config 12 "<Zone2><Volume>${raw}</Volume></Zone2>" || return 1
+  }
+
   _denon_fade_volume() {
     local target="" duration=10 arg json=0
     while [[ $# -gt 0 ]]; do
@@ -1195,8 +1225,10 @@ EOF
 
     current_db=$(_denon_raw_to_db "$raw")
     target_db=$(awk -v current="$current_db" -v delta="$delta" 'BEGIN { printf "%.1f", current + delta }')
-    new_raw=$(awk -v db="$target_db" 'BEGIN { raw=int((db+80)*10+0.5); if(raw<0)raw=0; if(raw>980)raw=980; print raw }')
-    _denon_set_config 12 "<Zone2><Volume>${new_raw}</Volume></Zone2>" || return 1
+    _denon_apply_volume_limit "$target_db" || return 1
+    new_raw=$(_denon_db_to_raw "$target_db")
+    _denon_validate_volume_raw "$new_raw" "Zone 2" || return 1
+    _denon_set_zone2_volume_raw "$new_raw" || return 1
     _denon_zone_status_pretty 2
   }
 
@@ -3788,7 +3820,12 @@ EOF
     echo "  DENON_SSDP_MX:         ${DENON_SSDP_MX:-1}"
     if [[ -f "$cache" ]]; then
       cached_ip=$(<"$cache")
-      echo "  Cache:                 $cache -> $cached_ip"
+      if _denon_is_ipv4 "$cached_ip"; then
+        echo "  Cache:                 $cache -> $cached_ip"
+      else
+        echo "  Cache:                 $cache -> invalid (ignored)"
+        cached_ip=""
+      fi
     else
       echo "  Cache:                 $cache -> missing"
     fi
@@ -7470,11 +7507,11 @@ EOF
           echo "Zone 2 unmuted"
           ;;
         vol|volume)
-          if [[ -z "$3" ]] || ! _denon_is_unsigned_integer "$3"; then
+          if [[ -z "$3" ]]; then
             echo "Error: zone2 vol requires the raw Zone 2 volume value, for example: denon zone2 vol 650" >&2
             return 1
           fi
-          _denon_set_config 12 "<Zone2><Volume>${3}</Volume></Zone2>" || return 1
+          _denon_set_zone2_volume_raw "$3" || return 1
           _denon_zone_status_pretty 2
           ;;
         up)

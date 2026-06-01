@@ -93,7 +93,47 @@ def test_rejected_dashboard_pid_does_not_send_player_heos_command(tmp_path):
     assert log.read_text() == "heos://player/get_players\n"
 
 
-def test_set_config_http_failure_returns_nonzero():
+def test_set_config_http_200_succeeds():
+    code = textwrap.dedent("""\
+        BASE=http://192.0.2.10
+        _denon_curl() { printf '%s' '200'; return 0; }
+        _denon_set_config 12 '<MainZone><Mute>1</Mute></MainZone>'
+    """)
+    r = _bash(code)
+    assert r.returncode == 0
+
+
+def test_set_config_http_204_succeeds():
+    code = textwrap.dedent("""\
+        BASE=http://192.0.2.10
+        _denon_curl() { printf '%s' '204'; return 0; }
+        _denon_set_config 12 '<MainZone><Mute>1</Mute></MainZone>'
+    """)
+    r = _bash(code)
+    assert r.returncode == 0
+
+
+def test_set_config_empty_http_code_fails():
+    code = textwrap.dedent("""\
+        BASE=http://192.0.2.10
+        _denon_curl() { return 0; }
+        _denon_set_config 12 '<MainZone><Mute>1</Mute></MainZone>'
+    """)
+    r = _bash(code)
+    assert r.returncode == 1
+
+
+def test_set_config_http_4xx_fails():
+    code = textwrap.dedent("""\
+        BASE=http://192.0.2.10
+        _denon_curl() { printf '%s' '404'; return 0; }
+        _denon_set_config 12 '<MainZone><Mute>1</Mute></MainZone>'
+    """)
+    r = _bash(code)
+    assert r.returncode == 1
+
+
+def test_set_config_http_5xx_fails():
     code = textwrap.dedent("""\
         BASE=http://192.0.2.10
         _denon_curl() { printf '%s' '500'; return 0; }
@@ -101,6 +141,125 @@ def test_set_config_http_failure_returns_nonzero():
     """)
     r = _bash(code)
     assert r.returncode == 1
+
+
+def test_valid_cached_ip_is_used(tmp_path):
+    code = textwrap.dedent("""\
+        mkdir -p "$HOME/.cache"
+        printf '%s' 192.0.2.20 >"$HOME/.cache/denon_ip"
+        _denon_is_receiver() { [[ "$1" == "192.0.2.20" ]]; }
+        _denon_discover
+    """)
+    r = _bash(code, {"HOME": str(tmp_path)})
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "192.0.2.20"
+
+
+def test_invalid_cached_ip_is_ignored_for_default_fallback(tmp_path):
+    code = textwrap.dedent("""\
+        mkdir -p "$HOME/.cache"
+        printf '%s' '192.0.2.20/../../bad' >"$HOME/.cache/denon_ip"
+        DENON_DEFAULT_IP=192.0.2.30
+        calls=""
+        _denon_is_receiver() {
+          calls="${calls}${1}"$'\\n'
+          [[ "$1" == "192.0.2.30" ]]
+        }
+        found=$(_denon_discover)
+        printf 'found=%s\\n%s' "$found" "$calls"
+    """)
+    r = _bash(code, {"HOME": str(tmp_path)})
+    assert r.returncode == 0, r.stderr
+    assert "found=192.0.2.30" in r.stdout
+    assert "192.0.2.20/../../bad" not in r.stdout
+
+
+def test_poisoned_cached_ip_never_reaches_receiver_probe_url(tmp_path):
+    code = textwrap.dedent("""\
+        mkdir -p "$HOME/.cache"
+        printf '%s' $'192.0.2.20:10443/evil\\n' >"$HOME/.cache/denon_ip"
+        DENON_DEFAULT_IP=192.0.2.30
+        BASE=""
+        _denon_curl() {
+          printf '%s\\n' "$*" >>"$DENON_TEST_URL_LOG"
+          printf '%s' '<FriendlyName>Denon AVR-X1600H</FriendlyName>'
+        }
+        _denon_discover
+    """)
+    log = tmp_path / "urls.log"
+    r = _bash(code, {"HOME": str(tmp_path), "DENON_TEST_URL_LOG": str(log)})
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "192.0.2.30"
+    logged = log.read_text()
+    assert "192.0.2.30:10443" in logged
+    assert "192.0.2.20:10443/evil" not in logged
+
+
+def test_zone2_valid_raw_volume_dispatches():
+    code = textwrap.dedent("""\
+        calls=""
+        _denon_set_config() { calls="${calls}${1}:${2}"$'\\n'; }
+        _denon_zone_status_pretty() { printf '%s\\n' 'zone2-status'; }
+        _denon_set_zone2_volume_raw 650
+        printf '%s' "$calls"
+    """)
+    r = _bash(code, {"DENON_MAX_VOLUME_DB": "off"})
+    assert r.returncode == 0, r.stderr
+    assert '12:<Zone2><Volume>650</Volume></Zone2>' in r.stdout
+
+
+def test_zone2_non_numeric_raw_volume_is_rejected():
+    code = textwrap.dedent("""\
+        _denon_set_config() { printf '%s\\n' "sent:$2"; }
+        _denon_set_zone2_volume_raw loud
+    """)
+    r = _bash(code)
+    assert r.returncode == 1
+    assert "Zone 2 raw volume must be numeric" in r.stderr
+    assert "sent:" not in r.stdout
+
+
+def test_zone2_raw_volume_above_max_is_rejected():
+    code = textwrap.dedent("""\
+        _denon_set_config() { printf '%s\\n' "sent:$2"; }
+        _denon_set_zone2_volume_raw 99999
+    """)
+    r = _bash(code, {"DENON_MAX_VOLUME_DB": "off"})
+    assert r.returncode == 1
+    assert "above the supported Denon range" in r.stderr
+    assert "sent:" not in r.stdout
+
+
+def test_zone2_max_volume_blocks_unsafe_increase():
+    code = textwrap.dedent("""\
+        _denon_get_vol_xml() { printf '%s' '<listGlobals><Zone2><Volume>690</Volume><Mute>2</Mute></Zone2></listGlobals>'; }
+        _denon_set_config() { printf '%s\\n' "sent:$2"; }
+        _denon_zone2_change_volume 2
+    """)
+    r = _bash(code, {"DENON_MAX_VOLUME_DB": "-10"})
+    assert r.returncode == 1
+    assert "DENON_MAX_VOLUME_DB=-10 dB" in r.stderr
+    assert "sent:" not in r.stdout
+
+
+def test_zone2_up_down_dispatch_under_cap():
+    code = textwrap.dedent("""\
+        calls=""
+        current=650
+        _denon_get_vol_xml() { printf '<listGlobals><Zone2><Volume>%s</Volume><Mute>2</Mute></Zone2></listGlobals>' "$current"; }
+        _denon_set_config() {
+          calls="${calls}${2}"$'\\n'
+          current=$(printf '%s' "$2" | sed -n 's:.*<Volume>\\([0-9][0-9]*\\)</Volume>.*:\\1:p')
+        }
+        _denon_zone_status_pretty() { return 0; }
+        _denon_zone2_change_volume 1
+        _denon_zone2_change_volume -1
+        printf '%s' "$calls"
+    """)
+    r = _bash(code, {"DENON_MAX_VOLUME_DB": "-10"})
+    assert r.returncode == 0, r.stderr
+    assert "<Zone2><Volume>660</Volume></Zone2>" in r.stdout
+    assert "<Zone2><Volume>650</Volume></Zone2>" in r.stdout
 
 
 def test_info_zone2_volume_text_displays_db_not_raw_only():

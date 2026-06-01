@@ -226,6 +226,9 @@ DENON_HEOS_GID=...
 DENON_DATA_DISCOVERY_MAX_TYPE=30
 ```
 
+`DENON_MAX_VOLUME_DB` caps both Main Zone and Zone 2 volume changes, including
+Zone 2 raw volume writes after converting the receiver raw value to dB.
+
 The PowerShell module reads the same `DENON_CONFIG` key/value file format and honors environment overrides. Its receiver lookup order is `Set-DenonReceiver` session state, `DENON_IP`, cached receiver IP, and `DENON_DEFAULT_IP`; `Find-DenonReceiver -RefreshCache` also attempts SSDP discovery.
 
 ### HTTPS/TLS Verification
@@ -556,7 +559,7 @@ The cache (`~/.cache/denon_ip`) is shared with the bash script.
 | Variable | Default | Description |
 |---|---|---|
 | `DENON_IP` | — | Receiver IP; overrides the cache |
-| `DENON_MAX_VOLUME_DB` | `0` | dB that maps to MPRIS Volume = 1.0 |
+| `DENON_MAX_VOLUME_DB` | `0` | dB that maps to MPRIS Volume = 1.0; also caps Main Zone and Zone 2 Bash volume commands |
 | `DENON_MPRIS_POLL_INTERVAL` | `10` | AVR HTTP poll interval in seconds |
 | `DENON_MPRIS_AUTO_SWITCH` | `0` | Set to `1` to let MPRIS transport commands activate HEOS even when another input is selected |
 | `DENON_HEOS_PID` | auto | Override HEOS player ID |

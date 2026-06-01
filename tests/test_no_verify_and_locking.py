@@ -52,6 +52,7 @@ def _write_fake_curl(bin_dir: Path) -> None:
               printf 'start %s %s\\n' "$payload" "$(date +%s%N)" >>"$log"
               sleep 0.35
               printf 'end %s %s\\n' "$payload" "$(date +%s%N)" >>"$log"
+              printf '%s' '200'
               exit 0
             fi
             exit 0
