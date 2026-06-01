@@ -258,10 +258,12 @@ Read-only status and dashboard:
 
 When `dashboard --watch` is running in an interactive terminal, it accepts
 single-key controls without Enter: Up/Down adjust volume, Left/Right send
-previous/next, Space toggles play/pause, `m` toggles mute, `1`-`4` recall Quick
-Select 1-4, `z` cycles the volume/mute control target between Main and Zone2,
-and `q` quits the dashboard. Transport keys keep using the active HEOS/player
-path. These keys are disabled for non-TTY input and one-shot output.
+previous/next, Space toggles play/pause, `m` toggles mute, number keys select
+visible Main Zone sources from the source list, `z` cycles the volume/mute
+control target between Main and Zone2, and `q` quits the dashboard. Transport
+keys keep using the active HEOS/player path. These keys are disabled for
+non-TTY input and one-shot output. Quick Select remains available through
+`denon qs <n>`.
 
 Experimental alternative dashboard:
 

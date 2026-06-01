@@ -36,7 +36,7 @@ from typing import Any, Sequence
 UNKNOWN = "Unknown"
 PLACEHOLDER = "-"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-KEY_HELP = "Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  1-4 quick select  z zone  q quit"
+KEY_HELP = "Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  number source  z zone  q quit"
 
 KEY_ACTIONS = {
     "\x1b[A": "volume_up",
@@ -44,10 +44,16 @@ KEY_ACTIONS = {
     "\x1b[C": "next",
     "\x1b[D": "previous",
     " ": "play_pause",
-    "1": "quick_select_1",
-    "2": "quick_select_2",
-    "3": "quick_select_3",
-    "4": "quick_select_4",
+    "0": "digit_0",
+    "1": "digit_1",
+    "2": "digit_2",
+    "3": "digit_3",
+    "4": "digit_4",
+    "5": "digit_5",
+    "6": "digit_6",
+    "7": "digit_7",
+    "8": "digit_8",
+    "9": "digit_9",
     "m": "mute_toggle",
     "M": "mute_toggle",
     "z": "cycle_zone_target",
@@ -1167,9 +1173,15 @@ class DashboardApp:
         while True:
             timeout = max(0.0, min(0.05, deadline - time.monotonic()))
             if timeout <= 0:
+                for event in commands.flush_numeric_if_expired(snapshot).events:
+                    self.tracker.record(event)
                 return False
+            for event in commands.flush_numeric_if_expired(snapshot).events:
+                self.tracker.record(event)
             action = keyboard.read_action(timeout)
             if action is None:
+                for event in commands.flush_numeric_if_expired(snapshot).events:
+                    self.tracker.record(event)
                 continue
             result = commands.handle(action, snapshot)
             if result.quit:
@@ -1248,6 +1260,7 @@ class DashboardCommandController:
         throttle_seconds: float = 0.2,
         clock: Any = time.monotonic,
         runner: Any = subprocess.run,
+        numeric_timeout_seconds: float = 0.75,
     ) -> None:
         self.script = str(script)
         self.throttle_seconds = throttle_seconds
@@ -1255,10 +1268,17 @@ class DashboardCommandController:
         self.runner = runner
         self._last_command_at = -float("inf")
         self.control_target = "Main"
+        self.numeric_timeout_seconds = numeric_timeout_seconds
+        self._numeric_buffer = ""
+        self._numeric_deadline: float | None = None
 
     def handle(self, action: str, snapshot: DashboardSnapshot) -> DashboardCommandResult:
         if action == "quit":
+            self._reset_numeric_buffer()
             return DashboardCommandResult(quit=True)
+        if action.startswith("digit_"):
+            return self._handle_digit(action.rsplit("_", 1)[-1], snapshot)
+        self._reset_numeric_buffer()
         if not self._allowed_now():
             return DashboardCommandResult()
 
@@ -1279,6 +1299,51 @@ class DashboardCommandController:
             return DashboardCommandResult(events=(*events, f"Zone2 command unavailable: {self._event_name(action, snapshot)}"))
         return DashboardCommandResult(events=(*events, f"Command unavailable: {self._event_name(action, snapshot)}"))
 
+    def flush_numeric_if_expired(self, snapshot: DashboardSnapshot) -> DashboardCommandResult:
+        if not self._numeric_buffer or self._numeric_deadline is None:
+            return DashboardCommandResult()
+        if self.clock() >= self._numeric_deadline:
+            return self._dispatch_source_hotkey(self._numeric_buffer, snapshot)
+        return DashboardCommandResult()
+
+    def _handle_digit(self, digit: str, snapshot: DashboardSnapshot) -> DashboardCommandResult:
+        self._numeric_buffer = f"{self._numeric_buffer}{digit}"
+        self._numeric_deadline = self.clock() + self.numeric_timeout_seconds
+        if self._source_name_for_index(self._numeric_buffer, snapshot) and not self._source_has_longer_prefix(self._numeric_buffer, snapshot):
+            return self._dispatch_source_hotkey(self._numeric_buffer, snapshot)
+        if not self._source_has_prefix(self._numeric_buffer, snapshot):
+            return self._dispatch_source_hotkey(self._numeric_buffer, snapshot)
+        return DashboardCommandResult()
+
+    def _dispatch_source_hotkey(self, source_index: str, snapshot: DashboardSnapshot) -> DashboardCommandResult:
+        self._reset_numeric_buffer()
+        source_name = self._source_name_for_index(source_index, snapshot)
+        if not source_name:
+            return DashboardCommandResult(events=(f"Source hotkey unavailable: {source_index}",))
+        if not self._allowed_now():
+            return DashboardCommandResult()
+        events = (f"Key: Source {source_index} {source_name}",)
+        ok, message = self._run(("source", source_index))
+        if ok:
+            return DashboardCommandResult(events=events)
+        return DashboardCommandResult(events=(*events, f"Source hotkey unavailable: {source_index}"))
+
+    def _reset_numeric_buffer(self) -> None:
+        self._numeric_buffer = ""
+        self._numeric_deadline = None
+
+    def _source_name_for_index(self, source_index: str, snapshot: DashboardSnapshot) -> str:
+        for source in snapshot.sources:
+            if source.index == source_index:
+                return display_value(source.name)
+        return ""
+
+    def _source_has_prefix(self, prefix: str, snapshot: DashboardSnapshot) -> bool:
+        return any(source.index.startswith(prefix) for source in snapshot.sources)
+
+    def _source_has_longer_prefix(self, prefix: str, snapshot: DashboardSnapshot) -> bool:
+        return any(source.index != prefix and source.index.startswith(prefix) for source in snapshot.sources)
+
     def _allowed_now(self) -> bool:
         now = self.clock()
         if now - self._last_command_at < self.throttle_seconds:
@@ -1295,8 +1360,6 @@ class DashboardCommandController:
             if self.control_target == "Zone2":
                 return ("zone2", "unmute") if self._zone2_muted(snapshot) else ("zone2", "mute")
             return ("toggle", "mute")
-        if action.startswith("quick_select_"):
-            return ("qs", action.rsplit("_", 1)[-1])
         if action == "next":
             return ("next",)
         if action == "previous":
@@ -1320,13 +1383,9 @@ class DashboardCommandController:
         if action == "play_pause":
             state = _clean(snapshot.now_playing.state).lower()
             return "pause" if state in {"play", "playing"} else "play"
-        if action.startswith("quick_select_"):
-            return f"quick select {action.rsplit('_', 1)[-1]}"
         return action
 
     def _key_event_name(self, action: str) -> str:
-        if action.startswith("quick_select_"):
-            return f"Quick Select {action.rsplit('_', 1)[-1]}"
         return {
             "volume_up": "Volume Up",
             "volume_down": "Volume Down",

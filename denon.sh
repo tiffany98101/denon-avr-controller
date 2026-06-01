@@ -369,7 +369,7 @@ Receiver status:
   denon doctor               Check dependencies, route, cache, and receiver reachability
   denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
-                             Watch keys: ↑/↓ volume, ←/→ prev/next, Space play/pause, m mute, 1-4 quick select, z zone, q quit
+                             Watch keys: ↑/↓ volume, ←/→ prev/next, Space play/pause, m mute, number source, z zone, q quit
   denon dashboard-alt [--compare-providers|--json] [--provider auto|direct|shell] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show the experimental Python dashboard preview; denon dashboard remains the stable default
                              Examples: denon dashboard-alt --provider auto
@@ -5385,7 +5385,7 @@ EOF
 
     if [[ "${watch:-0}" == "1" ]]; then
       if [[ "${dashboard_keyboard_active:-0}" == "1" ]]; then
-        hints="Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  1-4 quick select  z zone  q quit"
+        hints="Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  number source  z zone  q quit"
         _denon_dashboard_fit "Control Target: ${dashboard_control_target:-Main}" "$width"
         printf '\n'
         _denon_dashboard_fit "$hints" "$width"
@@ -5496,10 +5496,7 @@ EOF
       $'\033[C') echo "next" ;;
       $'\033[D') echo "previous" ;;
       " ") echo "play_pause" ;;
-      1) echo "quick_select_1" ;;
-      2) echo "quick_select_2" ;;
-      3) echo "quick_select_3" ;;
-      4) echo "quick_select_4" ;;
+      [0-9]) echo "digit_$sequence" ;;
       m|M) echo "mute_toggle" ;;
       z|Z) echo "cycle_zone_target" ;;
       q|Q) echo "quit" ;;
@@ -5540,7 +5537,6 @@ EOF
       next) echo "Next" ;;
       play_pause) echo "Play/Pause" ;;
       mute_toggle) echo "Mute Toggle" ;;
-      quick_select_*) echo "Quick Select ${action##*_}" ;;
       *) echo "$action" ;;
     esac
   }
@@ -5560,9 +5556,107 @@ EOF
         esac
         ;;
       mute_toggle) echo "mute toggle" ;;
-      quick_select_*) echo "quick select ${action##*_}" ;;
       *) echo "$action" ;;
     esac
+  }
+
+  _denon_dashboard_source_name_for_index() {
+    local wanted="$1"
+    local line idx name
+
+    while IFS= read -r line; do
+      line=$(_denon_trim "$line")
+      [[ -n "$line" ]] || continue
+      [[ "${line:0:1}" == "*" ]] && line=$(_denon_trim "${line:1}")
+      idx=${line%%[[:space:]]*}
+      [[ "$idx" =~ ^[0-9]+$ ]] || continue
+      name=$(_denon_trim "${line#"$idx"}")
+      if [[ "$idx" == "$wanted" ]]; then
+        printf '%s' "$name"
+        return 0
+      fi
+    done <<<"${dash_main_sources:-}"
+    return 1
+  }
+
+  _denon_dashboard_source_has_longer_prefix() {
+    local prefix="$1"
+    local line idx
+
+    while IFS= read -r line; do
+      line=$(_denon_trim "$line")
+      [[ -n "$line" ]] || continue
+      [[ "${line:0:1}" == "*" ]] && line=$(_denon_trim "${line:1}")
+      idx=${line%%[[:space:]]*}
+      [[ "$idx" =~ ^[0-9]+$ ]] || continue
+      if [[ "$idx" != "$prefix" && "$idx" == "$prefix"* ]]; then
+        return 0
+      fi
+    done <<<"${dash_main_sources:-}"
+    return 1
+  }
+
+  _denon_dashboard_source_has_prefix() {
+    local prefix="$1"
+    local line idx
+
+    while IFS= read -r line; do
+      line=$(_denon_trim "$line")
+      [[ -n "$line" ]] || continue
+      [[ "${line:0:1}" == "*" ]] && line=$(_denon_trim "${line:1}")
+      idx=${line%%[[:space:]]*}
+      [[ "$idx" =~ ^[0-9]+$ ]] || continue
+      [[ "$idx" == "$prefix"* ]] && return 0
+    done <<<"${dash_main_sources:-}"
+    return 1
+  }
+
+  _denon_dashboard_reset_numeric_buffer() {
+    dashboard_numeric_buffer=""
+    dashboard_numeric_deadline_ms=""
+  }
+
+  _denon_dashboard_dispatch_source_hotkey() {
+    local source_idx="$1"
+    local source_name
+
+    _denon_dashboard_reset_numeric_buffer
+    source_name=$(_denon_dashboard_source_name_for_index "$source_idx") || {
+      _denon_dashboard_add_event "Source hotkey unavailable: $source_idx"
+      return 0
+    }
+    _denon_dashboard_throttle_allows_command || return 0
+    _denon_dashboard_add_event "Key: Source $source_idx $source_name"
+    if ! _denon_set_source "$source_idx" "1" >/dev/null 2>&1; then
+      _denon_dashboard_add_event "Source hotkey unavailable: $source_idx"
+    fi
+  }
+
+  _denon_dashboard_handle_digit() {
+    local digit="$1"
+    local now
+
+    now=$(_denon_dashboard_now_ms)
+    dashboard_numeric_buffer="${dashboard_numeric_buffer:-}${digit}"
+    dashboard_numeric_deadline_ms=$((now + ${dashboard_numeric_timeout_ms:-750}))
+
+    if _denon_dashboard_source_name_for_index "$dashboard_numeric_buffer" >/dev/null &&
+      ! _denon_dashboard_source_has_longer_prefix "$dashboard_numeric_buffer"; then
+      _denon_dashboard_dispatch_source_hotkey "$dashboard_numeric_buffer"
+    elif ! _denon_dashboard_source_has_prefix "$dashboard_numeric_buffer"; then
+      _denon_dashboard_dispatch_source_hotkey "$dashboard_numeric_buffer"
+    fi
+  }
+
+  _denon_dashboard_flush_numeric_if_expired() {
+    local now
+
+    [[ -n "${dashboard_numeric_buffer:-}" ]] || return 0
+    [[ -n "${dashboard_numeric_deadline_ms:-}" ]] || return 0
+    now=$(_denon_dashboard_now_ms)
+    if (( now >= dashboard_numeric_deadline_ms )); then
+      _denon_dashboard_dispatch_source_hotkey "$dashboard_numeric_buffer"
+    fi
   }
 
   _denon_dashboard_zone2_is_muted() {
@@ -5615,9 +5709,6 @@ EOF
           *) _denon_heos_control play ;;
         esac
         ;;
-      quick_select_*)
-        _denon_quick_select "${action##*_}"
-        ;;
       *)
         return 1
         ;;
@@ -5629,8 +5720,13 @@ EOF
     local action key_event command_event
 
     action=$(_denon_dashboard_parse_key "$key" 2>/dev/null) || return 0
+    if [[ "$action" != digit_* && -n "${dashboard_numeric_buffer:-}" ]]; then
+      _denon_dashboard_reset_numeric_buffer
+    fi
+
     case "$action" in
       quit)
+        _denon_dashboard_reset_numeric_buffer
         dashboard_stop_pending=1
         dashboard_exit_status=0
         ;;
@@ -5648,6 +5744,9 @@ EOF
         _denon_dashboard_add_event "Key: Control Target: $dashboard_control_target"
         dashboard_resize_pending=0
         _denon_dashboard_redraw
+        ;;
+      digit_*)
+        _denon_dashboard_handle_digit "${action#digit_}"
         ;;
       *)
         _denon_dashboard_throttle_allows_command || return 0
@@ -5697,10 +5796,13 @@ EOF
     local chunk
 
     if ! awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'; then
+      _denon_dashboard_flush_numeric_if_expired
       _denon_dashboard_poll_key 0.200 || true
+      _denon_dashboard_flush_numeric_if_expired
       return 0
     fi
     while [[ "${dashboard_stop_pending:-0}" != "1" ]] && awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'; do
+      _denon_dashboard_flush_numeric_if_expired
       if [[ "${dashboard_resize_pending:-0}" == "1" ]]; then
         dashboard_resize_pending=0
         _denon_dashboard_redraw
@@ -5708,6 +5810,7 @@ EOF
       chunk=$(awk -v remaining="$remaining" 'BEGIN { if (remaining < 0.2) printf "%.3f", remaining; else printf "0.200" }')
       if [[ -t 0 ]]; then
         _denon_dashboard_poll_key "$chunk" || true
+        _denon_dashboard_flush_numeric_if_expired
         [[ "${dashboard_stop_pending:-0}" == "1" ]] && break
       else
         sleep "$chunk" 2>/dev/null || true
@@ -5744,6 +5847,9 @@ EOF
     local dashboard_control_target="Main"
     local dashboard_last_command_ms=""
     local dashboard_command_throttle_ms=200
+    local dashboard_numeric_buffer=""
+    local dashboard_numeric_deadline_ms=""
+    local dashboard_numeric_timeout_ms=750
 
     dashboard_ascii=0
     case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in

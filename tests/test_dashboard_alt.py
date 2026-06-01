@@ -222,7 +222,7 @@ def test_renderer_shows_control_target_only_when_interactive_controls_are_active
     )
 
     assert "Control Target: Zone2" in interactive
-    assert "1-4 quick select  z zone" in interactive
+    assert "number source  z zone" in interactive
     assert "Control Target:" not in non_interactive
 
 
@@ -529,10 +529,11 @@ def test_dashboard_alt_parser_accepts_expected_options():
     ("\x1b[C", "next"),
     ("\x1b[D", "previous"),
     (" ", "play_pause"),
-    ("1", "quick_select_1"),
-    ("2", "quick_select_2"),
-    ("3", "quick_select_3"),
-    ("4", "quick_select_4"),
+    ("0", "digit_0"),
+    ("1", "digit_1"),
+    ("2", "digit_2"),
+    ("3", "digit_3"),
+    ("4", "digit_4"),
     ("m", "mute_toggle"),
     ("z", "cycle_zone_target"),
     ("q", "quit"),
@@ -629,13 +630,28 @@ def test_dashboard_volume_and_mute_dispatch_use_selected_zone_target():
     ]
 
 
+def source_hotkey_snapshot():
+    return complete_snapshot(
+        sources=(
+            SourceSnapshot(index="1", name="CBL/SAT"),
+            SourceSnapshot(index="2", name="DVD"),
+            SourceSnapshot(index="3", name="Blu-ray"),
+            SourceSnapshot(index="4", name="Game"),
+            SourceSnapshot(index="5", name="Media Player"),
+            SourceSnapshot(index="6", name="TV Audio", active=True),
+            SourceSnapshot(index="7", name="AUX"),
+            SourceSnapshot(index="10", name="Phono"),
+            SourceSnapshot(index="11", name="Tuner"),
+            SourceSnapshot(index="13", name="HEOS Music"),
+        )
+    )
+
+
 @pytest.mark.parametrize(("action", "expected_command", "expected_event"), [
-    ("quick_select_1", [str(SCRIPT), "qs", "1"], "Key: Quick Select 1"),
-    ("quick_select_2", [str(SCRIPT), "qs", "2"], "Key: Quick Select 2"),
-    ("quick_select_3", [str(SCRIPT), "qs", "3"], "Key: Quick Select 3"),
-    ("quick_select_4", [str(SCRIPT), "qs", "4"], "Key: Quick Select 4"),
+    ("digit_6", [str(SCRIPT), "source", "6"], "Key: Source 6 TV Audio"),
+    ("digit_3", [str(SCRIPT), "source", "3"], "Key: Source 3 Blu-ray"),
 ])
-def test_dashboard_quick_select_hotkeys_dispatch_existing_command_path(action, expected_command, expected_event):
+def test_dashboard_number_hotkeys_dispatch_visible_source(action, expected_command, expected_event):
     calls = []
 
     def fake_runner(command, **kwargs):
@@ -643,10 +659,122 @@ def test_dashboard_quick_select_hotkeys_dispatch_existing_command_path(action, e
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
     controller = DashboardCommandController(str(SCRIPT), runner=fake_runner)
-    result = controller.handle(action, complete_snapshot())
+    result = controller.handle(action, source_hotkey_snapshot())
 
     assert result.events == (expected_event,)
     assert calls == [expected_command]
+
+
+@pytest.mark.parametrize(("second_action", "expected_command", "expected_event"), [
+    ("digit_0", [str(SCRIPT), "source", "10"], "Key: Source 10 Phono"),
+    ("digit_1", [str(SCRIPT), "source", "11"], "Key: Source 11 Tuner"),
+    ("digit_3", [str(SCRIPT), "source", "13"], "Key: Source 13 HEOS Music"),
+])
+def test_dashboard_multidigit_source_hotkeys_dispatch_visible_source(second_action, expected_command, expected_event):
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner)
+    snapshot = source_hotkey_snapshot()
+
+    assert controller.handle("digit_1", snapshot).events == ()
+    result = controller.handle(second_action, snapshot)
+
+    assert result.events == (expected_event,)
+    assert calls == [expected_command]
+
+
+def test_dashboard_single_ambiguous_digit_selects_after_timeout():
+    calls = []
+    now = [100.0]
+
+    def fake_clock():
+        return now[0]
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(
+        str(SCRIPT),
+        runner=fake_runner,
+        clock=fake_clock,
+        numeric_timeout_seconds=0.75,
+    )
+    snapshot = source_hotkey_snapshot()
+
+    assert controller.handle("digit_1", snapshot).events == ()
+    now[0] += 0.8
+    result = controller.flush_numeric_if_expired(snapshot)
+
+    assert result.events == ("Key: Source 1 CBL/SAT",)
+    assert calls == [[str(SCRIPT), "source", "1"]]
+
+
+def test_dashboard_invalid_source_number_warns_without_dispatch():
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner)
+    result = controller.handle("digit_9", source_hotkey_snapshot())
+
+    assert result.events == ("Source hotkey unavailable: 9",)
+    assert calls == []
+
+
+def test_dashboard_numeric_buffer_resets_after_timeout():
+    calls = []
+    now = [100.0]
+
+    def fake_clock():
+        return now[0]
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(
+        str(SCRIPT),
+        runner=fake_runner,
+        clock=fake_clock,
+        throttle_seconds=0,
+        numeric_timeout_seconds=0.75,
+    )
+    snapshot = source_hotkey_snapshot()
+
+    controller.handle("digit_1", snapshot)
+    now[0] += 0.8
+    assert controller.flush_numeric_if_expired(snapshot).events == ("Key: Source 1 CBL/SAT",)
+    assert controller.handle("digit_3", snapshot).events == ("Key: Source 3 Blu-ray",)
+
+    assert calls == [
+        [str(SCRIPT), "source", "1"],
+        [str(SCRIPT), "source", "3"],
+    ]
+
+
+def test_dashboard_numeric_buffer_resets_after_non_number_key():
+    calls = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner, throttle_seconds=0)
+    snapshot = source_hotkey_snapshot()
+
+    assert controller.handle("digit_1", snapshot).events == ()
+    assert controller.handle("mute_toggle", snapshot).events == ("Key: Mute Toggle",)
+    assert controller.handle("digit_0", snapshot).events == ("Source hotkey unavailable: 0",)
+
+    assert [str(SCRIPT), "source", "10"] not in calls
+    assert [str(SCRIPT), "toggle", "mute"] in calls
 
 
 @pytest.mark.parametrize(("action", "event"), [
@@ -656,10 +784,7 @@ def test_dashboard_quick_select_hotkeys_dispatch_existing_command_path(action, e
     ("next", "Key: Next"),
     ("play_pause", "Key: Play/Pause"),
     ("mute_toggle", "Key: Mute Toggle"),
-    ("quick_select_1", "Key: Quick Select 1"),
-    ("quick_select_2", "Key: Quick Select 2"),
-    ("quick_select_3", "Key: Quick Select 3"),
-    ("quick_select_4", "Key: Quick Select 4"),
+    ("digit_6", "Key: Source 6 TV Audio"),
 ])
 def test_dashboard_key_actions_report_recent_event_feedback(action, event):
     def fake_runner(command, **kwargs):
@@ -667,7 +792,7 @@ def test_dashboard_key_actions_report_recent_event_feedback(action, event):
 
     tracker = DashboardEventTracker()
     controller = DashboardCommandController(str(SCRIPT), runner=fake_runner)
-    result = controller.handle(action, complete_snapshot())
+    result = controller.handle(action, source_hotkey_snapshot())
     for message in result.events:
         tracker.record(message, timestamp=datetime(2026, 5, 21, 18, 30, 0))
 

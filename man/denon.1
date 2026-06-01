@@ -47,16 +47,15 @@ Up/Down adjust volume, Left/Right send previous/next, Space toggles
 play/pause,
 .B m
 toggles mute,
-.B 1
-through
-.B 4
-recall Quick Select 1 through 4,
+number keys select visible Main Zone sources from the source list,
 .B z
 cycles the volume/mute control target between Main and Zone2, and
 .B q
 quits the dashboard.
 Transport keys keep using the active HEOS/player path.
 These keys are disabled for non\-TTY input and one\-shot output.
+Quick Select remains available through
+.BR "denon qs <n>" .
 .TP
 .BR dashboard\-alt " [\-\-compare\-providers|\-\-json] [\-\-provider \fIauto|direct|shell\fR] [\-\-watch] [\-\-interval \fIsec\fR] [\-\-color \fIauto|always|never\fR] [\-\-unicode|\-\-ascii]"
 Experimental Python dashboard preview. The default

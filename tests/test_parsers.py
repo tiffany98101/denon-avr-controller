@@ -881,10 +881,11 @@ class TestDashboardInteractiveKeys:
         ("' '", "play_pause"),
         ("'m'", "mute_toggle"),
         ("'q'", "quit"),
-        ("'1'", "quick_select_1"),
-        ("'2'", "quick_select_2"),
-        ("'3'", "quick_select_3"),
-        ("'4'", "quick_select_4"),
+        ("'0'", "digit_0"),
+        ("'1'", "digit_1"),
+        ("'2'", "digit_2"),
+        ("'3'", "digit_3"),
+        ("'4'", "digit_4"),
         ("'z'", "cycle_zone_target"),
     ])
     def test_main_dashboard_key_parser_maps_controls(self, sequence, action):
@@ -952,20 +953,23 @@ class TestDashboardInteractiveKeys:
         assert "set-config:12:<Zone2><Mute>1</Mute></Zone2>" in r.stdout
         assert "set-config:12:<Zone2><Mute>2</Mute></Zone2>" in r.stdout
 
+    SOURCE_BODY = """\
+        dash_main_sources=$'  1  CBL/SAT\\n  2  DVD\\n  3  Blu-ray\\n  4  Game\\n  5  Media Player\\n* 6  TV Audio\\n  7  AUX\\n  10 Phono\\n  11 Tuner\\n  13 HEOS Music'
+    """
+
     @pytest.mark.parametrize(("key", "call", "event"), [
-        ("1", "quick:1", "Key: Quick Select 1"),
-        ("2", "quick:2", "Key: Quick Select 2"),
-        ("3", "quick:3", "Key: Quick Select 3"),
-        ("4", "quick:4", "Key: Quick Select 4"),
+        ("6", "source:6:1", "Key: Source 6 TV Audio"),
+        ("3", "source:3:1", "Key: Source 3 Blu-ray"),
     ])
-    def test_main_dashboard_quick_select_hotkeys_dispatch_existing_path(self, key, call, event):
+    def test_main_dashboard_number_hotkeys_dispatch_visible_source(self, key, call, event):
         code = textwrap.dedent(f"""\
             calls=""
             dashboard_control_target="Main"
             dashboard_command_throttle_ms=0
             dashboard_events=""
             last_dashboard_event=""
-            _denon_quick_select() {{ calls="${{calls}}quick:$1"$'\\n'; }}
+            {self.SOURCE_BODY}
+            _denon_set_source() {{ calls="${{calls}}source:$1:$2"$'\\n'; }}
 
             _denon_dashboard_handle_key {key}
             printf 'calls=%s\\n' "$calls"
@@ -975,6 +979,127 @@ class TestDashboardInteractiveKeys:
         assert r.returncode == 0
         assert call in r.stdout
         assert event in r.stdout
+
+    @pytest.mark.parametrize(("second_key", "call", "event"), [
+        ("0", "source:10:1", "Key: Source 10 Phono"),
+        ("1", "source:11:1", "Key: Source 11 Tuner"),
+        ("3", "source:13:1", "Key: Source 13 HEOS Music"),
+    ])
+    def test_main_dashboard_multidigit_source_hotkeys_dispatch_visible_source(self, second_key, call, event):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            {self.SOURCE_BODY}
+            _denon_set_source() {{ calls="${{calls}}source:$1:$2"$'\\n'; }}
+
+            _denon_dashboard_handle_key 1
+            printf 'after_first_calls=%s buffer=%s\\n' "$calls" "$dashboard_numeric_buffer"
+            _denon_dashboard_handle_key {second_key}
+            printf 'calls=%s\\n' "$calls"
+            printf 'events=%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "after_first_calls= buffer=1" in r.stdout
+        assert call in r.stdout
+        assert event in r.stdout
+
+    def test_main_dashboard_single_ambiguous_digit_selects_after_timeout(self):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_test_now_ms=1000
+            dashboard_numeric_timeout_ms=750
+            dashboard_events=""
+            last_dashboard_event=""
+            {self.SOURCE_BODY}
+            _denon_set_source() {{ calls="${{calls}}source:$1:$2"$'\\n'; }}
+
+            _denon_dashboard_handle_key 1
+            printf 'before=%s buffer=%s\\n' "$calls" "$dashboard_numeric_buffer"
+            dashboard_test_now_ms=1800
+            _denon_dashboard_flush_numeric_if_expired
+            printf 'after=%s buffer=%s\\n' "$calls" "$dashboard_numeric_buffer"
+            printf 'events=%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "before= buffer=1" in r.stdout
+        assert "after=source:1:1" in r.stdout
+        assert "buffer=" in r.stdout
+        assert "Key: Source 1 CBL/SAT" in r.stdout
+
+    def test_main_dashboard_invalid_source_number_warns_without_dispatch(self):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            {self.SOURCE_BODY}
+            _denon_set_source() {{ calls="${{calls}}source:$1:$2"$'\\n'; }}
+
+            _denon_dashboard_handle_key 9
+            printf 'calls=%s\\n' "$calls"
+            printf 'events=%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "calls=" in r.stdout
+        assert "source:" not in r.stdout
+        assert "Source hotkey unavailable: 9" in r.stdout
+
+    def test_main_dashboard_numeric_buffer_resets_after_timeout(self):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_test_now_ms=1000
+            dashboard_numeric_timeout_ms=750
+            dashboard_events=""
+            last_dashboard_event=""
+            {self.SOURCE_BODY}
+            _denon_set_source() {{ calls="${{calls}}source:$1:$2"$'\\n'; }}
+
+            _denon_dashboard_handle_key 1
+            dashboard_test_now_ms=1800
+            _denon_dashboard_flush_numeric_if_expired
+            dashboard_test_now_ms=1900
+            _denon_dashboard_handle_key 3
+            printf 'calls=%s\\n' "$calls"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "source:1:1" in r.stdout
+        assert "source:3:1" in r.stdout
+        assert "source:13:1" not in r.stdout
+
+    def test_main_dashboard_numeric_buffer_resets_after_non_number_key(self):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_events=""
+            last_dashboard_event=""
+            {self.SOURCE_BODY}
+            _denon_set_source() {{ calls="${{calls}}source:$1:$2"$'\\n'; }}
+            _denon_toggle() {{ calls="${{calls}}toggle:$1"$'\\n'; }}
+
+            _denon_dashboard_handle_key 1
+            _denon_dashboard_handle_key m
+            _denon_dashboard_handle_key 0
+            printf 'calls=%s\\n' "$calls"
+            printf 'events=%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "toggle:mute" in r.stdout
+        assert "source:10:1" not in r.stdout
+        assert "Source hotkey unavailable: 0" in r.stdout
 
     @pytest.mark.parametrize(("key", "event"), [
         (r"$'\033[A'", "Key: Volume Up"),
@@ -1168,7 +1293,7 @@ class TestDashboardDiagnostics:
         assert r.returncode == 0
         assert "Control Target: Zone2" in r.stdout
         assert "Keys: ↑/↓ volume" in r.stdout
-        assert "1-4 quick select  z zone" in r.stdout
+        assert "number source  z zone" in r.stdout
 
     def test_dashboard_body_display_values_are_normalized(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\
