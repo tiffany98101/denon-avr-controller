@@ -548,14 +548,46 @@ def test_dashboard_command_throttle_is_deterministic_without_sleep():
     )
     snapshot = complete_snapshot()
 
-    assert controller.handle("volume_up", snapshot).event == "Command sent: volume up"
+    assert controller.handle("volume_up", snapshot).events == ("Key: Volume Up",)
     assert controller.handle("volume_up", snapshot).event is None
     now[0] += 0.21
-    assert controller.handle("volume_up", snapshot).event == "Command sent: volume up"
+    assert controller.handle("volume_up", snapshot).events == ("Key: Volume Up",)
     assert calls == [
         [str(SCRIPT), "up"],
         [str(SCRIPT), "up"],
     ]
+
+
+@pytest.mark.parametrize(("action", "event"), [
+    ("volume_up", "Key: Volume Up"),
+    ("volume_down", "Key: Volume Down"),
+    ("previous", "Key: Previous"),
+    ("next", "Key: Next"),
+    ("play_pause", "Key: Play/Pause"),
+    ("mute_toggle", "Key: Mute Toggle"),
+])
+def test_dashboard_key_actions_report_recent_event_feedback(action, event):
+    def fake_runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    tracker = DashboardEventTracker()
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner)
+    result = controller.handle(action, complete_snapshot())
+    for message in result.events:
+        tracker.record(message, timestamp=datetime(2026, 5, 21, 18, 30, 0))
+
+    assert result.quit is False
+    assert result.events == (event,)
+    assert tracker.events == (f"18:30:00 {event}",)
+
+
+def test_dashboard_quit_key_has_no_recent_event_feedback():
+    controller = DashboardCommandController(str(SCRIPT))
+    result = controller.handle("quit", complete_snapshot())
+
+    assert result.quit is True
+    assert result.events == ()
+    assert result.event is None
 
 
 def test_transport_command_failure_reports_recent_event_without_crashing():
@@ -566,7 +598,7 @@ def test_transport_command_failure_reports_recent_event_without_crashing():
     result = controller.handle("next", complete_snapshot())
 
     assert result.quit is False
-    assert result.event == "Transport command unavailable: next"
+    assert result.events == ("Key: Next", "Transport command unavailable: next")
 
 
 def test_dashboard_alt_help_is_discoverable_preview_text():
@@ -739,6 +771,7 @@ def test_json_mode_outputs_stable_snapshot_without_network(monkeypatch, capsys):
     assert data["main_power"] == "ON"
     assert "timestamp" in data
     assert "Keys:" not in output
+    assert "Key:" not in output
 
 
 def test_json_rejects_watch(capsys):

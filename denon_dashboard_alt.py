@@ -1157,8 +1157,8 @@ class DashboardApp:
             result = commands.handle(action, snapshot)
             if result.quit:
                 return True
-            if result.event:
-                self.tracker.record(result.event)
+            for event in result.events:
+                self.tracker.record(event)
 
 
 def parse_key_sequence(sequence: str) -> str | None:
@@ -1216,8 +1216,12 @@ class DashboardKeyboardReader:
 
 @dataclass(frozen=True)
 class DashboardCommandResult:
-    event: str | None = None
+    events: tuple[str, ...] = ()
     quit: bool = False
+
+    @property
+    def event(self) -> str | None:
+        return self.events[0] if self.events else None
 
 
 class DashboardCommandController:
@@ -1244,11 +1248,12 @@ class DashboardCommandController:
         if command is None:
             return DashboardCommandResult()
         ok, message = self._run(command)
+        events = (f"Key: {self._key_event_name(action)}",)
         if ok:
-            return DashboardCommandResult(event=f"Command sent: {self._event_name(action, snapshot)}")
+            return DashboardCommandResult(events=events)
         if action in {"next", "previous", "play_pause"}:
-            return DashboardCommandResult(event=f"Transport command unavailable: {self._event_name(action, snapshot)}")
-        return DashboardCommandResult(event=f"Command unavailable: {self._event_name(action, snapshot)}")
+            return DashboardCommandResult(events=(*events, f"Transport command unavailable: {self._event_name(action, snapshot)}"))
+        return DashboardCommandResult(events=(*events, f"Command unavailable: {self._event_name(action, snapshot)}"))
 
     def _allowed_now(self) -> bool:
         now = self.clock()
@@ -1284,6 +1289,16 @@ class DashboardCommandController:
             state = _clean(snapshot.now_playing.state).lower()
             return "pause" if state in {"play", "playing"} else "play"
         return action
+
+    def _key_event_name(self, action: str) -> str:
+        return {
+            "volume_up": "Volume Up",
+            "volume_down": "Volume Down",
+            "previous": "Previous",
+            "next": "Next",
+            "play_pause": "Play/Pause",
+            "mute_toggle": "Mute Toggle",
+        }.get(action, action)
 
     def _run(self, command: tuple[str, ...]) -> tuple[bool, str]:
         try:
