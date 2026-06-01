@@ -81,7 +81,7 @@
         PSData = @{
             Tags = @('Denon', 'AVR', 'Receiver', 'PowerShell')
             ProjectUri = 'https://github.com/tiffany98101/denon-avr-controller'
-            Prerelease = 'beta4'
+            Prerelease = 'beta5'
         }
     }
 }

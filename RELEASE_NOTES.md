@@ -1,5 +1,25 @@
 # Release Notes
 
+## v1.2.0-beta.5
+
+Follow-up beta after the PowerShell parity work, focused on PowerShell TLS
+correctness and test/analyzer hardening.
+
+### PowerShell TLS
+
+- Replaced the PowerShell certificate-validation scriptblock (which could not
+  run on the .NET TLS handshake thread, so `DENON_CURL_CACERT` and
+  `DENON_CURL_PINNEDPUBKEY` requests failed) with a compiled
+  `DenonAvrController.PowerShell.TlsValidator` delegate. Per-request custom CA
+  and `sha256//` public-key pinning now work on PowerShell 7.
+
+### Testing And Quality
+
+- Added Pester coverage that exercises the PowerShell TLS path against a
+  transient local self-signed HTTPS server (correct pin succeeds, wrong pin
+  fails, custom CA succeeds).
+- Enabled PowerShell analyzer validation and cleaned actionable warnings.
+
 ## v1.2.0-beta.4
 
 This beta prepares the Denon AVR Controller for release after the completion

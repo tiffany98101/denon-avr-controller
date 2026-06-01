@@ -1,4 +1,4 @@
-$script:DenonControllerVersion = '1.2.0-beta.4'
+$script:DenonControllerVersion = '1.2.0-beta.5'
 $script:DenonKnownConfigKeys = @(
     'DENON_IP',
     'DENON_DEFAULT_IP',

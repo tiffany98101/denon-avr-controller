@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — `denon-avr-controller`
 
-> **Status:** Living document. Reflects the codebase as of `denon.sh` v1.2.0-beta.4 (~6,473 lines), `denon_heos_helper.py`, `denon_mpris.py`, the systemd user unit, and the Makefile-driven packaging workflow.
+> **Status:** Living document. Reflects the codebase as of `denon.sh` v1.2.0-beta.5 (~6,473 lines), `denon_heos_helper.py`, `denon_mpris.py`, the systemd user unit, and the Makefile-driven packaging workflow.
 > **Audience:** Maintainer (you) and any future contributor or AI agent proposing changes. Every PR must be evaluated against this document. If a change conflicts with the rules here, *this document must be updated first* — never silently violated.
 > **Revision note:** This is v2. The v1 baseline (committed `6dcc504`) was written against the GitHub public state, which lagged the working tree substantially. v2 reconciles the doc to the local truth. Sections that were wrong or obsolete in v1 are marked **[v1 superseded]** with the corrected understanding.
 

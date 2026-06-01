@@ -51,3 +51,5 @@ rpmbuild/
 
 # Local handoff scratch
 handoff.md
+codex-handoff.md
+claude-handoff.md
