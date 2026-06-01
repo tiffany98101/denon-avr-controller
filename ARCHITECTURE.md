@@ -301,6 +301,7 @@ The `data` subcommands (`fields`, `dump`, `discover`, `capabilities`, `summary`)
 - `data summary` — concise diagnostics, JSON-formatted with `--json`.
 
 This is the architectural surface for "what does this model expose?" — invaluable when adding support for a new firmware revision or a different Denon model.
+The discovery sweep remains sequential and throttled after valid type responses, but it does not sleep after empty responses or failed type fetches.
 
 ### 6.5 Packaging (Makefile + `rpm/` + `VERSION`)
 

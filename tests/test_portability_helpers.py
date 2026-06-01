@@ -203,3 +203,190 @@ def test_docs_clarify_bash_runtime_vs_zsh_fish_completions():
     assert "does not mean `denon.sh` is sourced or executed as zsh/fish" in readme
     assert "Bash runtime, not POSIX `sh` or native zsh/fish" in architecture
     assert "zsh and fish support is provided through shell completion files" in manpage
+
+
+def test_lower_uses_bash_parameter_expansion_without_tr(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "tr.log"
+    _write_executable(
+        bin_dir / "tr",
+        f"""\
+        #!/usr/bin/env bash
+        printf 'tr called\\n' >>'{log}'
+        exit 99
+        """,
+    )
+    r = _bash(
+        "printf '<%s>\\n' \"$(_denon_lower 'MiXeD-CASE_123')\"; "
+        "printf '<%s>\\n' \"$(_denon_lower '')\"",
+        {"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["<mixed-case_123>", "<>"]
+    assert not log.exists()
+
+
+def test_mixed_case_help_command_still_dispatches():
+    r = subprocess.run(
+        ["bash", str(SCRIPT), "HeLp"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "Usage:" in r.stdout
+    assert "denon <command> [arguments]" in r.stdout
+
+
+def test_telnet_query_uses_nc_q_without_sleep_when_supported(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls.log"
+    _write_executable(
+        bin_dir / "nc",
+        f"""\
+        #!/usr/bin/env bash
+        if [[ "${{1:-}}" == "-h" ]]; then
+          printf '%s\\n' 'usage: nc [-q seconds] [-w timeout] host port' >&2
+          exit 0
+        fi
+        input=$(</dev/stdin)
+        printf 'nc %s\\n' "$*" >>'{log}'
+        printf 'input=%q\\n' "$input" >>'{log}'
+        printf '%s\\r\\n' 'MUOFF'
+        """,
+    )
+    _write_executable(
+        bin_dir / "sleep",
+        f"""\
+        #!/usr/bin/env bash
+        printf 'sleep %s\\n' "$*" >>'{log}'
+        exit 99
+        """,
+    )
+    r = _bash("IP=192.0.2.10; _denon_telnet_query 'MU?'", {"PATH": f"{bin_dir}:{os.environ['PATH']}"})
+    assert r.returncode == 0, r.stderr
+    assert "MUOFF" in r.stdout
+    calls = log.read_text(encoding="utf-8")
+    assert "nc -w 2 -q 1 192.0.2.10 23" in calls
+    assert "sleep" not in calls
+
+
+def test_telnet_query_falls_back_to_sleep_when_nc_q_is_not_supported(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls.log"
+    _write_executable(
+        bin_dir / "nc",
+        f"""\
+        #!/usr/bin/env bash
+        if [[ "${{1:-}}" == "-h" ]]; then
+          printf '%s\\n' 'usage: nc [-w timeout] host port' >&2
+          exit 0
+        fi
+        input=$(</dev/stdin)
+        printf 'nc %s\\n' "$*" >>'{log}'
+        printf 'input=%q\\n' "$input" >>'{log}'
+        printf '%s\\r\\n' 'MUON'
+        """,
+    )
+    _write_executable(
+        bin_dir / "sleep",
+        f"""\
+        #!/usr/bin/env bash
+        printf 'sleep %s\\n' "$*" >>'{log}'
+        exit 0
+        """,
+    )
+    r = _bash("IP=192.0.2.10; _denon_telnet_query 'MU?'", {"PATH": f"{bin_dir}:{os.environ['PATH']}"})
+    assert r.returncode == 0, r.stderr
+    assert "MUON" in r.stdout
+    calls = log.read_text(encoding="utf-8")
+    assert "nc -w 2 192.0.2.10 23" in calls
+    assert "-q 1" not in calls
+    assert "sleep 0.15" in calls
+
+
+def test_telnet_query_reports_missing_nc_without_sleep(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "sleep.log"
+    _write_executable(
+        bin_dir / "sleep",
+        f"""\
+        #!/usr/bin/env bash
+        printf 'sleep %s\\n' "$*" >>'{log}'
+        exit 0
+        """,
+    )
+    env = os.environ.copy()
+    env["DENON_UNIT_TEST"] = "1"
+    env["PATH"] = str(bin_dir)
+    r = subprocess.run(
+        ["/usr/bin/bash", "-c", f"source {SCRIPT}\nIP=192.0.2.10; _denon_telnet_query 'MU?'"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+    )
+    assert r.returncode == 1
+    assert "nc is required" in r.stderr
+    assert not log.exists()
+
+
+def test_data_discovery_empty_response_does_not_sleep(tmp_path):
+    log = tmp_path / "sleep.log"
+    code = textwrap.dedent(f"""\
+        _denon_get_config() {{ printf ''; }}
+        _denon_data_discovery_delay() {{ printf 'sleep %s\\n' "$1" >>'{log}'; }}
+        DENON_DATA_DISCOVERY_MAX_TYPE=0
+        _denon_data_collect_raw_endpoints >/dev/null 2>&1 || true
+    """)
+    r = _bash(code)
+    assert r.returncode == 0, r.stderr
+    assert not log.exists()
+
+
+def test_data_discovery_curl_failure_does_not_sleep(tmp_path):
+    log = tmp_path / "sleep.log"
+    code = textwrap.dedent(f"""\
+        _denon_get_config() {{ return 22; }}
+        _denon_data_discovery_delay() {{ printf 'sleep %s\\n' "$1" >>'{log}'; }}
+        DENON_DATA_DISCOVERY_MAX_TYPE=0
+        _denon_data_collect_raw_endpoints >/dev/null 2>&1 || true
+    """)
+    r = _bash(code)
+    assert r.returncode == 0, r.stderr
+    assert not log.exists()
+
+
+def test_data_discovery_valid_response_still_sleeps(tmp_path):
+    log = tmp_path / "sleep.log"
+    code = textwrap.dedent(f"""\
+        _denon_get_config() {{ printf '%s' '<root><value>1</value></root>'; }}
+        _denon_data_add_xml_leaves() {{ :; }}
+        _denon_data_discovery_delay() {{ printf 'sleep %s\\n' "$1" >>'{log}'; }}
+        DENON_DATA_DISCOVERY_DELAY_SECONDS=0.08
+        DENON_DATA_DISCOVERY_MAX_TYPE=0
+        _denon_data_collect_raw_endpoints >/dev/null 2>&1 || true
+    """)
+    r = _bash(code)
+    assert r.returncode == 0, r.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == ["sleep 0.08"]
+
+
+def test_data_discovery_max_type_range_is_unchanged(tmp_path):
+    log = tmp_path / "types.log"
+    code = textwrap.dedent(f"""\
+        _denon_get_config() {{
+          printf '%s\\n' "$1" >>'{log}'
+          printf ''
+        }}
+        _denon_data_discovery_delay() {{ :; }}
+        DENON_DATA_DISCOVERY_MAX_TYPE=2
+        _denon_data_collect_raw_endpoints >/dev/null 2>&1 || true
+    """)
+    r = _bash(code)
+    assert r.returncode == 0, r.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == ["0", "1", "2"]

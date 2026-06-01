@@ -13,7 +13,7 @@ DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.3}"
 #   export DENON_IP=192.168.1.100
 
 _denon_lower() {
-  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+  printf '%s' "${1,,}"
 }
 
 denon() {
@@ -1139,6 +1139,28 @@ EOF
     return 1
   }
 
+  _denon_nc_supports_q() {
+    if [[ "${denon_nc_supports_q_cached:-}" == "1" ]]; then
+      return 0
+    fi
+    if [[ "${denon_nc_supports_q_cached:-}" == "0" ]]; then
+      return 1
+    fi
+    command -v nc >/dev/null 2>&1 || {
+      denon_nc_supports_q_cached=0
+      return 1
+    }
+
+    local help
+    help=$(nc -h 2>&1 </dev/null || true)
+    if [[ "$help" == *"-q "* || "$help" == *"[-q"* || "$help" == *" -q"* ]]; then
+      denon_nc_supports_q_cached=1
+      return 0
+    fi
+    denon_nc_supports_q_cached=0
+    return 1
+  }
+
   _denon_telnet_query() {
     local command="$1"
     command -v nc >/dev/null 2>&1 || {
@@ -1146,10 +1168,14 @@ EOF
       return 1
     }
     _denon_debug "telnet query $IP:23 $command"
-    {
-      printf '%s\r' "$command"
-      sleep 0.15
-    } | nc -w 2 "$IP" 23 2>/dev/null
+    if _denon_nc_supports_q; then
+      printf '%s\r' "$command" | nc -w 2 -q 1 "$IP" 23 2>/dev/null
+    else
+      {
+        printf '%s\r' "$command"
+        sleep 0.15
+      } | nc -w 2 "$IP" 23 2>/dev/null
+    fi
   }
 
   _denon_query_main_mute_raw() {
@@ -2158,6 +2184,11 @@ EOF
     return 0
   }
 
+  _denon_data_discovery_delay() {
+    local delay="$1"
+    sleep "$delay" 2>/dev/null || true
+  }
+
   _denon_data_var_id() {
     printf '%s' "$1" | sed 's/[^A-Za-z0-9_]/_/g'
   }
@@ -2792,7 +2823,7 @@ EOF
   }
 
   _denon_data_collect_raw_endpoints() {
-    local max_type type body delay="${DENON_DATA_DISCOVERY_DELAY_SECONDS:-0.08}"
+    local max_type type body rc delay="${DENON_DATA_DISCOVERY_DELAY_SECONDS:-0.08}"
 
     max_type=$(_denon_data_discovery_max_type) || return 1
     data_get_config_types=""
@@ -2811,12 +2842,13 @@ EOF
     data_raw_type_12=""
 
     for ((type=0; type<=max_type; type++)); do
-      body=$(_denon_get_config "$type" 2>/dev/null || printf '')
-      if _denon_data_response_has_data "$body"; then
+      body=$(_denon_get_config "$type" 2>/dev/null)
+      rc=$?
+      if (( rc == 0 )) && _denon_data_response_has_data "$body"; then
         _denon_data_store_get_config "$type" "$body"
         _denon_data_add_xml_leaves "$type" "$body"
+        _denon_data_discovery_delay "$delay"
       fi
-      sleep "$delay" 2>/dev/null || true
     done
 
     [[ -n "$data_raw_type_3" ]] || { echo "Error: failed to query receiver identity data (type 3 XML)" >&2; return 1; }
