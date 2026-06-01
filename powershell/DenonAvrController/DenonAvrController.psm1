@@ -225,7 +225,7 @@ function Get-DenonTlsSettings {
     $pinned = Get-DenonConfiguredValue -Name 'DENON_CURL_PINNEDPUBKEY'
 
     [pscustomobject]@{
-        SkipCertificateCheck = if ($insecure -eq '0' -or -not [string]::IsNullOrWhiteSpace($cacert) -or -not [string]::IsNullOrWhiteSpace($pinned)) { $false } else { $true }
+        SkipCertificateCheck = if ($insecure -eq '0' -or -not [string]::IsNullOrWhiteSpace($cacert)) { $false } else { $true }
         CaCert = $cacert
         PinnedPublicKey = $pinned
     }
@@ -360,6 +360,168 @@ function ConvertTo-DenonQueryValue {
     [System.Uri]::EscapeDataString($Value)
 }
 
+function Test-DenonHeosPlayerId {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$PlayerId
+    )
+
+    -not [string]::IsNullOrWhiteSpace($PlayerId) -and $PlayerId -match '^-?[0-9]+$'
+}
+
+function Get-DenonPinnedPublicKeyHash {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate
+    )
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $publicKey = $null
+    try {
+        $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($Certificate)
+        if ($null -ne $rsa) {
+            try { $publicKey = $rsa.ExportSubjectPublicKeyInfo() }
+            finally { $rsa.Dispose() }
+        }
+
+        if ($null -eq $publicKey) {
+            $ecdsa = [System.Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey($Certificate)
+            if ($null -ne $ecdsa) {
+                try { $publicKey = $ecdsa.ExportSubjectPublicKeyInfo() }
+                finally { $ecdsa.Dispose() }
+            }
+        }
+
+        if ($null -eq $publicKey) {
+            $dsa = [System.Security.Cryptography.X509Certificates.DSACertificateExtensions]::GetDSAPublicKey($Certificate)
+            if ($null -ne $dsa) {
+                try { $publicKey = $dsa.ExportSubjectPublicKeyInfo() }
+                finally { $dsa.Dispose() }
+            }
+        }
+
+        if ($null -eq $publicKey) {
+            $publicKey = $Certificate.GetPublicKey()
+        }
+
+        [Convert]::ToBase64String($sha256.ComputeHash($publicKey))
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
+function Test-DenonCertificateWithCustomTrust {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+
+        [Parameter(Mandatory = $true)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$TrustedCertificate
+    )
+
+    if ($Certificate.GetCertHashString() -eq $TrustedCertificate.GetCertHashString()) {
+        return $true
+    }
+
+    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
+    try {
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+        $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::NoFlag
+        if ($chain.ChainPolicy.PSObject.Properties.Name -contains 'TrustMode') {
+            $chain.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust
+            [void]$chain.ChainPolicy.CustomTrustStore.Add($TrustedCertificate)
+        }
+        else {
+            [void]$chain.ChainPolicy.ExtraStore.Add($TrustedCertificate)
+        }
+        $chain.Build($Certificate)
+    }
+    finally {
+        $chain.Dispose()
+    }
+}
+
+function Invoke-DenonHttpClientGet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+
+        [int]$TimeoutSeconds = 4,
+
+        [bool]$SkipCertificateCheck = $false,
+
+        [string]$CaCert,
+
+        [string]$PinnedPublicKey
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($PinnedPublicKey) -and $PinnedPublicKey -notmatch '^sha256//(.+)$') {
+        throw 'PowerShell DENON_CURL_PINNEDPUBKEY supports sha256//BASE64HASH pins.'
+    }
+
+    $trustedCertificate = $null
+    if (-not [string]::IsNullOrWhiteSpace($CaCert)) {
+        if (-not (Test-Path -LiteralPath $CaCert -PathType Leaf)) {
+            throw ('DENON_CURL_CACERT file was not found: {0}' -f $CaCert)
+        }
+        $trustedCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CaCert)
+    }
+
+    $expectedPin = $null
+    if (-not [string]::IsNullOrWhiteSpace($PinnedPublicKey)) {
+        $expectedPin = $PinnedPublicKey -replace '^sha256//', ''
+    }
+
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $client = $null
+    try {
+        $handler.ServerCertificateCustomValidationCallback = {
+            param($requestMessage, $certificate, $chain, $sslPolicyErrors)
+
+            try {
+                $certificate2 = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificate)
+                if (-not [string]::IsNullOrWhiteSpace($expectedPin)) {
+                    $actualPin = Get-DenonPinnedPublicKeyHash -Certificate $certificate2
+                    if ($actualPin -ne $expectedPin) {
+                        return $false
+                    }
+                }
+
+                if ($null -ne $trustedCertificate) {
+                    return (Test-DenonCertificateWithCustomTrust -Certificate $certificate2 -TrustedCertificate $trustedCertificate)
+                }
+
+                if ($SkipCertificateCheck) {
+                    return $true
+                }
+
+                return ($sslPolicyErrors -eq [System.Net.Security.SslPolicyErrors]::None)
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $client = [System.Net.Http.HttpClient]::new($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $Uri)
+        $request.Headers.UserAgent.ParseAdd(('DenonAvrController.PowerShell/{0}' -f $script:DenonControllerVersion))
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        $response.EnsureSuccessStatusCode() | Out-Null
+        $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+    }
+    finally {
+        if ($null -ne $client) { $client.Dispose() }
+        $handler.Dispose()
+        if ($null -ne $trustedCertificate) { $trustedCertificate.Dispose() }
+    }
+}
+
 function Invoke-DenonHttpGet {
     [CmdletBinding()]
     param(
@@ -390,47 +552,24 @@ function Invoke-DenonHttpGet {
         $parameters['UseBasicParsing'] = $true
     }
 
-    $changedCertificateCallback = $false
-    $oldCertificateCallback = $null
-
     if (-not [string]::IsNullOrWhiteSpace($CaCert) -and -not (Test-Path -LiteralPath $CaCert -PathType Leaf)) {
         throw ('DENON_CURL_CACERT file was not found: {0}' -f $CaCert)
     }
-    if (-not [string]::IsNullOrWhiteSpace($PinnedPublicKey) -and -not ($PinnedPublicKey -match '^sha256//')) {
-        Write-Verbose 'DENON_CURL_PINNEDPUBKEY is set; PowerShell validates sha256// pins against the certificate public key bytes.'
+    if (-not [string]::IsNullOrWhiteSpace($CaCert) -or -not [string]::IsNullOrWhiteSpace($PinnedPublicKey)) {
+        try {
+            return Invoke-DenonHttpClientGet -Uri $Uri -TimeoutSeconds $TimeoutSeconds -SkipCertificateCheck $SkipCertificateCheck -CaCert $CaCert -PinnedPublicKey $PinnedPublicKey
+        }
+        catch {
+            $hint = ''
+            if (-not $SkipCertificateCheck -and $_.Exception.Message -match 'certificate|SSL|TLS|trust') {
+                $hint = ' If this receiver uses a self-signed certificate, set DENON_CURL_INSECURE=1 or run Set-DenonReceiver again with -SkipCertificateCheck.'
+            }
+            throw ('Denon HTTP request failed for {0}: {1}{2}' -f $Uri, $_.Exception.Message, $hint)
+        }
     }
 
     if ($SkipCertificateCheck -and $command.Parameters.ContainsKey('SkipCertificateCheck')) {
         $parameters['SkipCertificateCheck'] = $true
-    }
-    elseif ($SkipCertificateCheck -or -not [string]::IsNullOrWhiteSpace($CaCert) -or -not [string]::IsNullOrWhiteSpace($PinnedPublicKey)) {
-        $oldCertificateCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
-        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {
-            param($sender, $certificate, $chain, $sslPolicyErrors)
-            if ($SkipCertificateCheck) {
-                return $true
-            }
-            if (-not [string]::IsNullOrWhiteSpace($PinnedPublicKey) -and $PinnedPublicKey -match '^sha256//(.+)$') {
-                try {
-                    $hash = [Convert]::ToBase64String([System.Security.Cryptography.SHA256]::Create().ComputeHash($certificate.GetPublicKey()))
-                    if ($hash -eq $Matches[1]) { return $true }
-                }
-                catch {
-                    return $false
-                }
-            }
-            if (-not [string]::IsNullOrWhiteSpace($CaCert)) {
-                try {
-                    $expected = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CaCert)
-                    return ($certificate.GetCertHashString() -eq $expected.GetCertHashString())
-                }
-                catch {
-                    return $false
-                }
-            }
-            return ($sslPolicyErrors -eq [System.Net.Security.SslPolicyErrors]::None)
-        }
-        $changedCertificateCallback = $true
     }
 
     try {
@@ -442,13 +581,7 @@ function Invoke-DenonHttpGet {
         if (-not $SkipCertificateCheck -and $_.Exception.Message -match 'certificate|SSL|TLS|trust') {
             $hint = ' If this receiver uses a self-signed certificate, set DENON_CURL_INSECURE=1 or run Set-DenonReceiver again with -SkipCertificateCheck.'
         }
-
         throw ('Denon HTTP request failed for {0}: {1}{2}' -f $Uri, $_.Exception.Message, $hint)
-    }
-    finally {
-        if ($changedCertificateCallback) {
-            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $oldCertificateCallback
-        }
     }
 }
 
@@ -1173,7 +1306,7 @@ function Get-DenonNowPlaying {
     $station = $null
     $service = $null
     $state = $null
-    $pid = $null
+    $playerId = $null
     $heosModel = $null
     $heosVersion = $null
     $network = $null
@@ -1199,7 +1332,11 @@ function Get-DenonNowPlaying {
     $players = Invoke-DenonHeosCommand -Command 'heos://player/get_players' -Receiver $receiver
     if ($null -ne $players -and $players.heos.result -eq 'success' -and $players.payload.Count -gt 0) {
         $player = @($players.payload)[0]
-        $pid = [string]$player.pid
+        $playerId = [string]$player.pid
+        if (-not (Test-DenonHeosPlayerId -PlayerId $playerId)) {
+            Write-Verbose ('Ignoring invalid HEOS player id from receiver: {0}' -f $playerId)
+            $playerId = $null
+        }
         $heosModel = [string]$player.model
         $heosVersion = [string]$player.version
         $network = [string]$player.network
@@ -1207,22 +1344,24 @@ function Get-DenonNowPlaying {
             $service = [string]$player.name
         }
 
-        $media = Invoke-DenonHeosCommand -Command ('heos://player/get_now_playing_media?pid={0}' -f $pid) -Receiver $receiver
-        if ($null -ne $media -and $media.heos.result -eq 'success') {
-            if ([string]::IsNullOrWhiteSpace($title)) { $title = [string]$media.payload.song }
-            if ([string]::IsNullOrWhiteSpace($artist)) { $artist = [string]$media.payload.artist }
-            if ([string]::IsNullOrWhiteSpace($album)) { $album = [string]$media.payload.album }
-            $station = [string]$media.payload.station
-            $serviceName = Get-DenonHeosServiceName -Sid ([string]$media.payload.sid) -Mid ([string]$media.payload.mid)
-            if (-not [string]::IsNullOrWhiteSpace($serviceName)) { $service = $serviceName }
-            $source = if ($source -eq 'Unavailable') { 'HEOS' } else { '{0}+HEOS' -f $source }
-        }
+        if (-not [string]::IsNullOrWhiteSpace($playerId)) {
+            $media = Invoke-DenonHeosCommand -Command ('heos://player/get_now_playing_media?pid={0}' -f $playerId) -Receiver $receiver
+            if ($null -ne $media -and $media.heos.result -eq 'success') {
+                if ([string]::IsNullOrWhiteSpace($title)) { $title = [string]$media.payload.song }
+                if ([string]::IsNullOrWhiteSpace($artist)) { $artist = [string]$media.payload.artist }
+                if ([string]::IsNullOrWhiteSpace($album)) { $album = [string]$media.payload.album }
+                $station = [string]$media.payload.station
+                $serviceName = Get-DenonHeosServiceName -Sid ([string]$media.payload.sid) -Mid ([string]$media.payload.mid)
+                if (-not [string]::IsNullOrWhiteSpace($serviceName)) { $service = $serviceName }
+                $source = if ($source -eq 'Unavailable') { 'HEOS' } else { '{0}+HEOS' -f $source }
+            }
 
-        $playState = Invoke-DenonHeosCommand -Command ('heos://player/get_play_state?pid={0}' -f $pid) -Receiver $receiver
-        if ($null -ne $playState -and $playState.heos.result -eq 'success') {
-            $message = [string]$playState.heos.message
-            if ($message -match '(?:^|[?&])state=([^&]+)') {
-                $state = ConvertTo-DenonTransportState -State ([System.Uri]::UnescapeDataString($Matches[1]))
+            $playState = Invoke-DenonHeosCommand -Command ('heos://player/get_play_state?pid={0}' -f $playerId) -Receiver $receiver
+            if ($null -ne $playState -and $playState.heos.result -eq 'success') {
+                $message = [string]$playState.heos.message
+                if ($message -match '(?:^|[?&])state=([^&]+)') {
+                    $state = ConvertTo-DenonTransportState -State ([System.Uri]::UnescapeDataString($Matches[1]))
+                }
             }
         }
     }
@@ -1235,7 +1374,7 @@ function Get-DenonNowPlaying {
         Station = if ([string]::IsNullOrWhiteSpace($station)) { $null } else { $station }
         Service = if ([string]::IsNullOrWhiteSpace($service)) { $null } else { $service }
         State = $state
-        PlayerId = if ([string]::IsNullOrWhiteSpace($pid)) { $null } else { $pid }
+        PlayerId = if ([string]::IsNullOrWhiteSpace($playerId)) { $null } else { $playerId }
         HeosModel = if ([string]::IsNullOrWhiteSpace($heosModel)) { $null } else { $heosModel }
         HeosVersion = if ([string]::IsNullOrWhiteSpace($heosVersion)) { $null } else { $heosVersion }
         Network = if ([string]::IsNullOrWhiteSpace($network)) { $null } else { $network }
@@ -2249,7 +2388,6 @@ function Invoke-DenonHeos {
     $receiver = Resolve-DenonReceiver
     $helper = Get-DenonConfiguredValue -Name 'DENON_HEOS_HELPER'
     if ([string]::IsNullOrWhiteSpace($helper)) {
-        $helper = Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) '..'
         $helper = Join-Path (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path 'denon_heos_helper.py'
     }
     if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {

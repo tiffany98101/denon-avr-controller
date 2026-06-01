@@ -24,6 +24,10 @@ $manifest = Test-ModuleManifest $manifestPath
 Assert-True ($manifest.Name -eq 'DenonAvrController') 'manifest name mismatch'
 Assert-True ($manifest.PowerShellVersion.ToString() -eq '7.0') 'PowerShellVersion should be 7.0'
 
+$moduleSource = Get-Content -LiteralPath (Join-Path $moduleRoot 'DenonAvrController.psm1') -Raw
+Assert-True ($moduleSource -match 'HttpClientHandler') 'custom TLS validation should use HttpClientHandler'
+Assert-True ($moduleSource -notmatch 'ServicePointManager') 'custom TLS validation must not use ServicePointManager on PowerShell 7'
+
 Import-Module $manifestPath -Force
 $commands = @(Get-Command -Module DenonAvrController | Select-Object -ExpandProperty Name)
 foreach ($name in @(

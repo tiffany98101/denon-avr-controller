@@ -72,7 +72,10 @@ Set-DenonReceiver -IpAddress 192.168.1.100 -SkipCertificateCheck
 ```
 
 In PowerShell 7+, `-SkipCertificateCheck` uses PowerShell's per-request
-certificate bypass.
+certificate bypass. `DENON_CURL_CACERT` and `DENON_CURL_PINNEDPUBKEY` use a
+per-request .NET `HttpClientHandler` validation callback, not a process-global
+certificate callback. PowerShell supports `DENON_CURL_PINNEDPUBKEY` values in
+the `sha256//BASE64HASH` form.
 
 You can also set an environment fallback before importing or using the module:
 

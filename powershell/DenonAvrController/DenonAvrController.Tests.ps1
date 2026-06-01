@@ -97,6 +97,22 @@ Describe 'Denon mute normalization' {
     }
 }
 
+Describe 'Denon HEOS player id validation' {
+    InModuleScope DenonAvrController {
+        It 'accepts signed decimal HEOS player ids' {
+            foreach ($value in @('1', '0', '-1', '12345')) {
+                Test-DenonHeosPlayerId -PlayerId $value | Should -BeTrue
+            }
+        }
+
+        It 'rejects empty or protocol-injection HEOS player ids' {
+            foreach ($value in @('', $null, '1&state=play', "1`r`nheos://player/play_next", 'abc', '1,2')) {
+                Test-DenonHeosPlayerId -PlayerId $value | Should -BeFalse
+            }
+        }
+    }
+}
+
 Describe 'Denon XML status parsing' {
     InModuleScope DenonAvrController {
         It 'handles missing mute fields as unknown' {
