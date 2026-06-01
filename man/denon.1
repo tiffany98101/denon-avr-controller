@@ -43,16 +43,16 @@ Live full\-screen status view.
 When
 .B dashboard \-\-watch
 runs in an interactive terminal, the following keys work without Enter:
-Up/Down adjust volume, Left/Right send previous/next, Space toggles
-play/pause,
-.B m
-toggles mute,
-typing the source number shown in the Main Zone Sources list selects that
-source,
-.B z
-cycles the volume/mute control target between Main and Zone2, and
-.B q
-quits the dashboard.
+.BR \(ua/\(da=Volume ,
+.BR \(la/\(ra=Prev/Next ,
+.BR Space=Play/Pause ,
+.BR M=Mute ,
+.BR #=Source\ From\ List ,
+.BR Z=Zone ,
+and
+.BR Q=Quit .
+For source selection, type the source number shown in the Main Zone Sources
+list.
 Multi\-digit source numbers such as
 .BR 10 ,
 .BR 11 ,
@@ -92,8 +92,16 @@ The existing shell dashboard remains the default for
 When
 .B dashboard\-alt \-\-watch
 runs in an interactive terminal, it supports the same keyboard controls as
-.BR dashboard ,
-including typing the source number shown in the Sources list.
+.BR dashboard :
+.BR \(ua/\(da=Volume ,
+.BR \(la/\(ra=Prev/Next ,
+.BR Space=Play/Pause ,
+.BR M=Mute ,
+.BR #=Source\ From\ List ,
+.BR Z=Zone ,
+and
+.BR Q=Quit .
+For source selection, type the source number shown in the Sources list.
 Multi\-digit source numbers such as
 .BR 10 ,
 .BR 11 ,

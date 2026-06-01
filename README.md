@@ -257,10 +257,9 @@ Read-only status and dashboard:
 ```
 
 When `dashboard --watch` is running in an interactive terminal, it accepts
-single-key controls without Enter: Up/Down adjust volume, Left/Right send
-previous/next, Space toggles play/pause, `m` toggles mute, typing the source
-number shown in the Main Zone Sources list selects that source, `z` cycles the
-volume/mute control target between Main and Zone2, and `q` quits the dashboard.
+single-key controls without Enter: `↑/↓=Volume`, `←/→=Prev/Next`,
+`Space=Play/Pause`, `M=Mute`, `#=Source From List`, `Z=Zone`, and `Q=Quit`.
+For source selection, type the source number shown in the Main Zone Sources list.
 Multi-digit source numbers such as `10`, `11`, and `13` are supported. Transport
 keys keep using the active HEOS/player path, and the dashboard records each
 transport keypress plus sent, verified, failed, throttled, or no-change feedback
@@ -285,10 +284,12 @@ layout on medium widths, and a compact stacked layout on narrow terminals. Use
 set `DENON_DASHBOARD_WIDTH` and `DENON_DASHBOARD_HEIGHT`.
 
 When `dashboard-alt --watch` is running in an interactive terminal, it supports
-the same keyboard controls as the main dashboard, including typing the source
-number shown in the Sources list. Multi-digit source numbers such as `10`,
-`11`, and `13` are supported, and transport keypresses are shown in Recent
-Events with sent, verified, failed, throttled, or no-change feedback.
+the same keyboard controls as the main dashboard: `↑/↓=Volume`,
+`←/→=Prev/Next`, `Space=Play/Pause`, `M=Mute`, `#=Source From List`, `Z=Zone`,
+and `Q=Quit`. For source selection, type the source number shown in the Sources
+list. Multi-digit source numbers such as `10`, `11`, and `13` are supported, and
+transport keypresses are shown in Recent Events with sent, verified, failed,
+throttled, or no-change feedback.
 
 ```bash
 denon dashboard-alt --provider auto

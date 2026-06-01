@@ -369,7 +369,7 @@ Receiver status:
   denon doctor               Check dependencies, route, cache, and receiver reachability
   denon dashboard [--diagnostics] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show a one-shot or live receiver dashboard
-                             Watch keys: ↑/↓ Volume, ←/→ Prev/Next, Space Play/Pause, M Mute, Source: Type # From List, Z Zone, Q Quit
+                             Watch keys: ↑/↓=Volume, ←/→=Prev/Next, Space=Play/Pause, M=Mute, #=Source From List, Z=Zone, Q=Quit
   denon dashboard-alt [--compare-providers|--json] [--provider auto|direct|shell] [--watch] [--interval seconds] [--ascii|--unicode] [--color auto|always|never]
                              Show the experimental Python dashboard preview; denon dashboard remains the stable default
                              Examples: denon dashboard-alt --provider auto
@@ -5442,8 +5442,8 @@ EOF
 
   _denon_dashboard_key_help_text() {
     local width="$1"
-    local full="Keys: ↑/↓ Volume  ←/→ Prev/Next  Space Play/Pause  M Mute  Source: Type # From List  Z Zone  Q Quit"
-    local compact="Keys: ↑/↓ Vol  ←/→ Prev/Next  Space Play/Pause  M Mute  Src: # From List  Z Zone  Q Quit"
+    local full="Keys: ↑/↓=Volume  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Source From List  Z=Zone  Q=Quit"
+    local compact="Keys: ↑/↓=Vol  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Src From List  Z=Zone  Q=Quit"
 
     if (( $(_denon_dashboard_visible_width "$full") <= width )); then
       printf '%s' "$full"

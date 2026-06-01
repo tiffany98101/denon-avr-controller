@@ -225,24 +225,42 @@ def test_renderer_shows_control_target_only_when_interactive_controls_are_active
     )
 
     assert "Control Target: Zone2" in interactive
-    assert "Keys: ↑/↓ Volume  ←/→ Prev/Next  Space Play/Pause  M Mute  Source: Type # From List  Z Zone  Q Quit" in interactive
-    assert "number source" not in interactive
-    assert "type source #" not in interactive
+    assert "Keys: ↑/↓=Volume  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Source From List  Z=Zone  Q=Quit" in interactive
+    for old in (
+        "Source: Type # From List",
+        "Src: # From List",
+        "Space Play/Pause",
+        "M Mute",
+        "Z Zone",
+        "Q Quit",
+        "number source",
+        "type source #",
+    ):
+        assert old not in interactive
     assert "Control Target:" not in non_interactive
 
 
 def test_renderer_uses_compact_source_number_help_when_narrow():
     frame = DashboardRenderer(color="never").render(
         complete_snapshot(provider="direct"),
-        width=98,
+        width=90,
         height=40,
         key_help=True,
         control_target="Main",
     )
 
-    assert "Keys: ↑/↓ Vol  ←/→ Prev/Next  Space Play/Pause  M Mute  Src: # From List  Z Zone  Q Quit" in frame
-    assert "number source" not in frame
-    assert "type source #" not in frame
+    assert "Keys: ↑/↓=Vol  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Src From List  Z=Zone  Q=Quit" in frame
+    for old in (
+        "Source: Type # From List",
+        "Src: # From List",
+        "Space Play/Pause",
+        "M Mute",
+        "Z Zone",
+        "Q Quit",
+        "number source",
+        "type source #",
+    ):
+        assert old not in frame
 
 
 def test_renderer_receiver_info_uses_consistent_field_names():

@@ -36,8 +36,8 @@ from typing import Any, Sequence
 UNKNOWN = "Unknown"
 PLACEHOLDER = "-"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-KEY_HELP = "Keys: ↑/↓ Volume  ←/→ Prev/Next  Space Play/Pause  M Mute  Source: Type # From List  Z Zone  Q Quit"
-KEY_HELP_NARROW = "Keys: ↑/↓ Vol  ←/→ Prev/Next  Space Play/Pause  M Mute  Src: # From List  Z Zone  Q Quit"
+KEY_HELP = "Keys: ↑/↓=Volume  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Source From List  Z=Zone  Q=Quit"
+KEY_HELP_NARROW = "Keys: ↑/↓=Vol  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Src From List  Z=Zone  Q=Quit"
 
 KEY_ACTIONS = {
     "\x1b[A": "volume_up",
