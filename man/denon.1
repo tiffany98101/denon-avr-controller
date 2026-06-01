@@ -64,6 +64,17 @@ for border style and
 for ANSI color behavior.
 The existing shell dashboard remains the default for
 .BR dashboard .
+When
+.B dashboard\-alt \-\-watch
+runs in an interactive terminal, the following keys work without Enter:
+Up/Down adjust volume, Left/Right send previous/next, Space toggles
+play/pause,
+.B m
+toggles mute, and
+.B q
+quits the dashboard.
+These keys are disabled for non\-TTY input and are not used by the legacy Bash
+dashboard.
 .SS Power and volume
 .TP
 .BR on | off

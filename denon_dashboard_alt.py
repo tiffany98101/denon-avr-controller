@@ -14,12 +14,15 @@ import http.client
 import json
 import os
 import re
+import select
 import shutil
 import socket
 import ssl
 import subprocess
 import sys
+import termios
 import time
+import tty
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -33,6 +36,19 @@ from typing import Any, Sequence
 UNKNOWN = "Unknown"
 PLACEHOLDER = "-"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+KEY_HELP = "Keys: ↑/↓ volume  ←/→ prev/next  Space play/pause  m mute  q quit"
+
+KEY_ACTIONS = {
+    "\x1b[A": "volume_up",
+    "\x1b[B": "volume_down",
+    "\x1b[C": "next",
+    "\x1b[D": "previous",
+    " ": "play_pause",
+    "m": "mute_toggle",
+    "M": "mute_toggle",
+    "q": "quit",
+    "Q": "quit",
+}
 
 
 @dataclass(frozen=True)
@@ -781,6 +797,13 @@ class DashboardEventTracker:
     def events(self) -> tuple[str, ...]:
         return tuple(self._events)
 
+    def record(self, message: str, timestamp: datetime | None = None) -> tuple[str, ...]:
+        text = _clean(message)
+        if text:
+            stamp = (timestamp or datetime.now()).strftime("%H:%M:%S")
+            self._events.appendleft(f"{stamp} {text}")
+        return self.events
+
     def update(self, snapshot: DashboardSnapshot) -> tuple[str, ...]:
         current = self._event_state(snapshot)
         if self._baseline is None:
@@ -939,13 +962,14 @@ class DashboardRenderer:
         width: int,
         height: int,
         events: Sequence[str] = (),
+        key_help: bool = False,
     ) -> str:
         width = max(28, width)
         height = max(8, height)
         warnings = self._dedupe_lines((*snapshot.warnings, *snapshot.errors))
         event_lines = self._dedupe_lines(events)
         lines: list[str] = []
-        lines.extend(self._header_lines(snapshot, width, len(warnings)))
+        lines.extend(self._header_lines(snapshot, width, len(warnings), key_help=key_help))
 
         main_panel = Panel("Main Zone", tuple(self._zone_rows(snapshot.main)))
         zone2_panel = Panel("Zone 2", tuple(self._zone_rows(snapshot.zone2)))
@@ -979,7 +1003,7 @@ class DashboardRenderer:
 
         return "\n".join(lines[:height])
 
-    def _header_lines(self, snapshot: DashboardSnapshot, width: int, warning_count: int) -> list[str]:
+    def _header_lines(self, snapshot: DashboardSnapshot, width: int, warning_count: int, key_help: bool = False) -> list[str]:
         provider = display_value(snapshot.provider)
         receiver = display_value(snapshot.receiver)
         ip = display_value(snapshot.ip)
@@ -997,10 +1021,13 @@ class DashboardRenderer:
             first = f"{left}{' ' * gap}{right}"
         else:
             first = f"{left} | {right}"
-        return [
+        lines = [
             self._color(pad_text(first, width), "1;36"),
             pad_text(summary, width),
         ]
+        if key_help:
+            lines.append(pad_text(KEY_HELP, width))
+        return lines
 
     def _zone_rows(self, zone: ZoneSnapshot | None) -> list[str]:
         if zone is None:
@@ -1061,28 +1088,215 @@ class DashboardApp:
         self.tracker = tracker
         self.interval = interval
 
-    def run(self, watch: bool = False, width: int | None = None, height: int | None = None) -> int:
+    def run(
+        self,
+        watch: bool = False,
+        width: int | None = None,
+        height: int | None = None,
+        keyboard: "DashboardKeyboardReader | None" = None,
+        commands: "DashboardCommandController | None" = None,
+    ) -> int:
         try:
-            while True:
-                snapshot = self.provider.collect()
-                events = self.tracker.update(snapshot)
-                frame = self.renderer.render(
-                    snapshot,
-                    width or terminal_width(),
-                    height or terminal_height(),
-                    events=events,
-                )
-                if watch:
-                    sys.stdout.write("\033[H\033[J")
-                sys.stdout.write(frame + "\n")
-                sys.stdout.flush()
-                if not watch:
-                    return 1 if snapshot.errors else 0
-                time.sleep(self.interval)
+            if keyboard is None:
+                return self._run_loop(watch=watch, width=width, height=height)
+            with keyboard:
+                return self._run_loop(watch=watch, width=width, height=height, keyboard=keyboard, commands=commands)
         except KeyboardInterrupt:
             if watch:
                 sys.stdout.write("\n")
             return 0
+
+    def _run_loop(
+        self,
+        watch: bool,
+        width: int | None,
+        height: int | None,
+        keyboard: "DashboardKeyboardReader | None" = None,
+        commands: "DashboardCommandController | None" = None,
+    ) -> int:
+        snapshot: DashboardSnapshot | None = None
+        while True:
+            snapshot = self.provider.collect()
+            events = self.tracker.update(snapshot)
+            frame = self.renderer.render(
+                snapshot,
+                width or terminal_width(),
+                height or terminal_height(),
+                events=events,
+                key_help=keyboard is not None,
+            )
+            if watch:
+                sys.stdout.write("\033[H\033[J")
+            sys.stdout.write(frame + "\n")
+            sys.stdout.flush()
+            if not watch:
+                return 1 if snapshot.errors else 0
+            if self._wait_for_refresh_or_quit(snapshot, keyboard, commands):
+                if keyboard is not None:
+                    sys.stdout.write("\n")
+                return 0
+
+    def _wait_for_refresh_or_quit(
+        self,
+        snapshot: DashboardSnapshot,
+        keyboard: "DashboardKeyboardReader | None",
+        commands: "DashboardCommandController | None",
+    ) -> bool:
+        if keyboard is None or commands is None:
+            time.sleep(self.interval)
+            return False
+
+        deadline = time.monotonic() + self.interval
+        while True:
+            timeout = max(0.0, min(0.05, deadline - time.monotonic()))
+            if timeout <= 0:
+                return False
+            action = keyboard.read_action(timeout)
+            if action is None:
+                continue
+            result = commands.handle(action, snapshot)
+            if result.quit:
+                return True
+            if result.event:
+                self.tracker.record(result.event)
+
+
+def parse_key_sequence(sequence: str) -> str | None:
+    return KEY_ACTIONS.get(sequence)
+
+
+def interactive_keyboard_enabled(watch: bool, stdin: Any = sys.stdin) -> bool:
+    return bool(watch and hasattr(stdin, "isatty") and stdin.isatty())
+
+
+class DashboardKeyboardReader:
+    def __init__(self, stream: Any = sys.stdin, escape_timeout: float = 0.02) -> None:
+        self.stream = stream
+        self.escape_timeout = escape_timeout
+        self.fd: int | None = None
+        self._saved_attrs: list[Any] | None = None
+
+    def __enter__(self) -> "DashboardKeyboardReader":
+        self.fd = self.stream.fileno()
+        self._saved_attrs = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self.fd is not None and self._saved_attrs is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self._saved_attrs)
+
+    def read_action(self, timeout: float) -> str | None:
+        sequence = self._read_sequence(timeout)
+        if sequence is None:
+            return None
+        return parse_key_sequence(sequence)
+
+    def _read_sequence(self, timeout: float) -> str | None:
+        if self.fd is None:
+            return None
+        readable, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
+        if not readable:
+            return None
+        chunks = [os.read(self.fd, 1)]
+        if chunks[0] != b"\x1b":
+            return chunks[0].decode("utf-8", "replace")
+
+        deadline = time.monotonic() + self.escape_timeout
+        while len(chunks) < 3:
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0:
+                break
+            readable, _, _ = select.select([self.fd], [], [], remaining)
+            if not readable:
+                break
+            chunks.append(os.read(self.fd, 1))
+        return b"".join(chunks).decode("utf-8", "replace")
+
+
+@dataclass(frozen=True)
+class DashboardCommandResult:
+    event: str | None = None
+    quit: bool = False
+
+
+class DashboardCommandController:
+    def __init__(
+        self,
+        script: str | Path,
+        throttle_seconds: float = 0.2,
+        clock: Any = time.monotonic,
+        runner: Any = subprocess.run,
+    ) -> None:
+        self.script = str(script)
+        self.throttle_seconds = throttle_seconds
+        self.clock = clock
+        self.runner = runner
+        self._last_command_at = -float("inf")
+
+    def handle(self, action: str, snapshot: DashboardSnapshot) -> DashboardCommandResult:
+        if action == "quit":
+            return DashboardCommandResult(quit=True)
+        if not self._allowed_now():
+            return DashboardCommandResult()
+
+        command = self._command_for_action(action, snapshot)
+        if command is None:
+            return DashboardCommandResult()
+        ok, message = self._run(command)
+        if ok:
+            return DashboardCommandResult(event=f"Command sent: {self._event_name(action, snapshot)}")
+        if action in {"next", "previous", "play_pause"}:
+            return DashboardCommandResult(event=f"Transport command unavailable: {self._event_name(action, snapshot)}")
+        return DashboardCommandResult(event=f"Command unavailable: {self._event_name(action, snapshot)}")
+
+    def _allowed_now(self) -> bool:
+        now = self.clock()
+        if now - self._last_command_at < self.throttle_seconds:
+            return False
+        self._last_command_at = now
+        return True
+
+    def _command_for_action(self, action: str, snapshot: DashboardSnapshot) -> tuple[str, ...] | None:
+        if action == "volume_up":
+            return ("up",)
+        if action == "volume_down":
+            return ("down",)
+        if action == "mute_toggle":
+            return ("toggle", "mute")
+        if action == "next":
+            return ("next",)
+        if action == "previous":
+            return ("prev",)
+        if action == "play_pause":
+            state = _clean(snapshot.now_playing.state).lower()
+            return ("pause",) if state in {"play", "playing"} else ("play",)
+        return None
+
+    def _event_name(self, action: str, snapshot: DashboardSnapshot) -> str:
+        if action == "volume_up":
+            return "volume up"
+        if action == "volume_down":
+            return "volume down"
+        if action == "mute_toggle":
+            return "mute toggle"
+        if action == "play_pause":
+            state = _clean(snapshot.now_playing.state).lower()
+            return "pause" if state in {"play", "playing"} else "play"
+        return action
+
+    def _run(self, command: tuple[str, ...]) -> tuple[bool, str]:
+        try:
+            proc = self.runner(
+                [self.script, *command],
+                capture_output=True,
+                text=True,
+                timeout=4.0,
+                env=os.environ.copy(),
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, str(exc)
+        return proc.returncode == 0, (proc.stderr or proc.stdout).strip()
 
 
 def terminal_width() -> int:
@@ -1162,7 +1376,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     renderer = DashboardRenderer(color=args.color, unicode=args.unicode and not args.ascii)
     tracker = DashboardEventTracker()
     app = DashboardApp(provider, renderer, tracker, interval=args.interval)
-    return app.run(watch=args.watch)
+    keyboard = DashboardKeyboardReader(sys.stdin) if interactive_keyboard_enabled(args.watch, sys.stdin) else None
+    commands = DashboardCommandController(args.script) if keyboard is not None else None
+    return app.run(watch=args.watch, keyboard=keyboard, commands=commands)
 
 
 if __name__ == "__main__":

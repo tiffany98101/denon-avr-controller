@@ -273,6 +273,12 @@ layout on medium widths, and a compact stacked layout on narrow terminals. Use
 `--color auto|always|never` to control ANSI color. For repeatable manual checks,
 set `DENON_DASHBOARD_WIDTH` and `DENON_DASHBOARD_HEIGHT`.
 
+When `dashboard-alt --watch` is running in an interactive terminal, it accepts
+single-key controls without Enter: Up/Down adjust volume, Left/Right send
+previous/next, Space toggles play/pause, `m` toggles mute, and `q` quits the
+dashboard. These keys are disabled for non-TTY input and are not used by the
+legacy Bash dashboard.
+
 ```bash
 denon dashboard-alt --provider auto
 denon dashboard-alt --provider direct --json

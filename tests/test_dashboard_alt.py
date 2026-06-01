@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import denon_dashboard_alt as dashboard_alt
 from denon_dashboard_alt import (
     DirectDashboardProvider,
+    DashboardCommandController,
     DashboardEventTracker,
     DashboardProvider,
     DashboardRenderer,
@@ -25,6 +26,8 @@ from denon_dashboard_alt import (
     build_parser,
     pad_text,
     compare_snapshots,
+    interactive_keyboard_enabled,
+    parse_key_sequence,
     render_panel,
     render_provider_comparison,
     strip_ansi,
@@ -499,6 +502,73 @@ def test_dashboard_alt_parser_accepts_expected_options():
     assert args.compare_providers is True
 
 
+@pytest.mark.parametrize(("sequence", "action"), [
+    ("\x1b[A", "volume_up"),
+    ("\x1b[B", "volume_down"),
+    ("\x1b[C", "next"),
+    ("\x1b[D", "previous"),
+    (" ", "play_pause"),
+    ("m", "mute_toggle"),
+    ("q", "quit"),
+])
+def test_parse_key_sequence_maps_dashboard_controls(sequence, action):
+    assert parse_key_sequence(sequence) == action
+
+
+def test_non_tty_mode_does_not_enable_interactive_keyboard_handling():
+    class NonTty:
+        def isatty(self):
+            return False
+
+    class Tty:
+        def isatty(self):
+            return True
+
+    assert interactive_keyboard_enabled(True, NonTty()) is False
+    assert interactive_keyboard_enabled(False, Tty()) is False
+    assert interactive_keyboard_enabled(True, Tty()) is True
+
+
+def test_dashboard_command_throttle_is_deterministic_without_sleep():
+    calls = []
+    now = [100.0]
+
+    def fake_clock():
+        return now[0]
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    controller = DashboardCommandController(
+        str(SCRIPT),
+        throttle_seconds=0.2,
+        clock=fake_clock,
+        runner=fake_runner,
+    )
+    snapshot = complete_snapshot()
+
+    assert controller.handle("volume_up", snapshot).event == "Command sent: volume up"
+    assert controller.handle("volume_up", snapshot).event is None
+    now[0] += 0.21
+    assert controller.handle("volume_up", snapshot).event == "Command sent: volume up"
+    assert calls == [
+        [str(SCRIPT), "up"],
+        [str(SCRIPT), "up"],
+    ]
+
+
+def test_transport_command_failure_reports_recent_event_without_crashing():
+    def fake_runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="unsupported")
+
+    controller = DashboardCommandController(str(SCRIPT), runner=fake_runner)
+    result = controller.handle("next", complete_snapshot())
+
+    assert result.quit is False
+    assert result.event == "Transport command unavailable: next"
+
+
 def test_dashboard_alt_help_is_discoverable_preview_text():
     help_text = build_parser().format_help()
     assert "Experimental Python dashboard preview" in help_text
@@ -668,6 +738,7 @@ def test_json_mode_outputs_stable_snapshot_without_network(monkeypatch, capsys):
     assert data["receiver"] == "Denon AVR-X1600H"
     assert data["main_power"] == "ON"
     assert "timestamp" in data
+    assert "Keys:" not in output
 
 
 def test_json_rejects_watch(capsys):
