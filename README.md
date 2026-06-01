@@ -218,12 +218,29 @@ DENON_SCAN_LAN=1
 DENON_MAX_VOLUME_DB=-10
 DENON_VOLUME_STEP_DB=1
 DENON_SOURCE_ALIASES='13=HEOS Music,6=TV Audio'
+DENON_CURL_INSECURE=1
+DENON_CURL_CACERT="$HOME/.config/denon/avr-cert.pem"
+DENON_CURL_PINNEDPUBKEY='sha256//...'
 DENON_HEOS_PID=...
 DENON_HEOS_GID=...
 DENON_DATA_DISCOVERY_MAX_TYPE=30
 ```
 
 The PowerShell module keeps receiver configuration in memory for the current PowerShell session. It also checks `DENON_IP` and then `DENON_DEFAULT_IP` as fallbacks.
+
+### HTTPS/TLS Verification
+
+Many Denon/Marantz AVR web interfaces use self-signed or locally untrusted HTTPS certificates. For compatibility, the Bash CLI defaults to curl's insecure certificate mode (`-k`). That works on typical trusted home LANs, but it does not protect against a local network MITM.
+
+You can opt into stricter behavior:
+
+```bash
+DENON_CURL_INSECURE=0 denon status
+DENON_CURL_CACERT="$HOME/.config/denon/avr-cert.pem" denon status
+DENON_CURL_PINNEDPUBKEY='sha256//...' denon status
+```
+
+`DENON_CURL_CACERT` passes a custom CA/certificate bundle to curl. `DENON_CURL_PINNEDPUBKEY` passes curl's pinned public key value, such as `sha256//BASE64HASH` or a local key file path. `denon doctor` reports the active TLS mode.
 
 ## Usage Examples
 

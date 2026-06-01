@@ -492,6 +492,9 @@ Configuration:
   DENON_SOURCE_ALIASES
   DENON_CURL_CONNECT_TIMEOUT
   DENON_CURL_MAX_TIME
+  DENON_CURL_INSECURE=1
+  DENON_CURL_CACERT
+  DENON_CURL_PINNEDPUBKEY
   DENON_CACHE_TTL_SECONDS
   DENON_LOCK=1
   DENON_LOCK_TIMEOUT=3
@@ -530,11 +533,57 @@ EOF
     date '+%Y-%m-%dT%H:%M:%S%z'
   }
 
+  _denon_curl_tls_args() {
+    DENON_CURL_TLS_ARGS=()
+
+    if [[ -n "${DENON_CURL_PINNEDPUBKEY+x}" && -z "${DENON_CURL_PINNEDPUBKEY}" ]]; then
+      echo "Error: DENON_CURL_PINNEDPUBKEY is set but empty" >&2
+      return 1
+    fi
+    if [[ -n "${DENON_CURL_CACERT+x}" && -z "${DENON_CURL_CACERT}" ]]; then
+      echo "Error: DENON_CURL_CACERT is set but empty" >&2
+      return 1
+    fi
+
+    if [[ "${DENON_CURL_INSECURE:-}" == "1" ]]; then
+      DENON_CURL_TLS_ARGS+=("-k")
+    elif [[ -n "${DENON_CURL_CACERT:-}" ]]; then
+      DENON_CURL_TLS_ARGS+=("--cacert" "$DENON_CURL_CACERT")
+    elif [[ "${DENON_CURL_INSECURE:-}" == "0" ]]; then
+      :
+    else
+      DENON_CURL_TLS_ARGS+=("-k")
+    fi
+
+    if [[ -n "${DENON_CURL_PINNEDPUBKEY:-}" ]]; then
+      DENON_CURL_TLS_ARGS+=("--pinnedpubkey" "$DENON_CURL_PINNEDPUBKEY")
+    fi
+  }
+
+  _denon_curl_tls_mode() {
+    if [[ "${DENON_CURL_INSECURE:-}" == "1" ]]; then
+      printf '%s' 'insecure compatibility mode (-k)'
+    elif [[ -n "${DENON_CURL_CACERT:-}" ]]; then
+      printf '%s' 'custom CA certificate'
+    elif [[ "${DENON_CURL_INSECURE:-}" == "0" ]]; then
+      printf '%s' 'system trust'
+    else
+      printf '%s' 'insecure compatibility mode (-k)'
+    fi
+  }
+
+  _denon_curl_insecure_mode_active() {
+    [[ "${DENON_CURL_INSECURE:-}" == "1" || ( -z "${DENON_CURL_INSECURE+x}" && -z "${DENON_CURL_CACERT:-}" ) ]]
+  }
+
   _denon_curl() {
     local connect_timeout="${DENON_CURL_CONNECT_TIMEOUT:-2}"
     local max_time="${DENON_CURL_MAX_TIME:-4}"
+    local -a tls_args
+    _denon_curl_tls_args || return 1
+    tls_args=("${DENON_CURL_TLS_ARGS[@]}")
     _denon_debug "curl $*"
-    curl -ksS --connect-timeout "$connect_timeout" --max-time "$max_time" "$@"
+    curl -sS "${tls_args[@]}" --connect-timeout "$connect_timeout" --max-time "$max_time" "$@"
   }
 
   _denon_get_config() {
@@ -3709,6 +3758,15 @@ EOF
     echo "  DENON_MAX_VOLUME_DB:   ${DENON_MAX_VOLUME_DB:--10}"
     echo "  DENON_CURL_MAX_TIME:   ${DENON_CURL_MAX_TIME:-4}"
     echo "  DENON_CURL_CONNECT_TIMEOUT: ${DENON_CURL_CONNECT_TIMEOUT:-2}"
+    echo "  TLS verification:      $(_denon_curl_tls_mode)"
+    if [[ -n "${DENON_CURL_CACERT:-}" ]]; then
+      echo "  TLS CA certificate:    $DENON_CURL_CACERT"
+    fi
+    if [[ -n "${DENON_CURL_PINNEDPUBKEY:-}" ]]; then
+      echo "  TLS pinned public key: configured"
+    else
+      echo "  TLS pinned public key: unset"
+    fi
     echo "  DENON_SSDP_TIMEOUT:    ${DENON_SSDP_TIMEOUT:-2}"
     echo "  DENON_SSDP_MX:         ${DENON_SSDP_MX:-1}"
     if [[ -f "$cache" ]]; then
@@ -3718,6 +3776,11 @@ EOF
       echo "  Cache:                 $cache -> missing"
     fi
     echo
+
+    if _denon_curl_insecure_mode_active; then
+      echo "Warning: HTTPS certificate verification is disabled for AVR compatibility; use DENON_CURL_INSECURE=0, DENON_CURL_CACERT, or DENON_CURL_PINNEDPUBKEY to harden this on trusted networks."
+      echo
+    fi
 
     if command -v ip >/dev/null 2>&1; then
       echo "Network route:"
@@ -5985,7 +6048,8 @@ EOF
       case "$key" in
         DENON_IP|DENON_DEFAULT_IP|DENON_SCAN_LAN|DENON_MAX_VOLUME_DB|\
         DENON_VOLUME_STEP_DB|DENON_SOURCE_ALIASES|DENON_CURL_CONNECT_TIMEOUT|\
-        DENON_CURL_MAX_TIME|DENON_SSDP_TIMEOUT|DENON_SSDP_MX|DENON_HEOS_PID|\
+        DENON_CURL_MAX_TIME|DENON_CURL_INSECURE|DENON_CURL_CACERT|\
+        DENON_CURL_PINNEDPUBKEY|DENON_SSDP_TIMEOUT|DENON_SSDP_MX|DENON_HEOS_PID|\
         DENON_HEOS_GID|DENON_HEOS_HELPER|DENON_HEOS_TIMEOUT|DENON_DEBUG|\
         DENON_CACHE_TTL_SECONDS|NO_COLOR)
           if [[ -z "${!key+set}" ]]; then
@@ -6002,7 +6066,8 @@ EOF
     profile_dir=$(_denon_profile_dir)
     local known_keys="DENON_IP DENON_DEFAULT_IP DENON_SCAN_LAN DENON_MAX_VOLUME_DB \
 DENON_VOLUME_STEP_DB DENON_SOURCE_ALIASES DENON_CURL_CONNECT_TIMEOUT \
-DENON_CURL_MAX_TIME DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
+DENON_CURL_MAX_TIME DENON_CURL_INSECURE DENON_CURL_CACERT \
+DENON_CURL_PINNEDPUBKEY DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
 DENON_HEOS_GID DENON_HEOS_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
 DENON_CACHE_TTL_SECONDS NO_COLOR"
 
@@ -6130,7 +6195,8 @@ DENON_CACHE_TTL_SECONDS NO_COLOR"
     cfg=$(_denon_config_path)
     local known_keys="DENON_IP DENON_DEFAULT_IP DENON_SCAN_LAN DENON_MAX_VOLUME_DB \
 DENON_VOLUME_STEP_DB DENON_SOURCE_ALIASES DENON_CURL_CONNECT_TIMEOUT \
-DENON_CURL_MAX_TIME DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
+DENON_CURL_MAX_TIME DENON_CURL_INSECURE DENON_CURL_CACERT \
+DENON_CURL_PINNEDPUBKEY DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
 DENON_HEOS_GID DENON_HEOS_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
 DENON_CACHE_TTL_SECONDS NO_COLOR"
 

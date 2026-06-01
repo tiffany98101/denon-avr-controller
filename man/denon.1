@@ -176,6 +176,31 @@ Override auto\-discovery with a fixed IPv4 address.
 Maximum volume
 .B vol
 will accept (default: 0 dB).
+.TP
+.B DENON_CURL_INSECURE
+Set to
+.B 0
+to make curl verify HTTPS certificates with normal system trust.
+The default is compatibility mode, equivalent to
+.B 1 ,
+which passes
+.B \-k
+because many AVR receivers use self\-signed or locally untrusted certificates.
+.TP
+.B DENON_CURL_CACERT
+Path to a CA certificate or certificate bundle passed to curl with
+.BR \-\-cacert .
+For example:
+.B DENON_CURL_CACERT="$HOME/.config/denon/avr-cert.pem" denon status
+.TP
+.B DENON_CURL_PINNEDPUBKEY
+Pinned public key value passed to curl with
+.BR \-\-pinnedpubkey ,
+for example
+.B sha256//BASE64HASH
+or a local key file path.
+For example:
+.B DENON_CURL_PINNEDPUBKEY='sha256//...' denon status
 .SH FILES
 .TP
 .I ~/.cache/denon_ip

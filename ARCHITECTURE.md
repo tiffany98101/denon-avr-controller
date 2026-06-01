@@ -14,7 +14,7 @@ It is **not**:
 - A daemon for the AVR's full state machine. The MPRIS bridge is narrow (media-key control + Now Playing surface), not a general control daemon.
 - A home-automation hub. There's no MQTT, no Home Assistant integration, no rules engine. `watch-event` is a poll-and-fork primitive, deliberately minimal.
 - A general-purpose AVR library. It is tuned to a **Denon AVR-X1600H** and the XML grammar that specific model emits.
-- A hardened remote-management tool. It assumes a trusted LAN and uses `curl -k` against self-signed certificates.
+- A hardened remote-management tool. It assumes a trusted LAN; HTTPS defaults to `curl -k` for AVR compatibility, with opt-in strict verification, custom CA, or pinned public key modes.
 
 It is a **terminal-native primitive** with a **packaged Fedora distribution path** — designed to compose into shell pipelines and personal scene scripts (`spotify-dj`, `lgtv`), and to be installable as a real user-space service via `make install-mpris` or a COPR-built RPM.
 
@@ -243,7 +243,7 @@ These are hard constraints. A change that violates one is, by definition, not in
 6. **Stateless script invocations.** No PID files. No long-lived sockets *inside `denon.sh`*. The script must be safe to invoke 100 times in a row from a scene script. `watch-event` is the bounded foreground exception (§4.10); the MPRIS daemon is the separate-process exception (§6.1); and `DENON_LOCK=1` is the narrow opt-in lock-file exception for serializing writes via `flock` on the active IP cache path.
 7. **AVR-X1600H XML grammar is the reference.** The current `sed` extractors assume the structure this model emits. Supporting another model is allowed but must be additive — never break the X1600H path.
 8. **Verify after every write.** No "set and pray" by default. See §4.2. Fade verifies per step, not just at the end. The documented opt-out is `--no-verify`, which still issues the write but skips readback polling and marks output as unverified.
-9. **Trusted LAN only.** `curl -k` is used because the receiver presents a self-signed cert. Telnet has no auth. Do not market or extend this tool as suitable for hostile networks.
+9. **Trusted LAN only.** HTTPS defaults to `curl -k` because many receivers present self-signed or locally untrusted certificates. Users can set `DENON_CURL_INSECURE=0`, `DENON_CURL_CACERT`, or `DENON_CURL_PINNEDPUBKEY` to harden local deployments. Telnet has no auth. Do not market or extend this tool as suitable for hostile networks.
 10. **Volume ceiling on by default.** `DENON_MAX_VOLUME_DB=-10` ships as the default. The user must opt out, never in. The ceiling applies to fades, to scene scripts, to raw `set` paths that touch volume — everywhere, no exceptions.
 11. **stderr for warnings, exit codes for errors.** Every command returns a meaningful exit code. Scene scripts depend on `&&` chaining working correctly. `--quiet` suppresses stdout but **does not change exit codes**.
 12. **No telemetry. No outbound network calls outside the LAN.** The tool reaches `$IP` (the receiver), `239.255.255.250` (SSDP multicast), `224.0.0.251` (mDNS multicast), and nothing else. Ever.
