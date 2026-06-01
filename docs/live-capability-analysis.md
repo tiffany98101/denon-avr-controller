@@ -11,7 +11,7 @@ The local run compared the bundled offline `references/deviceinfo_capabilities.x
   - `known-safe`: 20 records
   - `unknown`: 204 records
   - `skipped`: 67 records
-- All 20 allowlisted AppCommand probe attempts returned `no_response` with the receiver message `Could not handle the request`.
+- All 20 allowlisted AppCommand probe attempts returned `malformed` with the receiver message `Could not handle the request`.
 - No allowlisted AppCommand probe returned a useful payload.
 - No allowlisted AppCommand probe returned an empty `<rx></rx>` in this run.
 - Unknown verbs remained inventoried only and were not executed.
@@ -52,7 +52,7 @@ Allowlisted AppCommand verbs probed live:
 
 `GetActiveSpeaker`, `GetAllZoneStereo`, `GetAudioInfo`, `GetAudyssey`, `GetAudyssyInfo`, `GetAutoStandby`, `GetChLevel`, `GetDialogLevel`, `GetDimmer`, `GetECO`, `GetECOMeter`, `GetInputSignal`, `GetNetworkInfo`, `GetSoundMode`, `GetStatus`, `GetSubwooferLevel`, `GetToneControl`, `GetVideoInfo`, `GetVideoSelect`, `GetZoneName`
 
-Result for all: `no_response`, summary `Could not handle the request`.
+Result for all: `malformed`, summary `Could not handle the request`.
 
 ## Recommended Next Probes
 

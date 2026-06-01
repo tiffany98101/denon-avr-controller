@@ -400,14 +400,26 @@ class TestPromotedLiveFieldParsers:
         assert r.returncode == 0
         assert r.stdout.strip() == "empty\tnone"
 
-    def test_no_response_error_is_classified(self):
+    def test_empty_appcommand_response_is_classified_empty(self):
+        code = "_denon_data_appcommand_response_status_summary ''"
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "empty\tnone"
+
+    def test_non_xml_appcommand_response_is_classified_malformed(self):
         code = textwrap.dedent(f"""\
             body=$(cat '{FIXTURES}/appcommand_error.txt')
             _denon_data_appcommand_response_status_summary "$body"
         """)
         r = _bash(code)
         assert r.returncode == 0
-        assert r.stdout.strip() == "no_response\tCould not handle the request"
+        assert r.stdout.strip() == "malformed\tCould not handle the request"
+
+    def test_partial_appcommand_response_is_classified_malformed(self):
+        code = "_denon_data_appcommand_response_status_summary '<rx><cmd'"
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "malformed\t<cmd"
 
     def test_useful_rx_response_is_classified_ok(self):
         code = textwrap.dedent(f"""\
@@ -420,6 +432,16 @@ class TestPromotedLiveFieldParsers:
         assert status == "ok"
         assert "GetToneControl" in summary
         assert "6" in summary
+
+    def test_appcommand_probe_curl_failure_is_classified(self):
+        code = textwrap.dedent("""\
+            BASE=http://192.0.2.10
+            _denon_curl() { return 22; }
+            _denon_data_probe_appcommand_safe GetToneControl
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "curl_error\tcurl exited 22"
 
 
 class TestDataSummaryOutput:
@@ -600,20 +622,72 @@ class TestDataSummaryOutput:
         assert obj["mainZone"]["muted"] is None
         assert obj["zone2"]["muted"] is None
 
-    def test_status_prefers_telnet_mute_off_over_xml_code(self):
+    def test_resolve_main_mute_known_xml_skips_telnet(self, tmp_path):
+        log = tmp_path / "telnet.log"
+        code = textwrap.dedent(f"""\
+            _denon_query_main_mute_raw() {{
+              printf 'called\\n' >>'{log}'
+              printf '%s' 'MUOFF'
+            }}
+            _denon_resolve_main_mute 1
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "1"
+        assert not log.exists()
+
+    def test_resolve_main_mute_unknown_xml_uses_known_telnet_fallback(self):
+        code = textwrap.dedent("""\
+            _denon_query_main_mute_raw() { printf '%s' 'MUOFF'; }
+            _denon_resolve_main_mute bogus
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "MUOFF"
+
+    def test_resolve_main_mute_unknown_telnet_leaves_unknown(self):
+        code = textwrap.dedent("""\
+            _denon_query_main_mute_raw() { printf '%s' 'garbage'; }
+            _denon_resolve_main_mute ''
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "Unknown"
+
+    def test_status_uses_known_xml_mute_without_telnet_override(self, tmp_path):
+        log = tmp_path / "telnet.log"
         code = textwrap.dedent("""\
             _denon_get_power_xml() { printf '%s' '<listGlobals><MainZone><Power>1</Power></MainZone></listGlobals>'; }
             _denon_get_source_xml() { printf '%s' '<SourceList><Zone zone="1" index="13"><Source index="13"><Name>HEOS Music</Name></Source></Zone></SourceList>'; }
             _denon_get_vol_xml() { printf '%s' '<listGlobals><MainZone><Volume>450</Volume><Mute>1</Mute></MainZone></listGlobals>'; }
-            _denon_query_main_mute_raw() { printf '%s' 'MUOFF'; }
+            _denon_query_main_mute_raw() {
+              printf 'called\\n' >>"$DENON_TEST_TELNET_LOG"
+              printf '%s' 'MUOFF'
+            }
             _denon_alias_for_source() { return 1; }
             _denon_source_name_by_idx() { printf '%s' 'HEOS Music'; }
             _denon_status_pretty
         """)
+        r = _bash(code, {"DENON_TEST_TELNET_LOG": str(log)})
+        assert r.returncode == 0
+        assert r.stdout.strip() == "Power: ON | Source: HEOS Music | Volume: -35.0 dB [MUTED]"
+        assert not log.exists()
+
+    def test_status_json_uses_telnet_fallback_when_xml_mute_unknown(self):
+        code = textwrap.dedent("""\
+            IP=192.0.2.10
+            _denon_get_power_xml() { printf '%s' '<listGlobals><MainZone><Power>1</Power></MainZone></listGlobals>'; }
+            _denon_get_source_xml() { printf '%s' '<SourceList><Zone zone="1" index="13"><Source index="13"><Name>HEOS Music</Name></Source></Zone></SourceList>'; }
+            _denon_get_vol_xml() { printf '%s' '<listGlobals><MainZone><Volume>450</Volume><Mute></Mute></MainZone></listGlobals>'; }
+            _denon_query_main_mute_raw() { printf '%s' 'MUOFF'; }
+            _denon_alias_for_source() { return 1; }
+            _denon_source_name_by_idx() { printf '%s' 'HEOS Music'; }
+            _denon_status_json
+        """)
         r = _bash(code)
         assert r.returncode == 0
-        assert r.stdout.strip() == "Power: ON | Source: HEOS Music | Volume: -35.0 dB"
-        assert "[MUTED]" not in r.stdout
+        obj = json.loads(r.stdout)
+        assert obj["muted"] is False
 
     def test_dashboard_raw_main_mute_off_renders_no(self):
         code = textwrap.dedent("""\

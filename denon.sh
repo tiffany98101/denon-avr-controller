@@ -1629,6 +1629,34 @@ EOF
     esac
   }
 
+  _denon_resolve_main_mute() {
+    local raw="$1" telnet_mute
+    if [[ "$(_denon_normalize_mute "$raw")" != "Unknown" ]]; then
+      printf '%s' "$raw"
+      return 0
+    fi
+    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
+    if [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]]; then
+      printf '%s' "$telnet_mute"
+    else
+      printf 'Unknown'
+    fi
+  }
+
+  _denon_resolve_zone2_mute() {
+    local raw="$1" telnet_mute
+    if [[ "$(_denon_normalize_mute "$raw")" != "Unknown" ]]; then
+      printf '%s' "$raw"
+      return 0
+    fi
+    telnet_mute=$(_denon_query_zone2_mute_raw 2>/dev/null || printf '')
+    if [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]]; then
+      printf '%s' "$telnet_mute"
+    else
+      printf 'Unknown'
+    fi
+  }
+
   _denon_zone_status_pretty() {
     local zone="${1:-2}"
     local power_xml source_xml vol_xml
@@ -1664,7 +1692,7 @@ EOF
     local identity_xml power_xml source_xml vol_xml
     local friendly_name power_code zone2_power_code power zone2_power
     local main_source_idx zone2_source_idx main_source_name zone2_source_name
-    local raw_vol raw_zone2_vol mute zone2_mute muted zone2_muted telnet_mute telnet_zone2_mute
+    local raw_vol raw_zone2_vol mute zone2_mute muted zone2_muted
     local pretty_db json_db zone2_pretty_db friendly_json main_source_json zone2_source_json
 
     identity_xml="$(_denon_get_identity_xml)" || return 1
@@ -1679,12 +1707,8 @@ EOF
     zone2_source_idx=$(printf '%s' "$source_xml" | sed -n 's:.*<Zone zone="2" index="\([0-9]\+\)".*:\1:p')
     raw_vol=$(_denon_extract_main_volume_raw "$vol_xml")
     raw_zone2_vol=$(_denon_extract_zone2_volume_raw "$vol_xml")
-    mute=$(_denon_extract_main_mute "$vol_xml")
-    zone2_mute=$(_denon_extract_zone2_mute "$vol_xml")
-    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
-    [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && mute="$telnet_mute"
-    telnet_zone2_mute=$(_denon_query_zone2_mute_raw 2>/dev/null || printf '')
-    [[ "$(_denon_normalize_mute "$telnet_zone2_mute")" != "Unknown" ]] && zone2_mute="$telnet_zone2_mute"
+    mute=$(_denon_resolve_main_mute "$(_denon_extract_main_mute "$vol_xml")")
+    zone2_mute=$(_denon_resolve_zone2_mute "$(_denon_extract_zone2_mute "$vol_xml")")
 
     main_source_name=$(_denon_alias_for_source "1" "$main_source_idx" || _denon_source_name_by_idx "1" "$main_source_idx")
     zone2_source_name=$(_denon_alias_for_source "2" "$zone2_source_idx" || _denon_source_name_by_idx "2" "$zone2_source_idx")
@@ -1735,7 +1759,7 @@ EOF
 
   _denon_status_pretty() {
     local power_xml source_xml vol_xml
-    local power_code power source_idx source_name raw_vol mute db mute_str telnet_mute
+    local power_code power source_idx source_name raw_vol mute db mute_str
 
     power_xml="$(_denon_get_power_xml)" || return 1
     source_xml="$(_denon_get_source_xml)" || return 1
@@ -1744,9 +1768,7 @@ EOF
     power_code=$(_denon_extract_main_power "$power_xml")
     source_idx=$(printf '%s' "$source_xml" | sed -n 's:.*<Zone zone="1" index="\([0-9]\+\)".*:\1:p')
     raw_vol=$(_denon_extract_main_volume_raw "$vol_xml")
-    mute=$(_denon_extract_main_mute "$vol_xml")
-    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
-    [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && mute="$telnet_mute"
+    mute=$(_denon_resolve_main_mute "$(_denon_extract_main_mute "$vol_xml")")
     source_name=$(_denon_alias_for_source "1" "$source_idx" || _denon_source_name_by_idx "1" "$source_idx")
 
     case "$power_code" in
@@ -1769,7 +1791,7 @@ EOF
 
   _denon_status_json() {
     local power_xml source_xml vol_xml
-    local power_code power source_idx source_name raw_vol mute db muted_json source_json telnet_mute
+    local power_code power source_idx source_name raw_vol mute db muted_json source_json
 
     power_xml="$(_denon_get_power_xml)" || return 1
     source_xml="$(_denon_get_source_xml)" || return 1
@@ -1778,9 +1800,7 @@ EOF
     power_code=$(_denon_extract_main_power "$power_xml")
     source_idx=$(printf '%s' "$source_xml" | sed -n 's:.*<Zone zone="1" index="\([0-9]\+\)".*:\1:p')
     raw_vol=$(_denon_extract_main_volume_raw "$vol_xml")
-    mute=$(_denon_extract_main_mute "$vol_xml")
-    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
-    [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && mute="$telnet_mute"
+    mute=$(_denon_resolve_main_mute "$(_denon_extract_main_mute "$vol_xml")")
     source_name=$(_denon_alias_for_source "1" "$source_idx" || _denon_source_name_by_idx "1" "$source_idx")
 
     case "$power_code" in
@@ -2810,7 +2830,7 @@ EOF
     local brand_xml model_type_xml setup_lock_xml bt_headphones_xml speaker_preset_xml system_xml
     local friendly_name main_source_idx zone2_source_idx main_source_name zone2_source_name
     local main_power zone2_power main_mute zone2_mute main_vol_raw zone2_vol_raw
-    local telnet_mute telnet_zone2_mute
+    local mute_raw zone2_mute_raw
     local main_vol_scale main_vol_limit zone2_vol_scale zone2_vol_limit
     local sound_mode_text sleep_line heos_text track_text track_rc
     local dynamic_eq_line dynamic_volume_line cinema_eq_line multeq_line bass_line treble_line
@@ -2856,18 +2876,10 @@ EOF
     zone2_source_name=$(_denon_source_rows_with_aliases_from_xml "2" "$source_xml" | awk -F '\t' -v idx="$zone2_source_idx" '$1 == idx { print $3; exit }')
     main_power=$(_denon_power_name "$(_denon_extract_main_power "$power_xml")")
     zone2_power=$(_denon_power_name "$(_denon_extract_zone2_power "$power_xml")")
-    telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
-    if [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]]; then
-      main_mute=$(_denon_normalize_mute "$telnet_mute")
-    else
-      main_mute=$(_denon_bool_name "$(_denon_extract_main_mute "$vol_xml")")
-    fi
-    telnet_zone2_mute=$(_denon_query_zone2_mute_raw 2>/dev/null || printf '')
-    if [[ "$(_denon_normalize_mute "$telnet_zone2_mute")" != "Unknown" ]]; then
-      zone2_mute=$(_denon_normalize_mute "$telnet_zone2_mute")
-    else
-      zone2_mute=$(_denon_bool_name "$(_denon_extract_zone2_mute "$vol_xml")")
-    fi
+    mute_raw=$(_denon_resolve_main_mute "$(_denon_extract_main_mute "$vol_xml")")
+    main_mute=$(_denon_normalize_mute "$mute_raw")
+    zone2_mute_raw=$(_denon_resolve_zone2_mute "$(_denon_extract_zone2_mute "$vol_xml")")
+    zone2_mute=$(_denon_normalize_mute "$zone2_mute_raw")
     main_vol_raw=$(_denon_extract_main_volume_raw "$vol_xml")
     zone2_vol_raw=$(_denon_extract_zone2_volume_raw "$vol_xml")
     main_vol_scale=$(_denon_data_xml_leaf_first "$vol_xml" "listGlobals.MainZone.VolumeScale" 2>/dev/null || printf '')
@@ -3289,30 +3301,40 @@ EOF
 
   _denon_data_appcommand_response_status_summary() {
     local response="$1"
-    local summary status
+    local summary status compact
 
     summary=$(printf '%s' "$response" | sed 's/<[^>]*>/ /g' | tr '\n\r' '  ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^[[:space:]]*//; s/[[:space:]]*$//' | cut -c 1-160)
     [[ -n "$summary" ]] || summary="none"
-    if printf '%s' "$response" | grep -q '<rx>.*[^[:space:]].*</rx>'; then
-      status="ok"
-    elif printf '%s' "$response" | grep -q '<rx'; then
+    compact=$(printf '%s' "$response" | tr '\n\r' '  ')
+    if [[ -z "$(_denon_trim "$response")" ]]; then
+      status="empty"
+    elif ! printf '%s' "$compact" | grep -Eq '<rx([[:space:]>])'; then
+      status="malformed"
+    elif ! printf '%s' "$compact" | grep -q '</rx>'; then
+      status="malformed"
+    elif [[ "$summary" == "none" ]]; then
       status="empty"
     else
-      status="no_response"
+      status="ok"
     fi
     printf '%s\t%s' "$status" "$summary"
   }
 
   _denon_data_probe_appcommand_safe() {
     local verb="$1"
-    local request response
+    local request response rc
 
     _denon_data_capability_is_known_safe "$verb" || {
       printf 'not_probed\tnot in exact live-probe allowlist'
       return 0
     }
     request="<tx><cmd id=\"1\">${verb}</cmd></tx>"
-    response=$(_denon_curl -X POST -H 'Content-Type: text/xml' --data-binary "$request" "$BASE/goform/AppCommand.xml" 2>/dev/null || printf '')
+    response=$(_denon_curl -X POST -H 'Content-Type: text/xml' --data-binary "$request" "$BASE/goform/AppCommand.xml" 2>/dev/null)
+    rc=$?
+    if (( rc != 0 )); then
+      printf 'curl_error\tcurl exited %s' "$rc"
+      return 0
+    fi
     _denon_data_appcommand_response_status_summary "$response"
   }
 
@@ -4363,10 +4385,8 @@ EOF
     vol_xml=$(_denon_get_vol_xml 2>/dev/null)
     if [[ -n "$vol_xml" ]]; then
       _denon_dashboard_parse_volume_details "$vol_xml"
-      local raw_mute telnet_mute
-      raw_mute=$(_denon_extract_main_mute "$vol_xml")
-      telnet_mute=$(_denon_query_main_mute_raw 2>/dev/null || printf '')
-      [[ "$(_denon_normalize_mute "$telnet_mute")" != "Unknown" ]] && raw_mute="$telnet_mute"
+      local raw_mute
+      raw_mute=$(_denon_resolve_main_mute "$(_denon_extract_main_mute "$vol_xml")")
       local mute_from_vol
       mute_from_vol=$(_denon_normalize_mute "$raw_mute")
       [[ "$mute_from_vol" != "Unknown" ]] && dash_main_muted="$mute_from_vol"
