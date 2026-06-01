@@ -313,6 +313,10 @@ denon() {
     printf '%s' "$1" | awk '/^[0-9]+$/ { found=1 } END { exit found ? 0 : 1 }'
   }
 
+  _denon_is_heos_pid() {
+    [[ -n "${1:-}" && "$1" =~ ^[0-9]+$ ]]
+  }
+
   _denon_is_number() {
     printf '%s' "$1" | awk '/^-?[0-9]+([.][0-9]+)?$/ { found=1 } END { exit found ? 0 : 1 }'
   }
@@ -530,10 +534,18 @@ EOF
   _denon_set_config() {
     local type="$1"
     local data="$2"
+    local http_code
     _denon_debug "set_config type=$type data=$data"
-    _denon_curl -G "$BASE/ajax/globals/set_config" \
+    http_code=$(_denon_curl -G -o /dev/null -w '%{http_code}' "$BASE/ajax/globals/set_config" \
       --data-urlencode "type=$type" \
-      --data-urlencode "data=$data" >/dev/null
+      --data-urlencode "data=$data") || return 1
+    case "$http_code" in
+      ""|2??) return 0 ;;
+      *)
+        _denon_debug "set_config HTTP status $http_code"
+        return 1
+        ;;
+    esac
   }
 
   _denon_get_power_xml() { _denon_get_config 4; }
@@ -1638,7 +1650,7 @@ EOF
     local friendly_name power_code zone2_power_code power zone2_power
     local main_source_idx zone2_source_idx main_source_name zone2_source_name
     local raw_vol raw_zone2_vol mute zone2_mute muted zone2_muted telnet_mute telnet_zone2_mute
-    local pretty_db json_db friendly_json main_source_json zone2_source_json
+    local pretty_db json_db zone2_pretty_db friendly_json main_source_json zone2_source_json
 
     identity_xml="$(_denon_get_identity_xml)" || return 1
     power_xml="$(_denon_get_power_xml)" || return 1
@@ -1674,6 +1686,11 @@ EOF
       pretty_db="Unknown"
       json_db="null"
     fi
+    if [[ -n "$raw_zone2_vol" ]]; then
+      zone2_pretty_db="$(_denon_raw_to_db "$raw_zone2_vol") dB"
+    else
+      zone2_pretty_db="Unknown"
+    fi
 
     if [[ "$format" == "--json" || "$format" == "json" ]]; then
       friendly_json=$(printf '%s' "${friendly_name:-Unknown}" | _denon_json_escape)
@@ -1693,7 +1710,7 @@ EOF
     echo "Main Zone Muted: $muted"
     echo "Zone 2 Power: $zone2_power"
     echo "Zone 2 Source: ${zone2_source_name:-Unknown} ($(_denon_display_unknown "$zone2_source_idx"))"
-    echo "Zone 2 Volume Raw: ${raw_zone2_vol:-Unknown}"
+    echo "Zone 2 Volume: $zone2_pretty_db"
     echo "Zone 2 Muted: $zone2_muted"
     echo
     _denon_sources "1"
@@ -1883,7 +1900,7 @@ EOF
       echo "Usage: denon raw set <type> '<xml payload>'" >&2
       return 1
     fi
-    _denon_set_config "$type" "$data"
+    _denon_set_config "$type" "$data" || return 1
     echo "Sent raw set_config type=$type"
   }
 
@@ -2958,17 +2975,8 @@ EOF
 
     # Extended HEOS probes (new in Phase 5)
     local _heos_account_resp _heos_vol_resp _heos_mute_resp
-    if [[ -n "${dash_heos_pid:-}" ]]; then
-      _heos_vol_resp=$(python3 -c "
-import socket,json,sys
-with socket.create_connection(('$IP',1255),timeout=3) as s:
-    s.settimeout(3); s.sendall(b'heos://player/get_volume?pid=${dash_heos_pid}\r\n')
-    d=b''
-    while True:
-        try: c=s.recv(4096); d+=c if c else b''; (not c) and sys.exit()
-        except: break
-print(d.decode('utf-8','replace'))
-" 2>/dev/null | sed -n 's/.*"level":"\([0-9]*\)".*/\1/p; s/.*level=\([0-9]*\).*/\1/p' | head -1 || printf '')
+    if _denon_is_heos_pid "${dash_heos_pid:-}"; then
+      _heos_vol_resp=$(_denon_heos_helper get-volume "$dash_heos_pid" 2>/dev/null | sed -n 's/.*"level":"\([0-9]*\)".*/\1/p; s/.*level=\([0-9]*\).*/\1/p; /^[0-9][0-9]*$/p' | head -1 || printf '')
       [[ -n "$_heos_vol_resp" ]] && _denon_data_add_value "network_heos" "Network / HEOS" "heos_volume_level" "$_heos_vol_resp"
     fi
   }
@@ -3774,6 +3782,7 @@ EOF
           dash_zone2_source=$(_denon_clean_source_name "$value")
           dash_zone2_source_index=$(printf '%s' "$value" | sed -n 's/^.*(\([0-9][0-9]*\))[[:space:]]*$/\1/p')
           ;;
+        "Zone 2 Volume") dash_zone2_volume_db="${value% dB}" ;;
         "Zone 2 Volume Raw") dash_zone2_volume="$value" ;;
         "Zone 2 Muted") dash_zone2_muted=$(_denon_normalize_mute "$value") ;;
       esac
@@ -4054,7 +4063,7 @@ EOF
     printf '%s\n' "$players"
     [[ "${1:-}" == "players-only" ]] && return 0
     pid=$(_denon_dashboard_json_scalar "$players" "pid")
-    [[ -n "$pid" ]] || return 0
+    _denon_is_heos_pid "$pid" || return 0
 
     _denon_dashboard_heos_command "heos://player/get_now_playing_media?pid=$pid"
     _denon_dashboard_heos_command "heos://player/get_play_state?pid=$pid"
@@ -4067,7 +4076,7 @@ EOF
     while IFS= read -r line; do
       case "$line" in
         *'"command": "player/get_players"'*)
-          value=$(_denon_dashboard_json_scalar "$line" "pid"); [[ -n "$value" ]] && dash_heos_pid="$value"
+          value=$(_denon_dashboard_json_scalar "$line" "pid"); _denon_is_heos_pid "$value" && dash_heos_pid="$value"
           value=$(_denon_dashboard_json_scalar "$line" "model"); [[ -n "$value" ]] && dash_heos_model="$value"
           value=$(_denon_dashboard_json_scalar "$line" "version"); [[ -n "$value" ]] && dash_heos_version="$value"
           value=$(_denon_dashboard_json_scalar "$line" "network"); [[ -n "$value" ]] && dash_heos_network="$value"
@@ -6601,7 +6610,7 @@ EOF
       if [[ -z "${2:-}" ]]; then
         _denon_set_source "heos music" "1"
       else
-        _denon_heos_helper "${@:2}"
+        _denon_heos_helper "${@:2}" || return 1
       fi
       ;;
 

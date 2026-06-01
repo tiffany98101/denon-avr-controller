@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import sys
 from typing import Any
@@ -12,6 +13,7 @@ from urllib.parse import quote
 
 
 TIMEOUT = float(os.environ.get("DENON_HEOS_TIMEOUT", "1.5"))
+PID_RE = re.compile(r"^[0-9]+$")
 
 
 def usage() -> int:
@@ -34,6 +36,7 @@ Commands:
   repeat <off|all|one>
   shuffle <on|off>
   update
+  get-volume [pid]
 """.rstrip(),
         file=sys.stderr,
     )
@@ -94,16 +97,30 @@ def require_ok(data: dict[str, Any]) -> None:
     raise RuntimeError(f"{heos.get('command', 'HEOS command')}: {message}")
 
 
+def validate_pid(pid: str) -> str:
+    value = str(pid).strip()
+    if not PID_RE.fullmatch(value):
+        raise ValueError("invalid HEOS player id")
+    return value
+
+
+def validate_pid_list(value: str) -> str:
+    pids = str(value).split(",")
+    if not pids or any(not PID_RE.fullmatch(pid.strip()) for pid in pids):
+        raise ValueError("invalid HEOS player id list")
+    return ",".join(pid.strip() for pid in pids)
+
+
 def get_pid(ip: str) -> str:
     env_pid = os.environ.get("DENON_HEOS_PID", "").strip()
     if env_pid:
-        return env_pid
+        return validate_pid(env_pid)
     data = send(ip, "player/get_players")
     require_ok(data)
     players = data.get("payload") or []
     if not players:
         raise RuntimeError("no HEOS players returned")
-    return str(players[0].get("pid", "")).strip()
+    return validate_pid(str(players[0].get("pid", "")).strip())
 
 
 def get_gid(ip: str) -> str:
@@ -209,6 +226,12 @@ def show_now(ip: str, pid: str) -> None:
         print(f"Queue ID: {payload.get('qid')}")
 
 
+def show_volume(ip: str, pid: str) -> None:
+    data = send(ip, f"player/get_volume?pid={quote(validate_pid(pid))}")
+    require_ok(data)
+    print(message_value(data, "level"))
+
+
 def show_groups(data: dict[str, Any]) -> None:
     require_ok(data)
     groups = data.get("payload") or []
@@ -263,10 +286,15 @@ def run(ip: str, argv: list[str]) -> int:
     if not argv:
         return usage()
     cmd = argv[0].lower()
-    pid = get_pid(ip)
+    if cmd == "get-volume" and len(argv) == 2:
+        pid = validate_pid(argv[1])
+    else:
+        pid = get_pid(ip)
 
     if cmd == "now":
         show_now(ip, pid)
+    elif cmd == "get-volume" and len(argv) in {1, 2}:
+        show_volume(ip, pid)
     elif cmd in {"play", "pause", "stop"}:
         data = send(ip, f"player/set_play_state?pid={quote(pid)}&state={cmd}")
         require_ok(data)
@@ -317,7 +345,7 @@ def run(ip: str, argv: list[str]) -> int:
             require_ok(data)
             print_json(data)
         elif sub == "set" and len(argv) == 3:
-            data = send(ip, f"group/set_group?pid={quote(argv[2], safe=',')}")
+            data = send(ip, f"group/set_group?pid={quote(validate_pid_list(argv[2]), safe=',')}")
             require_ok(data)
             print(f"HEOS group set: {argv[2]}")
         elif sub == "volume" and len(argv) in {3, 4}:

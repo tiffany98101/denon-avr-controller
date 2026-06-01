@@ -326,6 +326,9 @@ Raw and snapshot workflows:
 ./denon.sh diff snapshots/a snapshots/b
 ```
 
+Write commands that use the AVR `set_config` HTTP endpoint return failure when
+the receiver responds with a non-2xx HTTP status.
+
 Run `./denon.sh --help` for the full command list.
 
 ## PowerShell Module
@@ -532,6 +535,8 @@ make uninstall-mpris
 
 - AVR HTTP polling runs on a worker thread; a stalled AVR response never
   blocks D-Bus.
+- HEOS player IDs learned from receiver responses are accepted only as decimal
+  numeric IDs before they are used in HEOS command construction.
 - HEOS events (play state, now-playing, repeat, shuffle) are pushed over a
   persistent TCP connection to port 1255 with exponential-backoff reconnect.
 - `PropertiesChanged` signals fire only on real state transitions, not every
