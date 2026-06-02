@@ -6,23 +6,26 @@ Baseline used for this audit:
 
 - Remote fetched: `origin` (`git@github.com:tiffany98101/denon-avr-controller.git`)
 - Current branch: `main`
-- Release-readiness baseline: post-hardening local branch after the cleanup/security/performance phases
-- Fetched public mirror ref at audit time: `origin/main` = `8272a6d feat: improve dashboard-alt renderer layout`
+- Release-readiness baseline: post-beta.5 local branch after the interactive dashboard and receiver-validation hardening phases
+- Public mirror ref at audit time: `origin/main` = `b4b59c5 chore: prepare v1.2.0-beta.5 release` (tag `v1.2.0-beta.5`)
 - Result: local `HEAD` is ahead of `origin/main`; review `git log --oneline origin/main..HEAD` before any release push.
 
 ### Commits in `origin/main..HEAD`
 
-The hardening/completion commits below are expected in `origin/main..HEAD` after `git fetch origin` unless they have already been pushed. Release-readiness documentation fix commits may appear after these.
+These are the post-`v1.2.0-beta.5` commits intended for the `v1.2.0-beta.6` release.
 
 | Commit | Summary | Classification | Notes |
 |---|---|---|---|
-| `a7ac76a` | Add Denon shell completion installer | RELEASE CANDIDATE | Includes user-level bash/zsh/fish completion install flow. |
-| `691d6ba` | fix: validate HEOS player ids and detect write failures | RELEASE CANDIDATE | Security/correctness hardening. |
-| `1ad3c38` | fix: restore HEOS discovery with pid validation | RELEASE CANDIDATE | Regression fix for HEOS discovery/default behavior. |
-| `ff67376` | fix: improve bash portability helpers | RELEASE CANDIDATE | Bash-runtime portability cleanup. |
-| `2a5c9d3` | fix: improve mute fallback and probe classification | RELEASE CANDIDATE | Accuracy/reliability cleanup. |
-| `23b30cb` | perf: reduce shell helper overhead | RELEASE CANDIDATE | Low-risk helper performance cleanup. |
-| `4bf5c58` | security: make AVR TLS verification configurable | RELEASE CANDIDATE | TLS compatibility mode is now explicit and configurable. |
+| `e3edc28` | feat: add interactive dashboard-alt keyboard controls | RELEASE CANDIDATE | New interactive controls in the Python preview dashboard. |
+| `6fde2fb` | fix: show dashboard-alt interactive key feedback | RELEASE CANDIDATE | Recent Events feedback for key presses. |
+| `5347dbe` | feat: add dashboard-alt quick select and zone hotkeys | RELEASE CANDIDATE | Quick Select and zone toggle controls. |
+| `dfaeb76` | feat: add main dashboard interactive controls | RELEASE CANDIDATE | Brings shell dashboard to parity with dashboard-alt controls. |
+| `d16316b` | feat: use dashboard number keys for source selection | RELEASE CANDIDATE | Source-number selection from the Sources list. |
+| `a081a25` | docs: clarify dashboard source hotkey help | RELEASE CANDIDATE | Help-text clarification only. |
+| `5495623` | fix: improve dashboard feedback and rpm helpers | RELEASE CANDIDATE | Transport feedback, Receiver Info, packaged helper discovery. |
+| `5f6e3a7` | fix: verify dashboard transport commands | RELEASE CANDIDATE | Verifies HEOS transport state/metadata before reporting success. |
+| `35e0b20` | fix: standardize dashboard footer controls | RELEASE CANDIDATE | Single `key=action` footer grammar. |
+| `22aefb1` | fix: harden zone2 volume and receiver validation | RELEASE CANDIDATE | Zone 2 volume cap, set_config status, cached IP validation. |
 
 ### Files newly present in the public mirror
 
@@ -48,12 +51,13 @@ cleaned or explicitly waived before the next public release.
 
 Release metadata status:
 
-- `VERSION` is `1.2.0-beta.4`.
-- Tag `v1.2.0-beta.4` is the intended release tag.
-- Confirm the tag does not already exist locally or remotely immediately before tagging.
-- The RPM spec points at `v1.2.0-beta.4` via `%global tag_name v%{version_base}-%{pre_tag}`.
+- `VERSION` is `1.2.0-beta.6`.
+- Tag `v1.2.0-beta.6` is the intended release tag.
+- `v1.2.0-beta.5` is already tagged and published; do not reuse it.
+- Confirm the new tag does not already exist locally or remotely immediately before tagging.
+- The RPM spec points at `v1.2.0-beta.6` via `%global tag_name v%{version_base}-%{pre_tag}` (`pre_tag beta.6`, `rpm_release 0.1.beta6`).
 
-Before tagging, verify `VERSION`, `rpm/denon-avr-controller.spec`, and release notes all still match `1.2.0-beta.4`.
+Before tagging, verify `VERSION`, `rpm/denon-avr-controller.spec`, and release notes all still match `1.2.0-beta.6`.
 
 ## 2. Pre-push checklist
 
@@ -85,27 +89,31 @@ Run this before any push or release tag:
 
 ### Recommendation
 
-Use one focused release-prep commit for v1.2.0-beta.4 metadata and release
-notes after the hardening commits have passed validation.
+Use one focused release-prep commit for v1.2.0-beta.6 metadata and release
+notes after the dashboard/hardening commits have passed validation.
 
 The next useful sequence is:
 
-1. Commit the v1.2.0-beta.4 metadata and release notes.
+1. Commit the v1.2.0-beta.6 metadata and release notes.
 2. Run the validation commands in §2.
 3. Optionally build/inspect the SRPM.
-4. Create and push `v1.2.0-beta.4` manually.
+4. Create and push `v1.2.0-beta.6` manually.
 
 ## 4. Draft release notes
 
-Current `VERSION`: `1.2.0-beta.4`
+Current `VERSION`: `1.2.0-beta.6`
 
-These notes correspond to the intended `v1.2.0-beta.4` tag.
+These notes correspond to the intended `v1.2.0-beta.6` tag. See
+`RELEASE_NOTES.md` for the published changelog.
 
 ### Highlights
 
-- Public tree now includes the reconciled Bash CLI, MPRIS2 bridge, pytest harness, RPM packaging, completions, man page, PowerShell module, data inventory commands, dashboard improvements, and architecture contract.
-- Optional MPRIS2 bridge exposes the receiver to Plasma/KDE media controls through a systemd user service.
-- Receiver diagnostics and data inventory are now first-class CLI surfaces.
+- Interactive keyboard controls on both the shell `dashboard` and `dashboard-alt`
+  (volume, mute, transport, source-number selection, zone toggle).
+- HEOS transport commands from the dashboard are verified against the selected
+  player's state/metadata before reporting success.
+- Zone 2 volume now honors the `DENON_MAX_VOLUME_DB` hearing-safety cap and raw
+  range; `set_config` writes require a real `2xx`; cached IPs are IPv4-validated.
 
 ### New features
 
@@ -163,7 +171,7 @@ unless a research artifact intentionally records a sanitized historical probe.
 
 ### Current README sections that are accurate
 
-- Project status and feature overview for the committed v1.2.0-beta.4 tree.
+- Project status and feature overview for the committed v1.2.0-beta.6 tree.
 - Bash CLI installation/wrapper guidance and bash/zsh/fish completion installer guidance.
 - Discovery cascade including Avahi/mDNS.
 - Data inventory and diagnostics examples.

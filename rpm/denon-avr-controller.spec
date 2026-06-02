@@ -4,8 +4,8 @@
 # Pre-release ordering: Release 0.<N>.<label> sorts below 1.<dist> (GA),
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
-%global pre_tag       beta.5
-%global rpm_release   0.8.beta5
+%global pre_tag       beta.6
+%global rpm_release   0.1.beta6
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -123,6 +123,15 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
+* Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.1.beta6
+- Add interactive keyboard controls to the main dashboard and dashboard-alt
+  (volume, mute, transport, source-number selection, zone toggle)
+- Verify dashboard HEOS transport commands against selected AVR player state
+  and metadata before reporting success
+- Standardize dashboard footer control hints with key=action wording
+- Harden Zone 2 volume safety (dB cap and raw range), set_config HTTP status
+  handling, and cached receiver IP validation
+
 * Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.8.beta5
 - Harden Zone 2 volume safety, set_config HTTP status handling, and cached IP validation
 

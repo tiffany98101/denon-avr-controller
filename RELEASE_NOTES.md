@@ -1,5 +1,41 @@
 # Release Notes
 
+## v1.2.0-beta.6
+
+Follow-up beta focused on interactive dashboard controls, truthful HEOS
+transport feedback, and receiver-validation hardening.
+
+### Interactive Dashboard
+
+- Added keyboard controls to the main `dashboard` and to `dashboard-alt`:
+  arrow-key volume, `Space` play/pause, `←`/`→` previous/next, `M` mute,
+  source-number selection from the Sources list (including multi-digit source
+  numbers), and `Z` zone toggle.
+- Transport keys now route through the HEOS helper and verify the selected
+  player's state/metadata before reporting success. Recent Events distinguish
+  `sent`, `verified`, `failed`, `no playback change verified`, and `throttled`
+  outcomes instead of overstating dispatch as success.
+- Standardized full and compact footer hints on a single `key=action` grammar.
+- Receiver Info renders `Receiver`, `IP`, `Version`, and `HEOS` consistently,
+  using `Unknown` instead of blanks and never showing HEOS firmware as AVR
+  firmware.
+
+### Security And Hardening
+
+- Zone 2 volume now honors the `DENON_MAX_VOLUME_DB` hearing-safety cap and the
+  supported raw range for `zone2 vol`, `zone2 up`, and `zone2 down`, matching
+  Main Zone behavior.
+- `set_config` write paths now require a real `2xx` HTTP status to report
+  success (an empty status is no longer treated as success).
+- Cached receiver IPs are validated as IPv4 before use in discovery and
+  `doctor` output; invalid cache entries are ignored.
+
+### Packaging
+
+- The RPM installs `denon_dashboard_alt.py` and `denon_heos_helper.py` under
+  `%{_libexecdir}/denon-avr-controller/`; `denon.sh` resolves helpers via an
+  explicit env var, its own directory, then the installed libexec path.
+
 ## v1.2.0-beta.5
 
 Follow-up beta after the PowerShell parity work, focused on PowerShell TLS
