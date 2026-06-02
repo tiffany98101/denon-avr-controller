@@ -1,5 +1,22 @@
 # Release Notes
 
+## v1.2.0-beta.7
+
+Small follow-up to beta.6 that places the running controller version where it
+belongs in the dashboard.
+
+### Dashboard
+
+- The running `denon-avr-controller v<version>` is now shown in the dashboard
+  **footer** in both the interactive (keyboard-active) and non-interactive watch
+  modes. In the interactive footer it is right-aligned on the `Control Target:`
+  line.
+- Removed the short-lived `Tool:` line from the Receiver Info card. That card's
+  `Version:` field remains the AVR mainboard firmware, which the receiver does
+  not expose on read-only surfaces (shown as `Unknown` on AVR-X1600H).
+- `dashboard-alt` continues to show the version in its top header alongside the
+  key help.
+
 ## v1.2.0-beta.6
 
 Follow-up beta focused on interactive dashboard controls, truthful HEOS

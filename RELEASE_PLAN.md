@@ -12,7 +12,7 @@ Baseline used for this audit:
 
 ### Commits in `origin/main..HEAD`
 
-These are the post-`v1.2.0-beta.5` commits intended for the `v1.2.0-beta.6` release.
+These are the post-`v1.2.0-beta.5` commits. The dashboard interactive/transport/hardening set shipped in `v1.2.0-beta.6`; `v1.2.0-beta.7` adds the dashboard footer version display (`feat: show running controller version in dashboard footer`).
 
 | Commit | Summary | Classification | Notes |
 |---|---|---|---|
@@ -51,13 +51,13 @@ cleaned or explicitly waived before the next public release.
 
 Release metadata status:
 
-- `VERSION` is `1.2.0-beta.6`.
-- Tag `v1.2.0-beta.6` is the intended release tag.
-- `v1.2.0-beta.5` is already tagged and published; do not reuse it.
+- `VERSION` is `1.2.0-beta.7`.
+- Tag `v1.2.0-beta.7` is the intended release tag.
+- `v1.2.0-beta.5` and `v1.2.0-beta.6` are already tagged and published; do not reuse them.
 - Confirm the new tag does not already exist locally or remotely immediately before tagging.
-- The RPM spec points at `v1.2.0-beta.6` via `%global tag_name v%{version_base}-%{pre_tag}` (`pre_tag beta.6`, `rpm_release 0.9.beta6`). The `rpm_release` counter is monotonic across the 1.2.0 pre-release series (…0.8.beta5 -> 0.9.beta6) so `dnf upgrade` orders cleanly.
+- The RPM spec points at `v1.2.0-beta.7` via `%global tag_name v%{version_base}-%{pre_tag}` (`pre_tag beta.7`, `rpm_release 0.10.beta7`). The `rpm_release` counter is monotonic across the 1.2.0 pre-release series (…0.8.beta5 -> 0.9.beta6 -> 0.10.beta7) so `dnf upgrade` orders cleanly.
 
-Before tagging, verify `VERSION`, `rpm/denon-avr-controller.spec`, and release notes all still match `1.2.0-beta.6`.
+Before tagging, verify `VERSION`, `rpm/denon-avr-controller.spec`, and release notes all still match `1.2.0-beta.7`.
 
 ## 2. Pre-push checklist
 
@@ -89,21 +89,21 @@ Run this before any push or release tag:
 
 ### Recommendation
 
-Use one focused release-prep commit for v1.2.0-beta.6 metadata and release
+Use one focused release-prep commit for v1.2.0-beta.7 metadata and release
 notes after the dashboard/hardening commits have passed validation.
 
 The next useful sequence is:
 
-1. Commit the v1.2.0-beta.6 metadata and release notes.
+1. Commit the v1.2.0-beta.7 metadata and release notes.
 2. Run the validation commands in §2.
 3. Optionally build/inspect the SRPM.
-4. Create and push `v1.2.0-beta.6` manually.
+4. Create and push `v1.2.0-beta.7` manually.
 
 ## 4. Draft release notes
 
-Current `VERSION`: `1.2.0-beta.6`
+Current `VERSION`: `1.2.0-beta.7`
 
-These notes correspond to the intended `v1.2.0-beta.6` tag. See
+These notes correspond to the intended `v1.2.0-beta.7` tag. See
 `RELEASE_NOTES.md` for the published changelog.
 
 ### Highlights
@@ -171,7 +171,7 @@ unless a research artifact intentionally records a sanitized historical probe.
 
 ### Current README sections that are accurate
 
-- Project status and feature overview for the committed v1.2.0-beta.6 tree.
+- Project status and feature overview for the committed v1.2.0-beta.7 tree.
 - Bash CLI installation/wrapper guidance and bash/zsh/fish completion installer guidance.
 - Discovery cascade including Avahi/mDNS.
 - Data inventory and diagnostics examples.
