@@ -24,6 +24,7 @@ from denon_dashboard_alt import (
     SourceSnapshot,
     ZoneSnapshot,
     build_parser,
+    controller_version,
     pad_text,
     compare_snapshots,
     interactive_keyboard_enabled,
@@ -38,6 +39,7 @@ from denon_dashboard_alt import (
 
 
 SCRIPT = Path(__file__).parent.parent / "denon.sh"
+REPO_VERSION = (SCRIPT.parent / "VERSION").read_text().splitlines()[0].strip()
 
 
 IDENTITY_XML = "<listGlobals><FriendlyName>Denon AVR-X1600H</FriendlyName></listGlobals>"
@@ -273,8 +275,23 @@ def test_renderer_receiver_info_uses_consistent_field_names():
     assert "Receiver Info" in frame
     assert "Receiver: Denon AVR-X1600H" in frame
     assert "IP: 192.0.2.10" in frame
+    assert f"denon-avr-controller v{REPO_VERSION}" in frame
     assert "Version: 1.64" in frame
     assert "HEOS: 3.88.614 Wi-Fi" in frame
+
+
+def test_controller_version_prefers_version_file(tmp_path):
+    (tmp_path / "VERSION").write_text("9.8.7\n", encoding="utf-8")
+
+    assert controller_version(repo_root=tmp_path) == "9.8.7"
+
+
+def test_controller_version_falls_back_to_denon_version(tmp_path):
+    script = tmp_path / "denon"
+    script.write_text("#!/bin/sh\nprintf '7.6.5\\n'\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    assert controller_version(repo_root=tmp_path, script=script) == "7.6.5"
 
 
 def test_renderer_receiver_info_missing_ip_and_version_render_unknown():
@@ -285,6 +302,7 @@ def test_renderer_receiver_info_missing_ip_and_version_render_unknown():
     )
 
     assert "IP: Unknown" in frame
+    assert f"denon-avr-controller v{REPO_VERSION}" in frame
     assert "Version: Unknown" in frame
     assert "HEOS: 3.88.614 Wi-Fi" in frame
 

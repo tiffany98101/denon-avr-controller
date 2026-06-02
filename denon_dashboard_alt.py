@@ -141,6 +141,42 @@ def _display_receiver_version(value: Any) -> str:
     return text
 
 
+def controller_version(repo_root: str | Path | None = None, script: str | Path | None = None) -> str:
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parent
+    version_file = root / "VERSION"
+    if version_file.is_file():
+        lines = version_file.read_text(encoding="utf-8").splitlines()
+        if lines:
+            version = lines[0].strip()
+            if version:
+                return version
+
+    candidates: list[str] = []
+    if script is not None:
+        candidates.append(str(script))
+    path_denon = shutil.which("denon")
+    if path_denon:
+        candidates.append(path_denon)
+
+    for candidate in candidates:
+        try:
+            proc = subprocess.run(
+                [candidate, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                env={**os.environ, "DENON_UNIT_TEST": ""},
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.returncode == 0:
+            version = proc.stdout.splitlines()[0].strip() if proc.stdout else ""
+            if version:
+                return version
+
+    return UNKNOWN
+
+
 def _display_mute(value: Any) -> str:
     text = _clean(value).lower()
     if text in {"true", "1", "yes", "on"}:
@@ -990,9 +1026,10 @@ def render_two_column_row(
 
 
 class DashboardRenderer:
-    def __init__(self, color: str = "auto", unicode: bool = False) -> None:
+    def __init__(self, color: str = "auto", unicode: bool = False, tool_version: str | None = None) -> None:
         self.color = color
         self.unicode = unicode
+        self.tool_version = tool_version if tool_version is not None else controller_version()
 
     def render(
         self,
@@ -1069,7 +1106,7 @@ class DashboardRenderer:
             display_value(snapshot.main.volume),
         ))
         left = f"{receiver} @ {ip}"
-        right = f"{provider} | {snapshot.timestamp.strftime('%H:%M:%S')}"
+        right = f"{provider} | {snapshot.timestamp.strftime('%H:%M:%S')} | denon-avr-controller v{_display(self.tool_version)}"
         if warning_count:
             right = f"{right} | {warning_count} warning{'s' if warning_count != 1 else ''}"
         if width >= 72:

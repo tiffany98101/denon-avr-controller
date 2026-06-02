@@ -5,7 +5,7 @@
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
 %global pre_tag       beta.6
-%global rpm_release   0.1.beta6
+%global rpm_release   0.9.beta6
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -123,7 +123,9 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
-* Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.1.beta6
+* Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.9.beta6
+- Show the running controller version in the dashboard (shell and dashboard-alt)
+- Correct the embedded controller version string to 1.2.0-beta.6
 - Add interactive keyboard controls to the main dashboard and dashboard-alt
   (volume, mute, transport, source-number selection, zone toggle)
 - Verify dashboard HEOS transport commands against selected AVR player state

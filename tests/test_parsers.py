@@ -18,6 +18,7 @@ import pytest
 SCRIPT = Path(__file__).parent.parent / "denon.sh"
 FIXTURES = Path(__file__).parent / "fixtures"
 SCRIPT_STR = str(SCRIPT)
+REPO_VERSION = (SCRIPT.parent / "VERSION").read_text().splitlines()[0].strip()
 
 
 def _bash(code: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
@@ -1470,7 +1471,12 @@ class TestDashboardDiagnostics:
             timeout=15,
         )
         assert r.returncode == 0
-        assert r.stdout.strip() == "1.2.0-beta.5"
+        assert r.stdout.strip() == REPO_VERSION
+
+    def test_dashboard_tool_version_label_prefers_version_file(self):
+        r = _bash("_denon_tool_version_label")
+        assert r.returncode == 0
+        assert r.stdout.strip() == f"denon-avr-controller v{REPO_VERSION}"
 
     def test_normal_dashboard_does_not_include_diagnostics(self):
         code = textwrap.dedent(self.DASHBOARD_STATE + """\
@@ -1524,6 +1530,7 @@ class TestDashboardDiagnostics:
         r = _bash(code)
         assert r.returncode == 0
         assert "Control Target: Zone2" in r.stdout
+        assert f"denon-avr-controller v{REPO_VERSION}" in r.stdout
         assert "Keys: ↑/↓=Volume  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Source From List  Z=Zone  Q=Quit" in r.stdout
         for old in (
             "Source: Type # From List",
@@ -1572,6 +1579,7 @@ class TestDashboardDiagnostics:
         r = _bash(code)
         assert r.returncode == 0
         assert "IP:       192.0.2.10" in r.stdout
+        assert "Tool:" not in r.stdout
         assert "Version: Unknown" in r.stdout
         assert "HEOS:    3.88.614 Wi-Fi" in r.stdout
         assert "Zone:   Zone 2" in r.stdout
@@ -1592,6 +1600,7 @@ class TestDashboardDiagnostics:
         assert r.returncode == 0
         assert "Receiver: Denon AVR-X1600H" in r.stdout
         assert "IP:       192.0.2.10" in r.stdout
+        assert "Tool:" not in r.stdout
         assert "Version: 1.64" in r.stdout
         assert "HEOS:    3.88.614 Wi-Fi" in r.stdout
 
@@ -1606,6 +1615,7 @@ class TestDashboardDiagnostics:
         r = _bash(code)
         assert r.returncode == 0
         assert "IP:       Unknown" in r.stdout
+        assert "Tool:" not in r.stdout
         assert "Version: Unknown" in r.stdout
         assert "HEOS:    3.88.614 Wi-Fi" in r.stdout
 
@@ -1647,7 +1657,7 @@ class TestDashboardDiagnostics:
         assert frame.startswith("\u250c")
         assert not frame.startswith("\u2502 Main Zone")
         assert frame.index("\u250c") < frame.index("Main Zone")
-        assert "denon-avr-controller v1.2.0-beta.5" in frame
+        assert f"denon-avr-controller v{REPO_VERSION}" in frame
         assert "[q] Quit | [r] Redraw" in frame
 
     def test_live_dashboard_ascii_redraw_starts_with_top_border(self):
@@ -1806,11 +1816,11 @@ class TestDashboardDiagnostics:
         r = _bash(code)
         assert r.returncode == 0
         _assert_no_dashboard_helper_errors(r)
-        assert "denon-avr-controller v1.2.0-beta.5" in r.stdout
+        assert f"denon-avr-controller v{REPO_VERSION}" in r.stdout
         assert "[q] Quit" in r.stdout
         assert "[q] Quit | [r] Redraw" in r.stdout
-        assert "v1.2.0-beta.5[q]" not in r.stdout
-        assert re.search(r"v1\.2\.0-beta\.5 {2,}\[q\] Quit", r.stdout)
+        assert f"v{REPO_VERSION}[q]" not in r.stdout
+        assert re.search(rf"v{re.escape(REPO_VERSION)} {{2,}}\[q\] Quit", r.stdout)
 
     def test_dashboard_footer_truncates_receiver_before_version(self):
         code = textwrap.dedent("""\
@@ -1825,11 +1835,11 @@ class TestDashboardDiagnostics:
         r = _bash(code)
         assert r.returncode == 0
         _assert_no_dashboard_helper_errors(r)
-        assert "denon-avr-controller v1.2.0-beta.5" in r.stdout
+        assert f"denon-avr-controller v{REPO_VERSION}" in r.stdout
         assert "[q] Quit" in r.stdout
         assert "[q] Quit | [r] Redraw" in r.stdout
-        assert "v1.2.0-beta.5[q]" not in r.stdout
-        assert re.search(r"v1\.2\.0-beta\.5 {2,}\[q\] Quit", r.stdout)
+        assert f"v{REPO_VERSION}[q]" not in r.stdout
+        assert re.search(rf"v{re.escape(REPO_VERSION)} {{2,}}\[q\] Quit", r.stdout)
 
     def test_dashboard_footer_narrow_keeps_key_hints(self):
         code = textwrap.dedent("""\
@@ -1845,30 +1855,30 @@ class TestDashboardDiagnostics:
         assert r.returncode == 0
         _assert_no_dashboard_helper_errors(r)
         assert "[q] Quit | [r] Redraw" in r.stdout
-        assert "v1.2.0-beta.5[q]" not in r.stdout
+        assert f"v{REPO_VERSION}[q]" not in r.stdout
         assert re.search(r" {2,}\[q\] Quit", r.stdout)
 
     def test_dashboard_strip_ansi_handles_script_generated_sgr_colors(self):
-        code = textwrap.dedent("""\
+        code = textwrap.dedent(f"""\
             dashboard_color_mode="always"
             dashboard_use_color=0
             _denon_dashboard_setup_color
-            colored="$(_denon_dashboard_c green "denon-avr-controller v1.2.0-beta.5")"
+            colored="$(_denon_dashboard_c green "denon-avr-controller v{REPO_VERSION}")"
             printf 'plain:%s\\n' "$(_denon_dashboard_strip_ansi "$colored")"
             printf 'width:%s\\n' "$(_denon_dashboard_visible_width "$colored")"
         """)
         r = _bash(code)
         assert r.returncode == 0
         _assert_no_dashboard_helper_errors(r)
-        assert "plain:denon-avr-controller v1.2.0-beta.5" in r.stdout
-        assert "width:34" in r.stdout
+        assert f"plain:denon-avr-controller v{REPO_VERSION}" in r.stdout
+        assert f"width:{len('denon-avr-controller v' + REPO_VERSION)}" in r.stdout
 
     def test_dashboard_footer_ansi_sequences_do_not_affect_width(self):
-        code = textwrap.dedent("""\
+        code = textwrap.dedent(f"""\
             dashboard_color_mode="always"
             dashboard_use_color=0
             _denon_dashboard_setup_color
-            colored_version="$(_denon_dashboard_c green "denon-avr-controller v1.2.0-beta.5")"
+            colored_version="$(_denon_dashboard_c green "denon-avr-controller v{REPO_VERSION}")"
             colored_q="$(_denon_dashboard_c yellow "[q]")"
             colored_r="$(_denon_dashboard_c yellow "[r]")"
             left="Updated 18:08:09 | Denon AVR-X1600H @ 192.0.2.10 | $colored_version"
@@ -1885,8 +1895,8 @@ class TestDashboardDiagnostics:
         assert "visible:120" in r.stdout
         assert "[q] Quit | [r] Redraw" in r.stdout
         plain = next(line.removeprefix("plain:") for line in r.stdout.splitlines() if line.startswith("plain:"))
-        assert "v1.2.0-beta.5[q]" not in plain
-        assert re.search(r"v1\.2\.0-beta\.5 {2,}\[q\] Quit", plain)
+        assert f"v{REPO_VERSION}[q]" not in plain
+        assert re.search(rf"v{re.escape(REPO_VERSION)} {{2,}}\[q\] Quit", plain)
 
     def test_dashboard_footer_color_enabled_has_no_helper_errors(self):
         code = textwrap.dedent("""\
@@ -1902,13 +1912,21 @@ class TestDashboardDiagnostics:
         r = _bash(code)
         assert r.returncode == 0
         _assert_no_dashboard_helper_errors(r)
-        assert "denon-avr-controller v1.2.0-beta.5" in r.stdout
+        assert f"denon-avr-controller v{REPO_VERSION}" in r.stdout
         assert "[q] Quit | [r] Redraw" in r.stdout
-        assert "v1.2.0-beta.5[q]" not in r.stdout
+        assert f"v{REPO_VERSION}[q]" not in r.stdout
 
-    def test_dashboard_footer_missing_version_does_not_crash(self):
-        code = textwrap.dedent("""\
+    def test_dashboard_footer_missing_version_does_not_crash(self, tmp_path):
+        fake_script = tmp_path / "denon.sh"
+        fake_script.write_text("# empty fallback script\n")
+        fake_denon = tmp_path / "denon"
+        fake_denon.write_text("#!/bin/sh\nexit 0\n")
+        fake_denon.chmod(0o755)
+
+        code = textwrap.dedent(f"""\
             DENON_CONTROLLER_VERSION=""
+            DENON_SCRIPT_PATH="{fake_script}"
+            PATH="{tmp_path}:/usr/bin:/bin"
             dash_receiver="Denon AVR-X1600H"
             dash_ip="192.0.2.10"
             dash_errors=""

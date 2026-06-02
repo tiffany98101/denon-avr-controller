@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # denon.sh — Denon AVR controller
-# Version: 1.2.0-beta.5
+# Version: 1.2.0-beta.6
 DENON_CONTROLLER_NAME="${DENON_CONTROLLER_NAME:-denon-avr-controller}"
-DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.5}"
+DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.6}"
 # Source this from bash, or run it directly:
 #   source ~/denon.sh
 #
@@ -5392,7 +5392,41 @@ EOF
   }
 
   _denon_tool_version_label() {
-    printf '%s v%s' "${DENON_CONTROLLER_NAME:-denon-avr-controller}" "${DENON_CONTROLLER_VERSION:-unknown}"
+    printf '%s v%s' "${DENON_CONTROLLER_NAME:-denon-avr-controller}" "$(_denon_tool_version)"
+  }
+
+  _denon_tool_version() {
+    local script_path script_dir version_file version
+
+    script_path=$(_denon_script_path 2>/dev/null || printf '')
+    if [[ -n "$script_path" ]]; then
+      script_dir=$(cd "$(dirname "$script_path")" 2>/dev/null && pwd)
+      version_file="${script_dir:-$PWD}/VERSION"
+      if [[ -r "$version_file" ]]; then
+        version=$(_denon_trim "$(sed -n '1p' "$version_file")")
+        if [[ -n "$version" ]]; then
+          printf '%s' "$version"
+          return 0
+        fi
+      fi
+      if [[ -r "$script_path" ]]; then
+        version=$(DENON_UNIT_TEST= bash "$script_path" --version 2>/dev/null | sed -n '1p')
+        version=$(_denon_trim "$version")
+        if [[ -n "$version" ]]; then
+          printf '%s' "$version"
+          return 0
+        fi
+      fi
+    fi
+
+    version=$(env DENON_UNIT_TEST= denon --version 2>/dev/null | sed -n '1p')
+    version=$(_denon_trim "$version")
+    if [[ -n "$version" ]]; then
+      printf '%s' "$version"
+      return 0
+    fi
+
+    printf '%s' "${DENON_CONTROLLER_VERSION:-unknown}"
   }
 
   _denon_dashboard_receiver_version_label() {
@@ -5496,7 +5530,9 @@ EOF
     if [[ "${watch:-0}" == "1" ]]; then
       if [[ "${dashboard_keyboard_active:-0}" == "1" ]]; then
         hints=$(_denon_dashboard_key_help_text "$width")
-        _denon_dashboard_fit "Control Target: ${dashboard_control_target:-Main}" "$width"
+        _denon_dashboard_compose_footer_line \
+          "Control Target: ${dashboard_control_target:-Main}" \
+          "$(_denon_tool_version_label)" "$width"
         printf '\n'
         _denon_dashboard_fit "$hints" "$width"
         printf '\n'

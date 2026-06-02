@@ -55,7 +55,7 @@ Release metadata status:
 - Tag `v1.2.0-beta.6` is the intended release tag.
 - `v1.2.0-beta.5` is already tagged and published; do not reuse it.
 - Confirm the new tag does not already exist locally or remotely immediately before tagging.
-- The RPM spec points at `v1.2.0-beta.6` via `%global tag_name v%{version_base}-%{pre_tag}` (`pre_tag beta.6`, `rpm_release 0.1.beta6`).
+- The RPM spec points at `v1.2.0-beta.6` via `%global tag_name v%{version_base}-%{pre_tag}` (`pre_tag beta.6`, `rpm_release 0.9.beta6`). The `rpm_release` counter is monotonic across the 1.2.0 pre-release series (…0.8.beta5 -> 0.9.beta6) so `dnf upgrade` orders cleanly.
 
 Before tagging, verify `VERSION`, `rpm/denon-avr-controller.spec`, and release notes all still match `1.2.0-beta.6`.
 
