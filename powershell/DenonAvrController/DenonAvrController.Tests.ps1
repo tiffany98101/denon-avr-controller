@@ -226,7 +226,16 @@ Describe 'Denon PowerShell TLS validation' {
 
                 $server = [DenonAvrController.Tests.TlsTestServer]::new($certificate, 'denon-ok')
                 try {
-                    $server.Start()
+                    try {
+                        $server.Start()
+                    }
+                    catch [System.Management.Automation.MethodInvocationException] {
+                        if ($_.Exception.Message -match 'Permission denied') {
+                            Set-ItResult -Skipped -Because 'sandbox denied loopback listener creation'
+                            return
+                        }
+                        throw
+                    }
                     Invoke-DenonHttpClientGet -Uri $server.Uri.AbsoluteUri -TimeoutSeconds 5 -SkipCertificateCheck $true -PinnedPublicKey "sha256//$pin" | Should -Be 'denon-ok'
                 }
                 finally {
@@ -380,6 +389,101 @@ Describe 'Denon PowerShell command payload parity' {
             Set-DenonZone2Source -Name phono
             $script:LastSetType | Should -Be 7
             $script:LastSetData | Should -Be '<Source zone="2" index="10"></Source>'
+        }
+    }
+}
+
+Describe 'Denon PowerShell parity additions' {
+    InModuleScope DenonAvrController {
+        BeforeEach {
+            $script:DenonReceiverConfig.IpAddress = '192.0.2.10'
+            $script:DenonReceiverConfig.SkipCertificateCheck = $true
+            $script:DenonReceiverConfig.MaxVolumeDb = -10.0
+        }
+
+        It 'exports the signal-debug and volume fade public commands' {
+            $commands = @(Get-Command -Module DenonAvrController | Select-Object -ExpandProperty Name)
+            $commands | Should -Contain 'Get-DenonSignalDebug'
+            $commands | Should -Contain 'Invoke-DenonVolumeFade'
+        }
+
+        It 'supports volume fade WhatIf and still enforces the max-volume cap' {
+            Mock Resolve-DenonReceiver { [pscustomobject]@{ IpAddress = '192.0.2.10'; Port = 10443; BaseUri = 'https://192.0.2.10:10443'; TimeoutSeconds = 1; SkipCertificateCheck = $true } }
+            Mock Get-DenonConfigXml { [xml]'<item><MainZone><Volume>400</Volume></MainZone></item>' }
+            Mock Get-DenonXmlValue { '400' }
+            Mock Invoke-DenonSetConfig { throw 'WhatIf should not send volume updates' }
+
+            $result = Invoke-DenonVolumeFade -45 -DurationSeconds 1 -WhatIf
+            $result.Action | Should -Be 'VolumeFade'
+            $result.Changed | Should -BeFalse
+            Should -Invoke Invoke-DenonSetConfig -Times 0
+            { Invoke-DenonVolumeFade -5 -DurationSeconds 1 } | Should -Throw -ExpectedMessage '*MaxVolumeDb=-10.0*'
+        }
+
+        It 'returns signal-debug raw field shape without decoder guessing' {
+            Mock Get-DenonStatus { [pscustomobject]@{ SourceIndex = 13; SourceName = 'HEOS Music' } }
+            Mock Get-DenonSources { @([pscustomobject]@{ Zone = 1; Index = 13; DisplayName = 'HEOS Music'; ReceiverName = 'HEOS Music'; Active = $true }) }
+            Mock Invoke-DenonTelnetCommand {
+                [pscustomobject]@{ ReceivedResponse = $true; Response = "$Command`r`nOPINF_SAMPLE`r`nMSDOLBY`r`n" }
+            }
+
+            $debug = Get-DenonSignalDebug
+            $debug.Title | Should -Be 'Signal diagnostics'
+            $debug.DecoderStatus | Should -Match 'no proven'
+            $debug.SelectedSource.Index | Should -Be 13
+            $debug.RawTelnetFields.SI.Count | Should -BeGreaterThan 0
+            $debug.SignalPresence | Should -Match 'undecoded'
+        }
+
+        It 'binds the dashboard parity parameters' {
+            $parameters = (Get-Command Show-DenonDashboard).Parameters
+            foreach ($name in @('Watch', 'IntervalSeconds', 'Diagnostics', 'Ascii', 'Unicode', 'Color')) {
+                $parameters.Keys | Should -Contain $name
+            }
+        }
+
+        It 'normalizes IPv4 candidates and rejects non-IPv4 values' {
+            ConvertTo-_DenonNormalizeIPv4 -Value ' 192.0.2.55 ' | Should -Be '192.0.2.55'
+            ConvertTo-_DenonNormalizeIPv4 -Value 'not-an-ip' | Should -BeNullOrEmpty
+            ConvertTo-_DenonNormalizeIPv4 -Value '2001:db8::1' | Should -BeNullOrEmpty
+        }
+
+        It 'uses mocked native mDNS discovery after configured candidates' {
+            Mock Get-DenonConfiguredValue {
+                if ($Name -eq 'DENON_SSDP_TIMEOUT') { '0.01' } else { $null }
+            }
+            Mock Get-DenonPlatformPath { Join-Path ([System.IO.Path]::GetTempPath()) 'missing-denon-cache-for-test' }
+            Mock Get-_DenonMdnsCandidate { @('192.0.2.44') }
+            Mock Invoke-DenonReceiverCandidateProbe {
+                if ($Candidate -contains '192.0.2.44') {
+                    [pscustomobject]@{ IpAddress = '192.0.2.44'; Responded = $true; IsDenon = $true }
+                }
+            }
+            Mock Get-_DenonArpCandidate { @('192.0.2.45') }
+
+            $found = Find-DenonReceiver
+            $found.IpAddress | Should -Be '192.0.2.44'
+            Should -Invoke Get-_DenonMdnsCandidate -Times 1
+            Should -Invoke Get-_DenonArpCandidate -Times 0
+        }
+
+        It 'falls back to mocked ARP discovery when earlier tiers do not match' {
+            Mock Get-DenonConfiguredValue {
+                if ($Name -eq 'DENON_SSDP_TIMEOUT') { '0.01' } else { $null }
+            }
+            Mock Get-DenonPlatformPath { Join-Path ([System.IO.Path]::GetTempPath()) 'missing-denon-cache-for-test' }
+            Mock Get-_DenonMdnsCandidate { @() }
+            Mock Get-_DenonArpCandidate { @('192.0.2.45') }
+            Mock Invoke-DenonReceiverCandidateProbe {
+                if ($Candidate -contains '192.0.2.45') {
+                    [pscustomobject]@{ IpAddress = '192.0.2.45'; Responded = $true; IsDenon = $true }
+                }
+            }
+
+            $found = Find-DenonReceiver
+            $found.IpAddress | Should -Be '192.0.2.45'
+            Should -Invoke Get-_DenonMdnsCandidate -Times 1
+            Should -Invoke Get-_DenonArpCandidate -Times 1
         }
     }
 }

@@ -435,8 +435,8 @@ Control examples:
 ```powershell
 Set-DenonPower -On
 Set-DenonMute -Off
-Set-DenonVolume -Db -42
-Step-DenonVolume -Db -1
+Set-DenonVolume -Decibel -42
+Step-DenonVolume -Decibel -1
 Set-DenonSource -Name "HEOS Music"
 Set-DenonZone2Power -Off
 Set-DenonSoundMode -Mode movie

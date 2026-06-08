@@ -176,7 +176,7 @@ These commands change AVR state:
 ```powershell
 Set-DenonMute -On
 Set-DenonMute -Off
-Step-DenonVolume -Db -1
+Step-DenonVolume -Decibel -1
 Set-DenonSource -Name "HEOS Music"
 Set-DenonZone2Source -Name "Phono"
 ```
@@ -191,8 +191,8 @@ Additional state-changing commands:
 
 - `Set-DenonPower -On`
 - `Set-DenonPower -Off`
-- `Set-DenonVolume -Db -42`
-- `Step-DenonVolume -Db 1`
+- `Set-DenonVolume -Decibel -42`
+- `Step-DenonVolume -Decibel 1`
 - `Set-DenonSource -Index 13`
 - `Set-DenonZone2Source -Name "Phono"`
 - `Set-DenonZone2Power -On`
@@ -200,7 +200,7 @@ Additional state-changing commands:
 - `Set-DenonZone2Mute -On`
 - `Set-DenonZone2Mute -Off`
 - `Set-DenonZone2Volume -Raw 650`
-- `Step-DenonZone2Volume -Db -1`
+- `Step-DenonZone2Volume -Decibel -1`
 - `Set-DenonSleep -Value 30`
 - `Invoke-DenonQuickSelect -Number 1`
 - `Set-DenonSoundMode -Mode movie`
@@ -288,7 +288,7 @@ Invoke-Pester ./powershell/DenonAvrController/DenonAvrController.Tests.ps1
 
 ## Remaining shell-specific gaps
 
-- The full-screen Bash dashboard has more detailed layout/watch behavior than
-  the intentionally simpler `Show-DenonDashboard`.
-- Avahi/mDNS and ARP/LAN scan discovery remain Bash-specific; PowerShell uses
-  configured IPs, cache, default IP, and SSDP.
+- Bash/zsh/fish completion file generation remains owned by `denon.sh`; the
+  module exposes completion metadata for native PowerShell use.
+- `dashboard-alt` remains the experimental Python preview and is not
+  reimplemented by this PowerShell module.

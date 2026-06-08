@@ -964,12 +964,12 @@ function ConvertTo-DenonRawVolume {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [double]$Db
+        [double]$Decibel
     )
 
-    $raw = [int][Math]::Round(($Db + 80.0) * 10.0, 0, [MidpointRounding]::AwayFromZero)
+    $raw = [int][Math]::Round(($Decibel + 80.0) * 10.0, 0, [MidpointRounding]::AwayFromZero)
     if ($raw -lt 0 -or $raw -gt 980) {
-        throw ('Volume {0} dB is outside the Denon raw range 0..980 (-80.0 dB to 18.0 dB).' -f $Db)
+        throw ('Volume {0} dB is outside the Denon raw range 0..980 (-80.0 dB to 18.0 dB).' -f $Decibel)
     }
 
     $raw
@@ -979,7 +979,7 @@ function Assert-DenonVolumeWithinMax {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [double]$Db,
+        [double]$Decibel,
 
         [switch]$AllowAboveMaxVolume
     )
@@ -989,7 +989,7 @@ function Assert-DenonVolumeWithinMax {
     }
 
     $maxVolumeDb = [double]$script:DenonReceiverConfig.MaxVolumeDb
-    if ($Db -gt $maxVolumeDb) {
+    if ($Decibel -gt $maxVolumeDb) {
         throw ('Refusing to set volume above MaxVolumeDb={0:N1} dB. Pass -AllowAboveMaxVolume to override for this command.' -f $maxVolumeDb)
     }
 }
@@ -1241,6 +1241,52 @@ function Get-DenonInfo {
         ModelName = $modelName
         MainZone = $mainStatus
         Zone2 = $zone2Status
+    }
+}
+
+function Get-DenonSignalDebug {
+    <#
+    .SYNOPSIS
+    Read-only: Shows raw input/signal diagnostics without guessing decoder state.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $status = Get-DenonStatus
+    $sources = @(Get-DenonSources -Zone 1)
+    $rawFields = [ordered]@{}
+    foreach ($query in @('SI?', 'OPINFINS ?', 'OPINFASP ?', 'MS?')) {
+        try {
+            $response = Invoke-DenonTelnetCommand -Command $query -ReadResponse -TimeoutMilliseconds 1500
+            $lines = @()
+            if ($response.ReceivedResponse) {
+                $lines = @($response.Response -split "`r`n|`n|`r" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            }
+            if ($query -eq 'MS?') {
+                $lines = @($lines | Where-Object { $_ -match '^(OPINF|SYS|MS)' })
+            }
+            $rawFields[$query] = if ($lines.Count -gt 0) { $lines } else { @('unavailable') }
+        }
+        catch {
+            $rawFields[$query] = @('unavailable: {0}' -f $_.Exception.Message)
+        }
+    }
+
+    [pscustomobject]@{
+        Title = 'Signal diagnostics'
+        DecoderStatus = 'no proven connected/live-signal mapping is enabled'
+        SelectedSource = [pscustomobject]@{
+            Index = $status.SourceIndex
+            Name = $status.SourceName
+        }
+        Sources = $sources
+        RawTelnetFields = [pscustomobject]@{
+            SI = $rawFields['SI?']
+            OPINFINS = $rawFields['OPINFINS ?']
+            OPINFASP = $rawFields['OPINFASP ?']
+            MSSignalRelatedLines = $rawFields['MS?']
+        }
+        SignalPresence = 'not available; OPINFINS/OPINFASP remain undecoded'
     }
 }
 
@@ -1879,19 +1925,100 @@ function Set-DenonVolume {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)]
-        [double]$Db,
+        [double]$Decibel,
+
+        [switch]$AllowAboveMaxVolume,
+
+        # Bash parity: Set-DenonVolume -Fade maps to denon vol --fade.
+        [switch]$Fade,
+
+        [ValidateScript({ $_ -gt 0 })]
+        [double]$DurationSeconds = 10.0
+    )
+
+    if ($Fade.IsPresent) {
+        Invoke-DenonVolumeFade $Decibel -DurationSeconds $DurationSeconds -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent -WhatIf:$WhatIfPreference
+        return
+    }
+
+    $receiver = Resolve-DenonReceiver
+    Assert-DenonVolumeWithinMax -Decibel $Decibel -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
+    $raw = ConvertTo-DenonRawVolume -Decibel $Decibel
+    $payload = '<MainZone><Volume>{0}</Volume></MainZone>' -f $raw
+
+    if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('set main zone volume to {0} dB' -f $Decibel))) {
+        Invoke-DenonSetConfig -Type 12 -Data $payload -Receiver $receiver
+        New-DenonSetResult -Receiver $receiver -Zone 'Main' -Action 'Volume' -Values @{ VolumeDb = [double]$Decibel; VolumeRaw = $raw }
+    }
+}
+
+function Invoke-DenonVolumeFade {
+    <#
+    .SYNOPSIS
+    State-changing: Fades main zone volume to a target dB value in 0.5 second steps.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)]
+        [double]$Decibel,
+
+        [ValidateScript({ $_ -gt 0 })]
+        [double]$DurationSeconds = 10.0,
 
         [switch]$AllowAboveMaxVolume
     )
 
     $receiver = Resolve-DenonReceiver
-    Assert-DenonVolumeWithinMax -Db $Db -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
-    $raw = ConvertTo-DenonRawVolume -Db $Db
-    $payload = '<MainZone><Volume>{0}</Volume></MainZone>' -f $raw
+    Assert-DenonVolumeWithinMax -Decibel $Decibel -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
+    $volumeXml = Get-DenonConfigXml -Type 12 -Receiver $receiver
+    $rawVolume = Get-DenonXmlValue -Xml $volumeXml -XPath '//*[local-name()="MainZone"]/*[local-name()="Volume"]'
+    if ([string]::IsNullOrWhiteSpace($rawVolume)) {
+        throw 'Could not read current main zone volume.'
+    }
 
-    if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('set main zone volume to {0} dB' -f $Db))) {
-        Invoke-DenonSetConfig -Type 12 -Data $payload -Receiver $receiver
-        New-DenonSetResult -Receiver $receiver -Zone 'Main' -Action 'Volume' -Values @{ VolumeDb = [double]$Db; VolumeRaw = $raw }
+    $currentDb = ConvertFrom-DenonRawVolume -Raw $rawVolume
+    if ($null -eq $currentDb) {
+        throw 'Could not parse current main zone volume.'
+    }
+
+    if ([Math]::Abs([double]$currentDb - $Decibel) -lt 0.05) {
+        return [pscustomobject]@{
+            IpAddress = $receiver.IpAddress
+            Zone = 'Main'
+            Action = 'VolumeFade'
+            PreviousVolumeDb = [double]$currentDb
+            VolumeDb = [double]$Decibel
+            DurationSeconds = [double]$DurationSeconds
+            Steps = 0
+            Changed = $false
+        }
+    }
+
+    $stepIntervalSeconds = 0.5
+    $steps = [Math]::Max(1, [int][Math]::Round($DurationSeconds / $stepIntervalSeconds, 0, [MidpointRounding]::AwayFromZero))
+    $sent = New-Object System.Collections.Generic.List[double]
+    if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('fade main zone volume from {0} dB to {1} dB over {2} seconds' -f $currentDb, $Decibel, $DurationSeconds))) {
+        for ($i = 1; $i -le $steps; $i++) {
+            $stepDb = [Math]::Round(([double]$currentDb + (($Decibel - [double]$currentDb) * $i / $steps)), 1)
+            $stepRaw = ConvertTo-DenonRawVolume -Decibel $stepDb
+            Invoke-DenonSetConfig -Type 12 -Data ('<MainZone><Volume>{0}</Volume></MainZone>' -f $stepRaw) -Receiver $receiver
+            $sent.Add($stepDb)
+            if ($i -lt $steps) {
+                Start-Sleep -Milliseconds ([int]($stepIntervalSeconds * 1000))
+            }
+        }
+    }
+
+    [pscustomobject]@{
+        IpAddress = $receiver.IpAddress
+        Zone = 'Main'
+        Action = 'VolumeFade'
+        PreviousVolumeDb = [double]$currentDb
+        VolumeDb = [double]$Decibel
+        DurationSeconds = [double]$DurationSeconds
+        Steps = $steps
+        StepVolumeDb = @($sent)
+        Changed = ($sent.Count -gt 0)
     }
 }
 
@@ -1903,7 +2030,7 @@ function Step-DenonVolume {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)]
-        [double]$Db,
+        [double]$Decibel,
 
         [switch]$AllowAboveMaxVolume
     )
@@ -1916,16 +2043,16 @@ function Step-DenonVolume {
     }
 
     $currentDb = ConvertFrom-DenonRawVolume -Raw $rawVolume
-    $targetDb = [Math]::Round(([double]$currentDb + $Db), 1)
-    Assert-DenonVolumeWithinMax -Db $targetDb -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
-    $targetRaw = ConvertTo-DenonRawVolume -Db $targetDb
+    $targetDb = [Math]::Round(([double]$currentDb + $Decibel), 1)
+    Assert-DenonVolumeWithinMax -Decibel $targetDb -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
+    $targetRaw = ConvertTo-DenonRawVolume -Decibel $targetDb
     $payload = '<MainZone><Volume>{0}</Volume></MainZone>' -f $targetRaw
 
-    if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('step main zone volume by {0} dB to {1} dB' -f $Db, $targetDb))) {
+    if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('step main zone volume by {0} dB to {1} dB' -f $Decibel, $targetDb))) {
         Invoke-DenonSetConfig -Type 12 -Data $payload -Receiver $receiver
         New-DenonSetResult -Receiver $receiver -Zone 'Main' -Action 'StepVolume' -Values @{
             PreviousVolumeDb = $currentDb
-            DeltaDb = [double]$Db
+            DeltaDb = [double]$Decibel
             VolumeDb = $targetDb
             VolumeRaw = $targetRaw
         }
@@ -2115,7 +2242,7 @@ function Set-DenonZone2Volume {
 
     $receiver = Resolve-DenonReceiver
     $targetDb = ConvertFrom-DenonRawVolume -Raw ([string]$Raw)
-    Assert-DenonVolumeWithinMax -Db $targetDb -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
+    Assert-DenonVolumeWithinMax -Decibel $targetDb -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
     $payload = '<Zone2><Volume>{0}</Volume></Zone2>' -f $Raw
 
     if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('set Zone 2 raw volume to {0}' -f $Raw))) {
@@ -2135,7 +2262,7 @@ function Step-DenonZone2Volume {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)]
-        [double]$Db,
+        [double]$Decibel,
 
         [switch]$AllowAboveMaxVolume
     )
@@ -2148,16 +2275,16 @@ function Step-DenonZone2Volume {
     }
 
     $currentDb = ConvertFrom-DenonRawVolume -Raw $rawVolume
-    $targetDb = [Math]::Round(([double]$currentDb + $Db), 1)
-    Assert-DenonVolumeWithinMax -Db $targetDb -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
-    $targetRaw = ConvertTo-DenonRawVolume -Db $targetDb
+    $targetDb = [Math]::Round(([double]$currentDb + $Decibel), 1)
+    Assert-DenonVolumeWithinMax -Decibel $targetDb -AllowAboveMaxVolume:$AllowAboveMaxVolume.IsPresent
+    $targetRaw = ConvertTo-DenonRawVolume -Decibel $targetDb
     $payload = '<Zone2><Volume>{0}</Volume></Zone2>' -f $targetRaw
 
-    if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('step Zone 2 volume by {0} dB to raw {1}' -f $Db, $targetRaw))) {
+    if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('step Zone 2 volume by {0} dB to raw {1}' -f $Decibel, $targetRaw))) {
         Invoke-DenonSetConfig -Type 12 -Data $payload -Receiver $receiver
         New-DenonSetResult -Receiver $receiver -Zone 'Zone2' -Action 'StepVolume' -Values @{
             PreviousVolumeDb = $currentDb
-            DeltaDb = [double]$Db
+            DeltaDb = [double]$Decibel
             VolumeDb = $targetDb
             VolumeRaw = $targetRaw
         }
@@ -2190,6 +2317,259 @@ function Set-DenonReceiverIp {
     }
 }
 
+function ConvertTo-_DenonNormalizeIPv4 {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($Value.Trim(), [ref]$ip)) { return $null }
+    if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $null }
+    $ip.ToString()
+}
+
+function Get-_DenonArpCandidate {
+    [CmdletBinding()]
+    param()
+
+    $seen = @{}
+    $add = {
+        param([string]$Candidate)
+        $ip = ConvertTo-_DenonNormalizeIPv4 -Value $Candidate
+        if ($null -ne $ip -and -not $seen.ContainsKey($ip)) {
+            $seen[$ip] = $true
+            $ip
+        }
+    }
+
+    if ($IsLinux -and (Test-Path -LiteralPath '/proc/net/arp' -PathType Leaf)) {
+        foreach ($line in Get-Content -LiteralPath '/proc/net/arp' -ErrorAction SilentlyContinue) {
+            if ($line -match '^\s*([0-9]{1,3}(?:\.[0-9]{1,3}){3})\s+') {
+                & $add $Matches[1]
+            }
+        }
+    }
+
+    $ipCommand = Get-Command ip -ErrorAction SilentlyContinue
+    if ($null -ne $ipCommand) {
+        try {
+            foreach ($line in & $ipCommand.Source -4 neigh show 2>$null) {
+                if ($line -match '^\s*([0-9]{1,3}(?:\.[0-9]{1,3}){3})\s+') {
+                    & $add $Matches[1]
+                }
+            }
+        }
+        catch {
+            Write-Verbose ('ip neighbor discovery failed: {0}' -f $_.Exception.Message)
+        }
+    }
+
+    $arpCommand = Get-Command arp -ErrorAction SilentlyContinue
+    if ($null -ne $arpCommand) {
+        try {
+            foreach ($line in & $arpCommand.Source -a 2>$null) {
+                foreach ($match in [regex]::Matches($line, '(?<![0-9])([0-9]{1,3}(?:\.[0-9]{1,3}){3})(?![0-9])')) {
+                    & $add $match.Groups[1].Value
+                }
+            }
+        }
+        catch {
+            Write-Verbose ('arp discovery failed: {0}' -f $_.Exception.Message)
+        }
+    }
+}
+
+function Read-DenonDnsName {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$Packet,
+
+        [Parameter(Mandatory = $true)]
+        [ref]$Offset
+    )
+
+    $labels = New-Object System.Collections.Generic.List[string]
+    $pos = [int]$Offset.Value
+    $jumped = $false
+    $visited = @{}
+    $limit = $Packet.Length
+    for ($guard = 0; $guard -lt 128; $guard++) {
+        if ($pos -lt 0 -or $pos -ge $limit) { throw 'mDNS name offset outside packet.' }
+        if ($visited.ContainsKey($pos)) { throw 'mDNS compressed name loop detected.' }
+        $visited[$pos] = $true
+        $len = [int]$Packet[$pos]
+        if (($len -band 0xC0) -eq 0xC0) {
+            if (($pos + 1) -ge $limit) { throw 'mDNS compressed pointer truncated.' }
+            $pointer = (($len -band 0x3F) -shl 8) -bor [int]$Packet[$pos + 1]
+            if ($pointer -ge $limit) { throw 'mDNS compressed pointer outside packet.' }
+            if (-not $jumped) { $Offset.Value = $pos + 2 }
+            $pos = $pointer
+            $jumped = $true
+            continue
+        }
+        if (($len -band 0xC0) -ne 0) { throw 'mDNS invalid label length.' }
+        $pos++
+        if ($len -eq 0) {
+            if (-not $jumped) { $Offset.Value = $pos }
+            return ($labels -join '.')
+        }
+        if (($pos + $len) -gt $limit) { throw 'mDNS label exceeds packet.' }
+        $labels.Add([System.Text.Encoding]::ASCII.GetString($Packet, $pos, $len))
+        $pos += $len
+    }
+    throw 'mDNS name parse guard exceeded.'
+}
+
+function Write-DenonDnsName {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $bytes = New-Object System.Collections.Generic.List[byte]
+    foreach ($label in $Name.TrimEnd('.').Split('.')) {
+        if ($label.Length -gt 63) { throw ('DNS label too long: {0}' -f $label) }
+        $labelBytes = [System.Text.Encoding]::ASCII.GetBytes($label)
+        $bytes.Add([byte]$labelBytes.Length)
+        $bytes.AddRange($labelBytes)
+    }
+    $bytes.Add([byte]0)
+    $bytes.ToArray()
+}
+
+function Read-DenonUInt16Network {
+    [CmdletBinding()]
+    param([byte[]]$Packet, [int]$Offset)
+    if ($Offset -lt 0 -or ($Offset + 1) -ge $Packet.Length) { throw 'mDNS uint16 outside packet.' }
+    ([int]$Packet[$Offset] -shl 8) -bor [int]$Packet[$Offset + 1]
+}
+
+function Get-_DenonMdnsCandidate {
+    [CmdletBinding()]
+    param(
+        [int]$TimeoutMilliseconds = 2000
+    )
+
+    $services = @('_heos-audio._tcp.local', '_airplay._tcp.local')
+    foreach ($service in $services) {
+        $addresses = @{}
+        $serviceTargets = @{}
+        $airplayDenonNames = @{}
+        $udp = $null
+        try {
+            $udp = [System.Net.Sockets.UdpClient]::new()
+            $udp.Client.ReceiveTimeout = $TimeoutMilliseconds
+            $endpoint = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Parse('224.0.0.251'), 5353)
+            $query = New-Object System.Collections.Generic.List[byte]
+            $query.AddRange([byte[]](0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+            $query.AddRange((Write-DenonDnsName -Name $service))
+            $query.AddRange([byte[]](0, 12, 0, 1))
+            $packet = $query.ToArray()
+            [void]$udp.Send($packet, $packet.Length, $endpoint)
+            $remote = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
+            $started = [DateTime]::UtcNow
+            while (([DateTime]::UtcNow - $started).TotalMilliseconds -lt $TimeoutMilliseconds) {
+                $response = $udp.Receive([ref]$remote)
+                if ($response.Length -lt 12) { continue }
+                $qd = Read-DenonUInt16Network -Packet $response -Offset 4
+                $an = Read-DenonUInt16Network -Packet $response -Offset 6
+                $ns = Read-DenonUInt16Network -Packet $response -Offset 8
+                $ar = Read-DenonUInt16Network -Packet $response -Offset 10
+                $offset = 12
+                for ($i = 0; $i -lt $qd; $i++) {
+                    $ref = [ref]$offset
+                    [void](Read-DenonDnsName -Packet $response -Offset $ref)
+                    $offset = $ref.Value + 4
+                    if ($offset -gt $response.Length) { throw 'mDNS question exceeds packet.' }
+                }
+                $records = $an + $ns + $ar
+                for ($i = 0; $i -lt $records; $i++) {
+                    $ref = [ref]$offset
+                    $name = Read-DenonDnsName -Packet $response -Offset $ref
+                    $offset = $ref.Value
+                    if (($offset + 10) -gt $response.Length) { throw 'mDNS record header exceeds packet.' }
+                    $type = Read-DenonUInt16Network -Packet $response -Offset $offset
+                    $offset += 2
+                    $class = Read-DenonUInt16Network -Packet $response -Offset $offset
+                    $offset += 2
+                    $offset += 4
+                    $rdLength = Read-DenonUInt16Network -Packet $response -Offset $offset
+                    $offset += 2
+                    if (($offset + $rdLength) -gt $response.Length) { throw 'mDNS record data exceeds packet.' }
+                    $rdataOffset = $offset
+                    $offset += $rdLength
+
+                    if ($type -eq 12) {
+                        $ptrRef = [ref]$rdataOffset
+                        $ptr = Read-DenonDnsName -Packet $response -Offset $ptrRef
+                        if ($name.Equals($service, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $serviceTargets[$ptr] = $true
+                        }
+                    }
+                    elseif ($type -eq 33 -and $serviceTargets.ContainsKey($name)) {
+                        if (($rdataOffset + 6) -gt $response.Length) { continue }
+                        $targetOffset = $rdataOffset + 6
+                        $targetRef = [ref]$targetOffset
+                        $target = Read-DenonDnsName -Packet $response -Offset $targetRef
+                        $serviceTargets[$target] = $true
+                    }
+                    elseif ($type -eq 16 -and $service -like '_airplay*' -and $serviceTargets.ContainsKey($name)) {
+                        $txtOffset = $rdataOffset
+                        while ($txtOffset -lt ($rdataOffset + $rdLength)) {
+                            $txtLength = [int]$response[$txtOffset]
+                            $txtOffset++
+                            if (($txtOffset + $txtLength) -gt ($rdataOffset + $rdLength)) { break }
+                            $txt = [System.Text.Encoding]::ASCII.GetString($response, $txtOffset, $txtLength)
+                            if ($txt -match '(?i)^manufacturer=Denon$') { $airplayDenonNames[$name] = $true }
+                            $txtOffset += $txtLength
+                        }
+                    }
+                    elseif ($type -eq 1 -and (($class -band 0x7FFF) -eq 1) -and $rdLength -eq 4) {
+                        $ipBytes = [byte[]]($response[$rdataOffset..($rdataOffset + 3)])
+                        $addresses[$name] = [System.Net.IPAddress]::new($ipBytes).ToString()
+                    }
+                }
+                foreach ($target in @($serviceTargets.Keys)) {
+                    if ($service -like '_airplay*' -and -not $airplayDenonNames.ContainsKey($target)) { continue }
+                    if ($addresses.ContainsKey($target)) { $addresses[$target] }
+                }
+            }
+        }
+        catch {
+            Write-Verbose ('mDNS discovery failed for {0}: {1}' -f $service, $_.Exception.Message)
+        }
+        finally {
+            if ($null -ne $udp) { $udp.Dispose() }
+        }
+    }
+}
+
+function Invoke-DenonReceiverCandidateProbe {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [string[]]$Candidate
+    )
+
+    $seen = @{}
+    foreach ($candidateValue in $Candidate) {
+        $candidate = ConvertTo-_DenonNormalizeIPv4 -Value $candidateValue
+        if ($null -eq $candidate -or $seen.ContainsKey($candidate)) { continue }
+        $seen[$candidate] = $true
+        Set-DenonReceiver -IpAddress $candidate | Out-Null
+        $test = Test-DenonReceiver
+        if ($test.Responded -and $test.IsDenon) {
+            Set-DenonReceiverIp -IpAddress $candidate | Out-Null
+            return $test
+        }
+    }
+}
+
 function Find-DenonReceiver {
     <#
     .SYNOPSIS
@@ -2210,13 +2590,8 @@ function Find-DenonReceiver {
             $(if (Test-Path -LiteralPath (Get-DenonPlatformPath -Kind Cache) -PathType Leaf) { (Get-Content -LiteralPath (Get-DenonPlatformPath -Kind Cache) -Raw).Trim() }),
             (Get-DenonConfiguredValue -Name 'DENON_DEFAULT_IP')
         )) {
-        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
-        Set-DenonReceiver -IpAddress $candidate | Out-Null
-        $test = Test-DenonReceiver
-        if ($test.Responded -and $test.IsDenon) {
-            Set-DenonReceiverIp -IpAddress $candidate
-            return $test
-        }
+        $test = Invoke-DenonReceiverCandidateProbe -Candidate @($candidate)
+        if ($null -ne $test) { return $test }
     }
 
     $timeout = Get-DenonConfiguredValue -Name 'DENON_SSDP_TIMEOUT'
@@ -2227,6 +2602,9 @@ function Find-DenonReceiver {
             $timeoutMs = [int]($parsed * 1000)
         }
     }
+
+    $test = Invoke-DenonReceiverCandidateProbe -Candidate @(Get-_DenonMdnsCandidate -TimeoutMilliseconds $timeoutMs)
+    if ($null -ne $test) { return $test }
 
     try {
         $udp = New-Object System.Net.Sockets.UdpClient
@@ -2259,6 +2637,9 @@ function Find-DenonReceiver {
     finally {
         if ($null -ne $udp) { $udp.Dispose() }
     }
+
+    $test = Invoke-DenonReceiverCandidateProbe -Candidate @(Get-_DenonArpCandidate)
+    if ($null -ne $test) { return $test }
 
     throw 'No Denon receiver found.'
 }
@@ -2722,7 +3103,7 @@ function Invoke-DenonListeningPreset {
     if ($PSCmdlet.ShouldProcess($receiver.IpAddress, ('apply {0} preset' -f $Name))) {
         Set-DenonPower -On | Out-Null
         Set-DenonSource -Name $source | Out-Null
-        Set-DenonVolume -Db ([double]$volume) | Out-Null
+        Set-DenonVolume ([double]$volume) | Out-Null
         if (-not [string]::IsNullOrWhiteSpace($mode)) {
             Set-DenonSoundMode -Mode $mode | Out-Null
         }
@@ -3062,6 +3443,7 @@ function Invoke-DenonCommand {
         'version' { $script:DenonControllerVersion }
         'status' { Get-DenonStatus }
         'info' { Get-DenonInfo }
+        'signal-debug' { Get-DenonSignalDebug }
         'dashboard' { Show-DenonDashboard }
         'sources' { Get-DenonSources -Zone $(if ($rest.Count -and $rest[0] -eq '2') { 2 } else { 1 }) }
         'source' { Set-DenonSource -Name ($rest -join ' ') }
@@ -3075,11 +3457,21 @@ function Invoke-DenonCommand {
         'toggle' { Switch-DenonPowerOrMute -Target $(if ($rest.Count) { $rest[0] } else { 'mute' }) }
         'vol' {
             if ($rest.Count -eq 0) { (Get-DenonStatus).VolumeDb }
-            elseif ($rest[0].StartsWith('+')) { Step-DenonVolume -Db ([double]$rest[0].Substring(1)) }
-            else { Set-DenonVolume -Db ([double]$rest[0]) }
+            elseif ($rest[0] -in @('--fade', 'fade')) {
+                $duration = 10.0
+                for ($i = 2; $i -lt $rest.Count; $i++) {
+                    if ($rest[$i] -in @('--duration', '-d') -and ($i + 1) -lt $rest.Count) {
+                        $duration = [double]$rest[$i + 1]
+                        $i++
+                    }
+                }
+                Invoke-DenonVolumeFade ([double]$rest[1]) -DurationSeconds $duration
+            }
+            elseif ($rest[0].StartsWith('+')) { Step-DenonVolume ([double]$rest[0].Substring(1)) }
+            else { Set-DenonVolume ([double]$rest[0]) }
         }
-        'up' { Step-DenonVolume -Db $(if ($rest.Count) { [double]$rest[0] } else { [double]$defaultStep }) }
-        'down' { Step-DenonVolume -Db -($(if ($rest.Count) { [double]$rest[0] } else { [double]$defaultStep })) }
+        'up' { Step-DenonVolume $(if ($rest.Count) { [double]$rest[0] } else { [double]$defaultStep }) }
+        'down' { Step-DenonVolume -($(if ($rest.Count) { [double]$rest[0] } else { [double]$defaultStep })) }
         'mode' { Set-DenonSoundMode -Mode $rest[0] }
         'dyn-eq' { Set-DenonDynamicEq -State $rest[0] }
         'dyn-vol' { Set-DenonDynamicVolume -Level $rest[0] }
@@ -3148,8 +3540,8 @@ function Invoke-DenonCommand {
             elseif ($sub -eq 'mute') { Set-DenonZone2Mute -On }
             elseif ($sub -eq 'unmute') { Set-DenonZone2Mute -Off }
             elseif ($sub -in @('vol', 'volume')) { Set-DenonZone2Volume -Raw ([int]$rest[1]) }
-            elseif ($sub -eq 'up') { Step-DenonZone2Volume -Db $(if ($rest.Count -gt 1) { [double]$rest[1] } else { 1 }) }
-            elseif ($sub -eq 'down') { Step-DenonZone2Volume -Db -($(if ($rest.Count -gt 1) { [double]$rest[1] } else { 1 })) }
+            elseif ($sub -eq 'up') { Step-DenonZone2Volume $(if ($rest.Count -gt 1) { [double]$rest[1] } else { 1 }) }
+            elseif ($sub -eq 'down') { Step-DenonZone2Volume -($(if ($rest.Count -gt 1) { [double]$rest[1] } else { 1 })) }
             elseif ($sub -eq 'sleep') { if ($rest.Count -gt 1) { Set-DenonSleep -Zone 2 -Value $rest[1] } else { Get-DenonSleep -Zone 2 } }
             else { throw 'Unsupported zone2 subcommand.' }
         }
@@ -3180,51 +3572,310 @@ function Test-DenonAnsiSupport {
     return $false
 }
 
+function Add-DenonDashboardEvent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.List[string]]$Events,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+    $Events.Insert(0, ('{0:HH:mm:ss} {1}' -f (Get-Date), $Message))
+    while ($Events.Count -gt 8) {
+        $Events.RemoveAt($Events.Count - 1)
+    }
+}
+
+function Test-DenonDashboardTransportChanged {
+    [CmdletBinding()]
+    param(
+        [AllowNull()]
+        [psobject]$Before,
+
+        [AllowNull()]
+        [psobject]$After,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Action
+    )
+
+    if ($null -eq $After) { return $false }
+    if ($Action -eq 'play_pause') {
+        return ($null -ne $Before -and -not [string]::IsNullOrWhiteSpace($Before.State) -and
+            -not [string]::IsNullOrWhiteSpace($After.State) -and $Before.State -ne $After.State)
+    }
+    $beforeSignature = if ($null -eq $Before) { '' } else { '{0}|{1}|{2}' -f $Before.Title, $Before.Artist, $Before.Album }
+    $afterSignature = '{0}|{1}|{2}' -f $After.Title, $After.Artist, $After.Album
+    -not [string]::IsNullOrWhiteSpace($beforeSignature.Trim('|')) -and
+        -not [string]::IsNullOrWhiteSpace($afterSignature.Trim('|')) -and
+        $beforeSignature -ne $afterSignature
+}
+
+function Invoke-DenonDashboardTransportAction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('previous', 'next', 'play_pause')]
+        [string]$Action
+    )
+
+    $before = Get-DenonNowPlaying
+    $transportAction = switch ($Action) {
+        'previous' { 'previous' }
+        'next' { 'next' }
+        'play_pause' {
+            if ($null -ne $before -and $before.State -match '^(?i:play|playing)$') { 'pause' } else { 'play' }
+        }
+    }
+    Invoke-DenonTransport -Action $transportAction | Out-Null
+    Start-Sleep -Milliseconds 750
+    $after = Get-DenonNowPlaying
+    [pscustomobject]@{
+        Action = $Action
+        Sent = $true
+        Verified = (Test-DenonDashboardTransportChanged -Before $before -After $after -Action $Action)
+        Before = $before
+        After = $after
+    }
+}
+
+function Invoke-DenonDashboardKey {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.ConsoleKeyInfo]$Key,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.List[string]]$Events,
+
+        [Parameter(Mandatory = $true)]
+        [ref]$ControlTarget,
+
+        [Parameter(Mandatory = $true)]
+        [ref]$NumericBuffer,
+
+        [Parameter(Mandatory = $true)]
+        [ref]$LastCommandAt
+    )
+
+    $now = [DateTime]::UtcNow
+    $throttled = ($LastCommandAt.Value -is [DateTime] -and ($now - $LastCommandAt.Value).TotalMilliseconds -lt 250)
+    $runStateCommand = {
+        param([scriptblock]$Command, [string]$EventName)
+        if ($throttled) {
+            Add-DenonDashboardEvent -Events $Events -Message ('{0}: throttled' -f $EventName)
+            return
+        }
+        try {
+            & $Command | Out-Null
+            $LastCommandAt.Value = [DateTime]::UtcNow
+            Add-DenonDashboardEvent -Events $Events -Message ('{0}: sent' -f $EventName)
+        }
+        catch {
+            Add-DenonDashboardEvent -Events $Events -Message ('{0}: failed: {1}' -f $EventName, $_.Exception.Message)
+        }
+    }
+
+    if ([char]::IsDigit($Key.KeyChar)) {
+        $NumericBuffer.Value = ('{0}{1}' -f $NumericBuffer.Value, $Key.KeyChar)
+        $sourceNumber = [int]$NumericBuffer.Value
+        try {
+            $sources = @(Get-DenonSources -Zone 1)
+            $hasLonger = @($sources | Where-Object { ([string]$_.Index).StartsWith([string]$sourceNumber) -and $_.Index -ne $sourceNumber }).Count -gt 0
+            $match = $sources | Where-Object { $_.Index -eq $sourceNumber } | Select-Object -First 1
+            if ($null -ne $match -and -not $hasLonger) {
+                & $runStateCommand { Set-DenonSource -Index $sourceNumber } ('Source {0} {1}' -f $sourceNumber, $match.DisplayName)
+                $NumericBuffer.Value = ''
+            }
+            elseif ($null -eq $match -and -not $hasLonger) {
+                Add-DenonDashboardEvent -Events $Events -Message ('Source {0}: no-change' -f $sourceNumber)
+                $NumericBuffer.Value = ''
+            }
+        }
+        catch {
+            Add-DenonDashboardEvent -Events $Events -Message ('Source {0}: failed: {1}' -f $sourceNumber, $_.Exception.Message)
+            $NumericBuffer.Value = ''
+        }
+        return $false
+    }
+
+    $NumericBuffer.Value = ''
+    switch ($Key.Key) {
+        'Q' { return $true }
+        'Z' {
+            $ControlTarget.Value = if ($ControlTarget.Value -eq 'Main') { 'Zone2' } else { 'Main' }
+            Add-DenonDashboardEvent -Events $Events -Message ('Control Target: {0}' -f $ControlTarget.Value)
+        }
+        'M' {
+            & $runStateCommand {
+                if ($ControlTarget.Value -eq 'Zone2') {
+                    $zone2 = Get-DenonZone2Status
+                    Set-DenonZone2Mute -On:($zone2.Muted -ne $true) -Off:($zone2.Muted -eq $true)
+                }
+                else {
+                    $status = Get-DenonStatus
+                    Set-DenonMute -On:($status.Muted -ne $true) -Off:($status.Muted -eq $true)
+                }
+            } 'Mute'
+        }
+        'UpArrow' {
+            & $runStateCommand {
+                if ($ControlTarget.Value -eq 'Zone2') { Step-DenonZone2Volume 1 } else { Step-DenonVolume 1 }
+            } 'Volume up'
+        }
+        'DownArrow' {
+            & $runStateCommand {
+                if ($ControlTarget.Value -eq 'Zone2') { Step-DenonZone2Volume -1 } else { Step-DenonVolume -1 }
+            } 'Volume down'
+        }
+        'LeftArrow' {
+            try {
+                $result = Invoke-DenonDashboardTransportAction -Action previous
+                Add-DenonDashboardEvent -Events $Events -Message $(if ($result.Verified) { 'Transport previous: sent, verified' } else { 'Transport previous: sent, no-change verified' })
+            }
+            catch {
+                Add-DenonDashboardEvent -Events $Events -Message ('Transport previous: failed: {0}' -f $_.Exception.Message)
+            }
+        }
+        'RightArrow' {
+            try {
+                $result = Invoke-DenonDashboardTransportAction -Action next
+                Add-DenonDashboardEvent -Events $Events -Message $(if ($result.Verified) { 'Transport next: sent, verified' } else { 'Transport next: sent, no-change verified' })
+            }
+            catch {
+                Add-DenonDashboardEvent -Events $Events -Message ('Transport next: failed: {0}' -f $_.Exception.Message)
+            }
+        }
+        'Spacebar' {
+            try {
+                $result = Invoke-DenonDashboardTransportAction -Action play_pause
+                Add-DenonDashboardEvent -Events $Events -Message $(if ($result.Verified) { 'Transport play/pause: sent, verified' } else { 'Transport play/pause: sent, no-change verified' })
+            }
+            catch {
+                Add-DenonDashboardEvent -Events $Events -Message ('Transport play/pause: failed: {0}' -f $_.Exception.Message)
+            }
+        }
+    }
+    return $false
+}
+
+function Write-DenonDashboardFrame {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Info,
+
+        [AllowNull()]
+        [psobject]$NowPlaying,
+
+        [string[]]$Events = @(),
+
+        [string]$ControlTarget = 'Main',
+
+        [switch]$Diagnostics,
+
+        [ValidateSet('Ascii', 'Unicode')]
+        [string]$Charset = 'Unicode',
+
+        [ValidateSet('auto', 'always', 'never')]
+        [string]$Color = 'auto'
+    )
+
+    $useColor = $Color -eq 'always' -or ($Color -eq 'auto' -and (Test-DenonAnsiSupport))
+    $escape = [char]27
+    $title = 'Denon AVR Controller'
+    if ($useColor) { Write-Host ('{0}[1m{1}{0}[0m' -f $escape, $title) } else { Write-Host $title }
+    Write-Host ('Control Target: {0}' -f $ControlTarget)
+    Write-Host ('Receiver: {0}' -f $(if ([string]::IsNullOrWhiteSpace($Info.Receiver)) { 'Unknown' } else { $Info.Receiver }))
+    Write-Host ('IP:       {0}:{1}' -f $Info.IpAddress, $Info.Port)
+    Write-Host ''
+    Write-Host 'Main Zone'
+    Write-Host ('  Power:  {0}' -f $Info.MainZone.Power)
+    Write-Host ('  Source: {0} ({1})' -f $Info.MainZone.SourceName, $Info.MainZone.SourceIndex)
+    Write-Host ('  Volume: {0} dB' -f $(if ($null -eq $Info.MainZone.VolumeDb) { 'Unknown' } else { $Info.MainZone.VolumeDb }))
+    Write-Host ('  Muted:  {0}' -f (ConvertTo-DenonMuteLabel -Muted $Info.MainZone.Muted))
+    Write-Host ''
+    Write-Host 'Zone 2'
+    Write-Host ('  Power:  {0}' -f $Info.Zone2.Power)
+    Write-Host ('  Source: {0} ({1})' -f $Info.Zone2.SourceName, $Info.Zone2.SourceIndex)
+    Write-Host ('  Volume: {0} dB (raw {1})' -f $(if ($null -eq $Info.Zone2.VolumeDb) { 'Unknown' } else { $Info.Zone2.VolumeDb }), $(if ($null -eq $Info.Zone2.VolumeRaw) { 'Unknown' } else { $Info.Zone2.VolumeRaw }))
+    Write-Host ('  Muted:  {0}' -f (ConvertTo-DenonMuteLabel -Muted $Info.Zone2.Muted))
+
+    if ($null -ne $NowPlaying -and (
+            -not [string]::IsNullOrWhiteSpace($NowPlaying.Title) -or
+            -not [string]::IsNullOrWhiteSpace($NowPlaying.State) -or
+            -not [string]::IsNullOrWhiteSpace($NowPlaying.Service))) {
+        Write-Host ''
+        Write-Host 'Now Playing'
+        Write-Host ('  Title:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($NowPlaying.Title)) { 'Unknown' } else { $NowPlaying.Title }))
+        Write-Host ('  Artist:  {0}' -f $(if ([string]::IsNullOrWhiteSpace($NowPlaying.Artist)) { 'Unknown' } else { $NowPlaying.Artist }))
+        Write-Host ('  Album:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($NowPlaying.Album)) { 'Unknown' } else { $NowPlaying.Album }))
+        Write-Host ('  Service: {0}' -f $(if ([string]::IsNullOrWhiteSpace($NowPlaying.Service)) { 'Unknown' } else { $NowPlaying.Service }))
+        Write-Host ('  State:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($NowPlaying.State)) { 'Unknown' } else { $NowPlaying.State }))
+    }
+
+    if ($Diagnostics.IsPresent) {
+        Write-Host ''
+        Write-Host ('Diagnostics: charset={0}, color={1}' -f $Charset, $Color)
+    }
+    if ($Events.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'Recent Events'
+        foreach ($eventLine in $Events) { Write-Host ('  {0}' -f $eventLine) }
+    }
+}
+
 function Show-DenonDashboard {
     <#
     .SYNOPSIS
     Read-only: Shows a simple native PowerShell dashboard.
     #>
     [CmdletBinding()]
-    param()
+    param(
+        # Bash parity: Show-DenonDashboard -Watch enables the interactive loop.
+        [switch]$Watch,
 
-    $info = Get-DenonInfo
-    $title = 'Denon AVR Controller'
-    if (Test-DenonAnsiSupport) {
-        $escape = [char]27
-        Write-Host ('{0}[1m{1}{0}[0m' -f $escape, $title)
+        [ValidateScript({ $_ -gt 0 })]
+        [double]$IntervalSeconds = 2.0,
+
+        [switch]$Diagnostics,
+
+        [switch]$Ascii,
+
+        [switch]$Unicode,
+
+        [ValidateSet('auto', 'always', 'never')]
+        [string]$Color = 'auto'
+    )
+
+    $charset = if ($Ascii.IsPresent) { 'Ascii' } else { 'Unicode' }
+    if ($Unicode.IsPresent) { $charset = 'Unicode' }
+    $events = [System.Collections.Generic.List[string]]::new()
+    $controlTarget = 'Main'
+    $numericBuffer = ''
+    $lastCommandAt = [datetime]::MinValue
+    $interactive = (-not [Console]::IsInputRedirected) -and (-not [Console]::IsOutputRedirected)
+
+    if (-not $Watch.IsPresent -or -not $interactive) {
+        Write-DenonDashboardFrame -Info (Get-DenonInfo) -NowPlaying (Get-DenonNowPlaying) -Events @($events) -ControlTarget $controlTarget -Diagnostics:$Diagnostics.IsPresent -Charset $charset -Color $Color
+        return
     }
-    else {
-        Write-Host $title
-    }
 
-    Write-Host ('Receiver: {0}' -f $(if ([string]::IsNullOrWhiteSpace($info.Receiver)) { 'Unknown' } else { $info.Receiver }))
-    Write-Host ('IP:       {0}:{1}' -f $info.IpAddress, $info.Port)
-    Write-Host ''
-    Write-Host 'Main Zone'
-    Write-Host ('  Power:  {0}' -f $info.MainZone.Power)
-    Write-Host ('  Source: {0} ({1})' -f $info.MainZone.SourceName, $info.MainZone.SourceIndex)
-    Write-Host ('  Volume: {0} dB' -f $(if ($null -eq $info.MainZone.VolumeDb) { 'Unknown' } else { $info.MainZone.VolumeDb }))
-    Write-Host ('  Muted:  {0}' -f (ConvertTo-DenonMuteLabel -Muted $info.MainZone.Muted))
-    Write-Host ''
-    Write-Host 'Zone 2'
-    Write-Host ('  Power:  {0}' -f $info.Zone2.Power)
-    Write-Host ('  Source: {0} ({1})' -f $info.Zone2.SourceName, $info.Zone2.SourceIndex)
-    Write-Host ('  Volume: {0} dB (raw {1})' -f $(if ($null -eq $info.Zone2.VolumeDb) { 'Unknown' } else { $info.Zone2.VolumeDb }), $(if ($null -eq $info.Zone2.VolumeRaw) { 'Unknown' } else { $info.Zone2.VolumeRaw }))
-    Write-Host ('  Muted:  {0}' -f (ConvertTo-DenonMuteLabel -Muted $info.Zone2.Muted))
-
-    $nowPlaying = Get-DenonNowPlaying
-    if ($null -ne $nowPlaying -and (
-            -not [string]::IsNullOrWhiteSpace($nowPlaying.Title) -or
-            -not [string]::IsNullOrWhiteSpace($nowPlaying.State) -or
-            -not [string]::IsNullOrWhiteSpace($nowPlaying.Service))) {
-        Write-Host ''
-        Write-Host 'Now Playing'
-        Write-Host ('  Title:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.Title)) { 'Unknown' } else { $nowPlaying.Title }))
-        Write-Host ('  Artist:  {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.Artist)) { 'Unknown' } else { $nowPlaying.Artist }))
-        Write-Host ('  Album:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.Album)) { 'Unknown' } else { $nowPlaying.Album }))
-        Write-Host ('  Service: {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.Service)) { 'Unknown' } else { $nowPlaying.Service }))
-        Write-Host ('  State:   {0}' -f $(if ([string]::IsNullOrWhiteSpace($nowPlaying.State)) { 'Unknown' } else { $nowPlaying.State }))
+    while ($true) {
+        Clear-Host
+        Write-DenonDashboardFrame -Info (Get-DenonInfo) -NowPlaying (Get-DenonNowPlaying) -Events @($events) -ControlTarget $controlTarget -Diagnostics:$Diagnostics.IsPresent -Charset $charset -Color $Color
+        $until = [DateTime]::UtcNow.AddSeconds($IntervalSeconds)
+        while ([DateTime]::UtcNow -lt $until) {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                if (Invoke-DenonDashboardKey -Key $key -Events $events -ControlTarget ([ref]$controlTarget) -NumericBuffer ([ref]$numericBuffer) -LastCommandAt ([ref]$lastCommandAt)) {
+                    return
+                }
+            }
+            Start-Sleep -Milliseconds 50
+        }
     }
 }
 
@@ -3236,6 +3887,7 @@ Export-ModuleMember -Function @(
     'Test-DenonReceiver',
     'Invoke-DenonDoctor',
     'Get-DenonInfo',
+    'Get-DenonSignalDebug',
     'Get-DenonStatus',
     'Get-DenonReceiverSummary',
     'Get-DenonNowPlaying',
@@ -3267,6 +3919,7 @@ Export-ModuleMember -Function @(
     'Set-DenonPower',
     'Set-DenonMute',
     'Set-DenonVolume',
+    'Invoke-DenonVolumeFade',
     'Step-DenonVolume',
     'Set-DenonSource',
     'Set-DenonZone2Source',
