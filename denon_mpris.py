@@ -21,6 +21,7 @@ Environment:
 from __future__ import annotations
 
 import http.client
+import base64
 import json
 import logging
 import os
@@ -105,14 +106,66 @@ _mute_suppress: tuple[bool, float] | None = None
 
 # ── AVR HTTP client (stdlib, self-signed cert) ────────────────────────────────
 
-_SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-_SSL.check_hostname = False
-_SSL.verify_mode    = ssl.CERT_NONE
+def _build_ssl_context() -> tuple[ssl.SSLContext, str]:
+    pinned = os.environ.get("DENON_CURL_PINNEDPUBKEY", "")
+    if "DENON_CURL_PINNEDPUBKEY" in os.environ and not pinned:
+        raise RuntimeError("DENON_CURL_PINNEDPUBKEY is set but empty")
+    cacert = os.environ.get("DENON_CURL_CACERT", "")
+    if "DENON_CURL_CACERT" in os.environ and not cacert:
+        raise RuntimeError("DENON_CURL_CACERT is set but empty")
+
+    if os.environ.get("DENON_CURL_INSECURE") == "1" or (
+        os.environ.get("DENON_CURL_INSECURE") != "0" and not cacert
+    ):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    elif cacert:
+        context = ssl.create_default_context(cafile=cacert)
+    else:
+        context = ssl.create_default_context()
+    return context, pinned
+
+
+def _peer_public_key_pin(sock: ssl.SSLSocket) -> str:
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+    except ImportError as exc:
+        raise RuntimeError("DENON_CURL_PINNEDPUBKEY requires python3-cryptography") from exc
+
+    cert = sock.getpeercert(binary_form=True)
+    if not cert:
+        raise RuntimeError("TLS peer certificate is unavailable")
+    public_key = x509.load_der_x509_certificate(cert).public_key()
+    spki = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(spki)
+    return "sha256//" + base64.b64encode(digest.finalize()).decode("ascii")
+
+
+def _verify_pinned_public_key(sock: ssl.SSLSocket, pinned: str) -> None:
+    if not pinned:
+        return
+    if not pinned.startswith("sha256//"):
+        raise RuntimeError("DENON_CURL_PINNEDPUBKEY must use sha256// format")
+    actual = _peer_public_key_pin(sock)
+    if actual != pinned:
+        raise RuntimeError("TLS pinned public key mismatch")
+
+
+_SSL, _PINNED_PUBLIC_KEY = _build_ssl_context()
 
 
 def _avr_get(ip: str, type_: int, timeout: float = 4.0) -> str:
     conn = http.client.HTTPSConnection(ip, AVR_PORT, context=_SSL, timeout=timeout)
     try:
+        conn.connect()
+        if conn.sock is not None:
+            _verify_pinned_public_key(conn.sock, _PINNED_PUBLIC_KEY)
         conn.request("GET", f"/ajax/globals/get_config?type={type_}")
         return conn.getresponse().read().decode("utf-8", "replace")
     finally:
@@ -123,6 +176,9 @@ def _avr_set(ip: str, type_: int, data: str, timeout: float = 4.0) -> None:
     qs   = urllib.parse.urlencode({"type": str(type_), "data": data})
     conn = http.client.HTTPSConnection(ip, AVR_PORT, context=_SSL, timeout=timeout)
     try:
+        conn.connect()
+        if conn.sock is not None:
+            _verify_pinned_public_key(conn.sock, _PINNED_PUBLIC_KEY)
         conn.request("GET", f"/ajax/globals/set_config?{qs}")
         conn.getresponse().read()
     finally:

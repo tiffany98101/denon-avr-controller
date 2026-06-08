@@ -53,3 +53,6 @@ rpmbuild/
 handoff.md
 codex-handoff.md
 claude-handoff.md
+
+# Pester CI output
+testResults.xml

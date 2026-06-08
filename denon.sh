@@ -1692,7 +1692,8 @@ EOF
   }
 
   _denon_display_empty_message() {
-    local key="$(_denon_lower "${1:-}")"
+    local key
+    key=$(_denon_lower "${1:-}")
 
     case "$key" in
       no-recent-events|recent-events|events) echo "No Recent Events" ;;
@@ -2431,7 +2432,7 @@ EOF
     [[ "$path" == /* ]] || path="/$path"
     lower=$(_denon_lower "$path")
     case "$lower" in
-      *set*|*cmd*|*update*|*upgrade*|*upload*|*delete*|*reset*|*reboot*|*factory*|*write*|*save*|*apply*|*logout*|*password*|*account*) return 1 ;;
+      *set*|*cmd*|*update*|*upgrade*|*upload*|*delete*|*reboot*|*factory*|*write*|*save*|*apply*|*logout*|*password*|*account*) return 1 ;;
     esac
     case "$lower" in
       *.html|*.htm|*.js|*.css|*.xml|/ajax/*|*get_config*|*status*|*information*|*general*) printf '%s' "$path"; return 0 ;;
@@ -3375,7 +3376,7 @@ EOF
         ;;
     esac
     case "$lower" in
-      *firmware*|*update*|*upgrade*|*factory*|*reboot*|*delete*|*pair*|*register*|*login*|*account*|*write*|*factoryreset*|*resetdefault*)
+      *firmware*|*update*|*upgrade*|*factory*|*reboot*|*delete*|*pair*|*register*|*login*|*account*|*write*)
         printf 'blocked keyword in advertised verb'
         return 0
         ;;
@@ -3608,12 +3609,14 @@ EOF
   }
 
   _denon_data_requires_receiver() {
-    local sub="$(_denon_lower "${1:-}")"
-    local mode="$(_denon_lower "${2:-}")"
+    local sub
+    local mode
     local arg
+    sub=$(_denon_lower "${1:-}")
+    mode=$(_denon_lower "${2:-}")
 
     case "$sub:$mode" in
-      fields:--available|dump:--readable|dump:--all|dump:--json|dump:--raw|discover:*|discover:|summary:*|summary:) return 0 ;;
+      fields:--available|dump:--readable|dump:--all|dump:--json|dump:--raw|discover:*|summary:*) return 0 ;;
     esac
     if [[ "$sub" == "capabilities" ]]; then
       for arg in "$@"; do
@@ -3644,8 +3647,10 @@ EOF
   }
 
   _denon_data_cmd() {
-    local sub="$(_denon_lower "${1:-}")"
-    local mode="$(_denon_lower "${2:-}")"
+    local sub
+    local mode
+    sub=$(_denon_lower "${1:-}")
+    mode=$(_denon_lower "${2:-}")
 
     case "$sub" in
       fields)
@@ -5396,6 +5401,10 @@ EOF
   }
 
   _denon_tool_version() {
+    printf '%s' "${DENON_CONTROLLER_VERSION:-unknown}"
+  }
+
+  _denon_resolved_tool_version() {
     local script_path script_dir version_file version
 
     script_path=$(_denon_script_path 2>/dev/null || printf '')

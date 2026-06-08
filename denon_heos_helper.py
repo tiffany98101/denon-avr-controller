@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import codecs
 import os
 import re
 import socket
@@ -45,7 +46,9 @@ Commands:
 
 def send(ip: str, path: str) -> dict[str, Any]:
     command = f"heos://{path}\r\n".encode()
-    chunks: list[bytes] = []
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    text_parts: list[str] = []
+    pending = ""
     last_error: Exception | None = None
     with socket.create_connection((ip, 1255), timeout=TIMEOUT) as sock:
         sock.settimeout(TIMEOUT)
@@ -57,9 +60,11 @@ def send(ip: str, path: str) -> dict[str, Any]:
                 break
             if not chunk:
                 break
-            chunks.append(chunk)
-            text = b"".join(chunks).decode("utf-8", "replace").strip()
-            for line in text.splitlines():
+            text = decoder.decode(chunk)
+            text_parts.append(text)
+            pending += text
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
                 line = line.strip()
                 if not line:
                     continue
@@ -68,11 +73,15 @@ def send(ip: str, path: str) -> dict[str, Any]:
                 except json.JSONDecodeError as exc:
                     last_error = exc
 
-    text = b"".join(chunks).decode("utf-8", "replace").strip()
+    final_text = decoder.decode(b"", final=True)
+    if final_text:
+        text_parts.append(final_text)
+        pending += final_text
+    text = "".join(text_parts).strip()
     if not text:
         raise RuntimeError("no HEOS response")
 
-    for line in text.splitlines():
+    for line in pending.splitlines():
         line = line.strip()
         if not line:
             continue

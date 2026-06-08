@@ -35,6 +35,7 @@ Requires:       jq
 Requires:       python3
 Requires:       python3-pydbus
 Requires:       python3-gobject
+Requires:       python3-cryptography
 Requires:       avahi-tools
 
 # shellcheck is used by `denon doctor` when available; not strictly required.
@@ -68,6 +69,7 @@ After install, enable the MPRIS bridge for your user account:
 %install
 # Main controller script → /usr/bin/denon
 install -Dm755 denon.sh %{buildroot}%{_bindir}/denon
+install -Dm644 VERSION %{buildroot}%{_datadir}/denon-avr-controller/VERSION
 
 # MPRIS2 D-Bus bridge → /usr/bin/denon-mpris
 install -Dm755 denon_mpris.py %{buildroot}%{_bindir}/denon-mpris
@@ -106,6 +108,7 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 %doc README.md RELEASE_NOTES.md
 %{_bindir}/denon
 %{_bindir}/denon-mpris
+%{_datadir}/denon-avr-controller/VERSION
 %{_libexecdir}/denon-avr-controller/denon_dashboard_alt.py
 %{_libexecdir}/denon-avr-controller/denon_heos_helper.py
 %{_userunitdir}/denon-mpris.service

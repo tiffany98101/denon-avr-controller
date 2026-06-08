@@ -9,6 +9,7 @@ surface so the current shell dashboard can remain untouched.
 from __future__ import annotations
 
 import argparse
+import base64
 import dataclasses
 import http.client
 import json
@@ -62,6 +63,57 @@ KEY_ACTIONS = {
     "q": "quit",
     "Q": "quit",
 }
+
+
+def _build_ssl_context() -> tuple[ssl.SSLContext, str]:
+    pinned = os.environ.get("DENON_CURL_PINNEDPUBKEY", "")
+    if "DENON_CURL_PINNEDPUBKEY" in os.environ and not pinned:
+        raise RuntimeError("DENON_CURL_PINNEDPUBKEY is set but empty")
+    cacert = os.environ.get("DENON_CURL_CACERT", "")
+    if "DENON_CURL_CACERT" in os.environ and not cacert:
+        raise RuntimeError("DENON_CURL_CACERT is set but empty")
+
+    if os.environ.get("DENON_CURL_INSECURE") == "1" or (
+        os.environ.get("DENON_CURL_INSECURE") != "0" and not cacert
+    ):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    elif cacert:
+        context = ssl.create_default_context(cafile=cacert)
+    else:
+        context = ssl.create_default_context()
+    return context, pinned
+
+
+def _peer_public_key_pin(sock: ssl.SSLSocket) -> str:
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+    except ImportError as exc:
+        raise RuntimeError("DENON_CURL_PINNEDPUBKEY requires python3-cryptography") from exc
+
+    cert = sock.getpeercert(binary_form=True)
+    if not cert:
+        raise RuntimeError("TLS peer certificate is unavailable")
+    public_key = x509.load_der_x509_certificate(cert).public_key()
+    spki = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(spki)
+    return "sha256//" + base64.b64encode(digest.finalize()).decode("ascii")
+
+
+def _verify_pinned_public_key(sock: ssl.SSLSocket, pinned: str) -> None:
+    if not pinned:
+        return
+    if not pinned.startswith("sha256//"):
+        raise RuntimeError("DENON_CURL_PINNEDPUBKEY must use sha256// format")
+    actual = _peer_public_key_pin(sock)
+    if actual != pinned:
+        raise RuntimeError("TLS pinned public key mismatch")
 
 
 @dataclass(frozen=True)
@@ -378,9 +430,7 @@ class DirectDashboardProvider(DashboardProvider):
     def __init__(self, timeout: float = 2.0, strict: bool = True) -> None:
         self.timeout = timeout
         self.strict = strict
-        self._ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        self._ssl_context.check_hostname = False
-        self._ssl_context.verify_mode = ssl.CERT_NONE
+        self._ssl_context, self._pinned_public_key = _build_ssl_context()
 
     def collect(self) -> DashboardSnapshot:
         warnings: list[str] = []
@@ -472,6 +522,9 @@ class DirectDashboardProvider(DashboardProvider):
             timeout=self.timeout,
         )
         try:
+            conn.connect()
+            if conn.sock is not None:
+                _verify_pinned_public_key(conn.sock, self._pinned_public_key)
             conn.request("GET", f"/ajax/globals/get_config?{query}")
             response = conn.getresponse()
             body = response.read().decode("utf-8", "replace")
