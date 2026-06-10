@@ -14,7 +14,7 @@ _denon_complete() {
     fi
 
     local top_cmds=(
-        status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt
+        status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt dashboard-ultra
         on off vol up down mute unmute toggle
         source sources rename-source source-names clear-source-name
         zone2
@@ -130,6 +130,10 @@ _denon_complete() {
             ;;
         dashboard-alt)
             COMPREPLY=( $(compgen -W "--compare-providers --json --provider --color --unicode --ascii --interval --watch --help" -- "$cur") )
+            return
+            ;;
+        dashboard-ultra)
+            COMPREPLY=( $(compgen -W "--color --unicode --ascii --interval --watch --tv" -- "$cur") )
             return
             ;;
         --provider)

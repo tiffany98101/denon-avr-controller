@@ -1,7 +1,7 @@
 # fish completion for denon-avr-controller
 
 set -l denon_commands \
-    status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt \
+    status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt dashboard-ultra \
     on off vol up down mute unmute toggle \
     source sources rename-source source-names clear-source-name \
     zone2 heos \

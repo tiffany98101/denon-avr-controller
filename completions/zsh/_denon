@@ -17,6 +17,7 @@ _denon() {
         'diff:Compare two snapshot files'
         'dashboard:Live updating status dashboard'
         'dashboard-alt:Experimental Python dashboard preview'
+        'dashboard-ultra:Ultrawide multi-panel dashboard'
         'on:Power on'
         'off:Power off (standby)'
         'vol:Set volume in dB (e.g. vol -35)'
@@ -188,6 +189,9 @@ _denon() {
                     ;;
                 dashboard-alt)
                     compadd -- --compare-providers --json --provider --color --unicode --ascii --interval --watch --help
+                    ;;
+                dashboard-ultra)
+                    compadd -- --color --unicode --ascii --interval --watch --tv
                     ;;
             esac
             ;;

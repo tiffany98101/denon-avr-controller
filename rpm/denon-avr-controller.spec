@@ -4,8 +4,8 @@
 # Pre-release ordering: Release 0.<N>.<label> sorts below 1.<dist> (GA),
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
-%global pre_tag       beta.7
-%global rpm_release   0.10.beta7
+%global pre_tag       beta.8
+%global rpm_release   0.11.beta8
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -126,6 +126,18 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
+* Tue Jun 09 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.11.beta8
+- Add `denon dashboard-ultra`, an alternate ultrawide multi-panel dashboard
+  (5 panels at 200+ columns, 3+2 panels at 120-199, stacked below 120).
+  Surfaces audio signal/sample rate, speaker config and per-channel levels,
+  tone/dialog/subwoofer, ECO/dimmer/auto-standby, and Zone 2 detail via a
+  single batched AppCommand POST plus one pipelined telnet session per refresh.
+  Optional `--tv` panel via the lgtv CLI when present. The original
+  `denon dashboard` is unchanged.
+- Fix the AppCommand probe request in `denon data capabilities --probe-safe`
+  to include the XML declaration and trailing newline the firmware requires;
+  read-only Get* verbs now report real results instead of "malformed".
+
 * Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.10.beta7
 - Show the running controller version in the dashboard footer (interactive and
   non-interactive watch modes); remove the Tool: line from the Receiver Info card

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # denon.sh — Denon AVR controller
-# Version: 1.2.0-beta.7
+# Version: 1.2.0-beta.8
 DENON_CONTROLLER_NAME="${DENON_CONTROLLER_NAME:-denon-avr-controller}"
-DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.7}"
+DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.8}"
 # Source this from bash, or run it directly:
 #   source ~/denon.sh
 #
@@ -391,6 +391,9 @@ Receiver status:
                              Examples: denon dashboard-alt --provider auto
                                        denon dashboard-alt --provider direct --json
                                        denon dashboard-alt --compare-providers
+  denon dashboard-ultra [--watch] [--interval seconds] [--tv] [--ascii|--unicode] [--color auto|always|never]
+                             Show the ultrawide multi-panel dashboard (alternate to denon dashboard;
+                             5-panel layout at 200+ columns, reduced at 120-199, stacked below 120)
 
 Sources:
   denon sources              List main zone sources and mark the active one
@@ -3459,7 +3462,9 @@ EOF
       printf 'not_probed\tnot in exact live-probe allowlist'
       return 0
     }
-    request="<tx><cmd id=\"1\">${verb}</cmd></tx>"
+    # The firmware needs a newline after the XML declaration or it silently
+    # returns an empty <rx>.
+    request="<?xml version=\"1.0\" encoding=\"utf-8\"?>"$'\n'"<tx><cmd id=\"1\">${verb}</cmd></tx>"
     response=$(_denon_curl -X POST -H 'Content-Type: text/xml' --data-binary "$request" "$BASE/goform/AppCommand.xml" 2>/dev/null)
     rc=$?
     if (( rc != 0 )); then
@@ -6303,6 +6308,1000 @@ EOF
     _denon_dashboard_render
   }
 
+  # ── dashboard-ultra (alternate ultrawide dashboard) ───────────────────────
+  # Self-contained alternate to `denon dashboard`. Owns its collection
+  # (batched AppCommand POSTs plus one pipelined telnet session), layout, and
+  # watch loop; reuses only the stable dashboard's pure rendering/parsing
+  # helpers so the original code paths stay untouched.
+
+  _denon_udash_appcommand_batch() {
+    # POST one batched AppCommand request. The goform daemon handles large
+    # batches fine but wedges under rapid successive POSTs, so callers send
+    # at most one batch per refresh cycle. The firmware's XML parser silently
+    # returns an empty <rx> unless a newline follows the XML declaration.
+    local verb body
+    body='<?xml version="1.0" encoding="utf-8"?>'$'\n''<tx>'
+    for verb in "$@"; do
+      body="${body}<cmd id=\"1\">${verb}</cmd>"
+    done
+    body="${body}</tx>"
+    command -v curl >/dev/null 2>&1 || return 1
+    # Plain-HTTP goform endpoint: no TLS args, and a longer max-time than the
+    # shared _denon_curl wrapper so the larger batched response isn't truncated
+    # mid-stream (GetChLevel alone is ~2 KB).
+    _denon_debug "udash appcommand batch ($# verbs)"
+    curl -sS --connect-timeout "${DENON_CURL_CONNECT_TIMEOUT:-2}" \
+      --max-time "${DENON_UDASH_CURL_MAX_TIME:-10}" \
+      -X POST -H 'Content-Type: text/xml' --data-binary "$body" \
+      "http://${IP}:8080/goform/AppCommand.xml" 2>/dev/null
+  }
+
+  _denon_udash_appcmd_block() {
+    # Extract the Nth top-level <cmd>/<error> response block (1-based).
+    # Responses carry no verb echo, so position must match the request order.
+    local xml="$1"
+    local want="$2"
+
+    printf '%s\n' "$xml" | awk -v want="$want" '
+      /^[[:space:]]*<cmd>/ { idx++ }
+      /^[[:space:]]*<error>/ { idx++ }
+      idx == want { print }
+      /^[[:space:]]*<\/cmd>/ { if (idx == want) exit }
+    '
+  }
+
+  _denon_udash_appcmd_tail() {
+    # Strip the first N top-level <cmd>/<error> blocks from a response so the
+    # remainder can be parsed positionally starting from index 1.
+    local xml="$1"
+    local skip="$2"
+
+    printf '%s\n' "$xml" | awk -v skip="$skip" '
+      /^[[:space:]]*<cmd>/ { idx++ }
+      /^[[:space:]]*<error>/ { idx++ }
+      idx > skip { print }
+    '
+  }
+
+  _denon_udash_zone_block() {
+    local xml="$1"
+    local zone="$2"
+
+    printf '%s\n' "$xml" | awk -v open="<${zone}>" -v close_tag="</${zone}>" '
+      index($0, open) { inblk = 1 }
+      inblk { print }
+      index($0, close_tag) { if (inblk) exit }
+    '
+  }
+
+  _denon_udash_chlevel_rows() {
+    # Emit "name<TAB>level" for every configured channel in a GetChLevel block.
+    printf '%s\n' "$1" | awk '
+      /<ch>/ { name = ""; status = ""; level = "" }
+      /<name>/ { gsub(/.*<name>|<\/name>.*/, ""); name = $0 }
+      /<status>/ { if (name != "") { gsub(/.*<status>|<\/status>.*/, ""); status = $0 } }
+      /<level>/ { gsub(/.*<level>|<\/level>.*/, ""); level = $0 }
+      /<\/ch>/ { if (name != "" && status == "1") printf "%s\t%s\n", name, level }
+    '
+  }
+
+  _denon_udash_power_label() {
+    case "$(_denon_lower "$(_denon_trim "$1")")" in
+      on) echo "On" ;;
+      off) echo "Off" ;;
+      standby) echo "Standby" ;;
+      "") echo "Unknown" ;;
+      *) _denon_trim "$1" ;;
+    esac
+  }
+
+  _denon_udash_sleep_label() {
+    local value
+    value=$(_denon_trim "$1")
+    case "$(_denon_lower "$value")" in
+      "") echo "Unknown" ;;
+      off) echo "Off" ;;
+      *)
+        if [[ "$value" =~ ^[0-9]+$ ]]; then
+          printf '%s min\n' "$(printf '%s' "$value" | sed 's/^0*\([0-9]\)/\1/')"
+        else
+          printf '%s\n' "$value"
+        fi
+        ;;
+    esac
+  }
+
+  _denon_udash_tone_db() {
+    # PSBAS/PSTRE raw values are centered on 50 (50 = 0 dB).
+    local raw
+    raw=$(_denon_trim "$1")
+    if [[ "$raw" =~ ^[0-9]+$ ]]; then
+      awk -v v="$raw" 'BEGIN { printf "%+g dB", v - 50 }'
+    else
+      printf 'Unknown'
+    fi
+  }
+
+  _denon_udash_eco_label() {
+    case "$(_denon_lower "$(_denon_trim "$1")")" in
+      on) echo "On" ;;
+      auto) echo "Auto" ;;
+      off) echo "Off" ;;
+      "") echo "Unknown" ;;
+      *) _denon_trim "$1" ;;
+    esac
+  }
+
+  _denon_udash_dimmer_label() {
+    case "$(_denon_lower "$(_denon_trim "$1")")" in
+      bri) echo "Bright" ;;
+      dim) echo "Dim" ;;
+      dar) echo "Dark" ;;
+      off) echo "Off" ;;
+      "") echo "Unknown" ;;
+      *) _denon_trim "$1" ;;
+    esac
+  }
+
+  _denon_udash_signal_label() {
+    # SSINFAISSIG input-signal codes (only proven mappings; others stay raw).
+    case "$(_denon_trim "$1")" in
+      01) echo "Analog" ;;
+      02) echo "PCM" ;;
+      "") echo "Unknown" ;;
+      *) printf 'code %s\n' "$(_denon_trim "$1")" ;;
+    esac
+  }
+
+  _denon_udash_sample_rate_label() {
+    local value
+    value=$(_denon_trim "$1")
+    if [[ -z "$value" ]]; then
+      echo "Unknown"
+    else
+      printf '%s\n' "$value" | sed 's/K$/ kHz/'
+    fi
+  }
+
+  _denon_udash_titlecase_onoff() {
+    case "$(_denon_lower "$(_denon_trim "$1")")" in
+      on) echo "On" ;;
+      off) echo "Off" ;;
+      "") echo "Unknown" ;;
+      *) _denon_trim "$1" ;;
+    esac
+  }
+
+  _denon_udash_lfe_label() {
+    # PSLFE raw values are attenuation steps: 00 = 0 dB, 05 = -5 dB.
+    local raw
+    raw=$(_denon_trim "$1")
+    if [[ "$raw" =~ ^[0-9]+$ ]]; then
+      awk -v v="$raw" 'BEGIN { printf "%d dB", -v }'
+    else
+      printf 'Unknown'
+    fi
+  }
+
+  _denon_udash_telnet_pipeline() {
+    # One nc session carrying all telnet queries; replies are prefix-tagged so
+    # they can be demuxed afterwards. MS? also emits SYSMI/SYSDA/OPINF/PS*
+    # bonus events on this firmware.
+    local cmd
+    command -v nc >/dev/null 2>&1 || return 1
+    {
+      for cmd in 'MS?' 'SSINFAISSIG ?' 'SSINFAISFSV ?' 'SLP?' 'Z2SLP?' 'PSBAS ?' 'PSTRE ?' 'ECO?' 'DIM ?'; do
+        printf '%s\r' "$cmd"
+        sleep 0.15
+      done
+      sleep 0.4
+    } | nc -w 3 "$IP" 23 2>/dev/null
+  }
+
+  _denon_udash_parse_telnet() {
+    local text="$1"
+    local line value
+
+    text=${text//$'\r'/$'\n'}
+    while IFS= read -r line; do
+      line=$(_denon_trim "$line")
+      case "$line" in
+        SYSMI*)
+          value=$(_denon_trim "${line#SYSMI}")
+          [[ -n "$value" ]] && dash_sound_mode="$value"
+          ;;
+        SYSDA*)
+          value=$(_denon_trim "${line#SYSDA}")
+          [[ -n "$value" ]] && dash_u_signal="$value"
+          ;;
+        SSINFAISSIG*) dash_u_signal_code=$(_denon_trim "${line#SSINFAISSIG}") ;;
+        SSINFAISFSV*) dash_u_sample_rate=$(_denon_trim "${line#SSINFAISFSV}") ;;
+        Z2SLP*) dash_u_sleep_zone2=$(_denon_trim "${line#Z2SLP}") ;;
+        SLP*) dash_u_sleep_main=$(_denon_trim "${line#SLP}") ;;
+        "PSTONE CTRL"*) dash_u_tone_ctrl=$(_denon_trim "${line#PSTONE CTRL}") ;;
+        PSBAS*) dash_u_bass_raw=$(_denon_trim "${line#PSBAS}") ;;
+        PSTRE*) dash_u_treble_raw=$(_denon_trim "${line#PSTRE}") ;;
+        PSDRC*) dash_u_drc=$(_denon_trim "${line#PSDRC}") ;;
+        PSLFE*) dash_u_lfe=$(_denon_trim "${line#PSLFE}") ;;
+        ECO*) dash_u_eco=$(_denon_trim "${line#ECO}") ;;
+        DIM*) dash_u_dimmer=$(_denon_trim "${line#DIM}") ;;
+        MS*)
+          if [[ "$dash_sound_mode" == "Unknown" ]]; then
+            value=$(_denon_trim "${line#MS}")
+            [[ -n "$value" ]] && dash_sound_mode="$value"
+          fi
+          ;;
+      esac
+    done <<<"$text"
+  }
+
+  _denon_udash_parse_appcmd1() {
+    # Request order: GetAllZonePowerStatus GetAllZoneSource GetAllZoneVolume
+    #                GetAllZoneMuteStatus GetSurroundModeStatus GetAutoStandby
+    #                GetZoneName
+    local resp="$1"
+    local block zb value
+
+    block=$(_denon_udash_appcmd_block "$resp" 1)
+    value=$(_denon_dashboard_xml_value "$block" "zone1")
+    [[ -n "$value" ]] && dash_main_power=$(_denon_udash_power_label "$value")
+    value=$(_denon_dashboard_xml_value "$block" "zone2")
+    [[ -n "$value" ]] && dash_zone2_power=$(_denon_udash_power_label "$value")
+
+    block=$(_denon_udash_appcmd_block "$resp" 2)
+    zb=$(_denon_udash_zone_block "$block" "zone1")
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$zb" "source")")
+    [[ -n "$value" ]] && dash_main_source=$(_denon_clean_source_name "$value")
+    zb=$(_denon_udash_zone_block "$block" "zone2")
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$zb" "source")")
+    [[ -n "$value" ]] && dash_zone2_source=$(_denon_clean_source_name "$value")
+
+    block=$(_denon_udash_appcmd_block "$resp" 3)
+    zb=$(_denon_udash_zone_block "$block" "zone1")
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$zb" "volume")")
+    [[ -n "$value" ]] && dash_main_volume="$value"
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$zb" "limit")")
+    case "$(_denon_lower "$value")" in
+      ""|off) dash_main_max_volume_db="" ;;
+      *) dash_main_max_volume_db="$value" ;;
+    esac
+    zb=$(_denon_udash_zone_block "$block" "zone2")
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$zb" "volume")")
+    [[ -n "$value" ]] && dash_zone2_volume_db="$value"
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$zb" "dispvalue")")
+    [[ -n "$value" ]] && dash_zone2_volume_raw="$value"
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$zb" "limit")")
+    case "$(_denon_lower "$value")" in
+      ""|off) dash_u_zone2_limit="" ;;
+      *) dash_u_zone2_limit="$value" ;;
+    esac
+
+    block=$(_denon_udash_appcmd_block "$resp" 4)
+    value=$(_denon_dashboard_xml_value "$block" "zone1")
+    [[ -n "$value" ]] && dash_main_muted=$(_denon_normalize_mute "$value")
+    value=$(_denon_dashboard_xml_value "$block" "zone2")
+    [[ -n "$value" ]] && dash_zone2_muted=$(_denon_normalize_mute "$value")
+
+    block=$(_denon_udash_appcmd_block "$resp" 5)
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "surround")")
+    [[ -n "$value" ]] && dash_sound_mode="$value"
+
+    block=$(_denon_udash_appcmd_block "$resp" 6)
+    if [[ -n "$block" && "$block" != *"<error>"* ]]; then
+      value=$(printf '%s\n' "$block" | awk '
+        /<zone>/ { gsub(/.*<zone>|<\/zone>.*/, ""); zone = $0 }
+        /<value>/ {
+          gsub(/.*<value>|<\/value>.*/, "")
+          label = ($0 == "0" ? "Off" : "Lv " $0)
+          out = out (out == "" ? "" : " / ") zone " " label
+        }
+        END { print out }')
+      [[ -n "$value" ]] && dash_u_standby="$value"
+    fi
+
+    block=$(_denon_udash_appcmd_block "$resp" 7)
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "zone1")")
+    [[ -n "$value" ]] && dash_main_zone_name="$value"
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "zone2")")
+    [[ -n "$value" ]] && dash_zone2_name="$value"
+  }
+
+  _denon_udash_parse_appcmd2() {
+    # Request order: GetToneControl GetDialogLevel GetSubwooferLevel
+    #                GetChLevel GetAllZoneStereo
+    local resp="$1"
+    local block value status
+    local ch_rows ch_name ch_level part1 part2 idx active_count sw_active
+
+    block=$(_denon_udash_appcmd_block "$resp" 1)
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "status")")
+    case "$value" in
+      0) dash_u_tone_status="Off" ;;
+      1) dash_u_tone_status="On" ;;
+    esac
+
+    block=$(_denon_udash_appcmd_block "$resp" 2)
+    status=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "status")")
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "level")")
+    if [[ "$status" == "1" && -n "$value" ]]; then
+      dash_u_dialog=$(printf '%s\n' "$value" | sed 's/dB$/ dB/')
+    elif [[ "$status" == "0" ]]; then
+      dash_u_dialog="Off"
+    fi
+
+    block=$(_denon_udash_appcmd_block "$resp" 3)
+    status=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "status")")
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "sw1level")")
+    if [[ "$status" == "0" ]]; then
+      dash_u_sub="None"
+    elif [[ -n "$value" ]]; then
+      dash_u_sub=$(printf '%s\n' "$value" | sed 's/dB$/ dB/')
+    fi
+
+    block=$(_denon_udash_appcmd_block "$resp" 4)
+    if [[ -n "$block" && "$block" != *"<error>"* ]]; then
+      ch_rows=$(_denon_udash_chlevel_rows "$block")
+      part1=""
+      part2=""
+      idx=0
+      active_count=0
+      sw_active=0
+      while IFS=$'\t' read -r ch_name ch_level; do
+        [[ -n "$ch_name" ]] || continue
+        ch_level=${ch_level%dB}
+        if [[ "$ch_name" == SW* ]]; then
+          sw_active=1
+        else
+          active_count=$((active_count + 1))
+        fi
+        idx=$((idx + 1))
+        if (( idx <= 3 )); then
+          part1="${part1}${part1:+  }${ch_name} ${ch_level}"
+        else
+          part2="${part2}${part2:+  }${ch_name} ${ch_level}"
+        fi
+      done <<<"$ch_rows"
+      if (( idx > 0 )); then
+        dash_u_chlevels_line1="$part1"
+        dash_u_chlevels_line2="$part2"
+        dash_u_speaker_config="${active_count}.${sw_active}"
+      fi
+    fi
+
+    block=$(_denon_udash_appcmd_block "$resp" 5)
+    status=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "status")")
+    value=$(_denon_trim "$(_denon_dashboard_xml_value "$block" "value")")
+    if [[ -n "$status" ]]; then
+      case "$value" in
+        0) dash_u_azs="Off" ;;
+        1) dash_u_azs="On" ;;
+      esac
+    fi
+  }
+
+  _denon_udash_tv_probe() {
+    # Prints three pre-parsed lines: power, volume, audio output.
+    local power_line vol_line out_line
+
+    power_line=$(timeout 4 lgtv power status 2>/dev/null | sed -n '1p')
+    case "$power_line" in
+      *"is ON"*) power_line="On" ;;
+      *"is OFF"*) power_line="Off" ;;
+      "") power_line="Unreachable" ;;
+    esac
+    vol_line=$(timeout 4 lgtv volume status 2>/dev/null | sed -n 's/^Volume: //p' | sed -n '1p')
+    out_line=$(timeout 4 lgtv info current 2>/dev/null | sed -n "s/.*AudioOutputSource '\([^']*\)'.*/\1/p" | sed -n '1p')
+    printf '%s\n%s\n%s\n' "$power_line" "${vol_line:-Unknown}" "${out_line:-Unknown}"
+  }
+
+  _denon_udash_collect() {
+    local resp1 resp2 telnet_text telnet_file telnet_pid tv_file tv_pid
+    local identity_xml now_text now_rc sources_text heos_text value
+
+    dash_receiver="Unknown"
+    dash_ip="${IP:-Unknown}"
+    dash_main_zone_name="Main Zone"
+    dash_main_power="Unknown"
+    dash_main_source="Unknown"
+    dash_main_source_index=""
+    dash_main_volume="Unknown"
+    dash_main_max_volume_db=""
+    dash_main_muted="Unknown"
+    dash_sound_mode="Unknown"
+    dash_transport_state=""
+    dash_heos_pid=""
+    dash_heos_model=""
+    dash_heos_version=""
+    dash_heos_network=""
+    dash_zone2_name="Zone 2"
+    dash_zone2_power="Unknown"
+    dash_zone2_source="Unknown"
+    dash_zone2_source_index=""
+    dash_zone2_volume="Unknown"
+    dash_zone2_volume_db=""
+    dash_zone2_volume_raw=""
+    dash_zone2_muted="Unknown"
+    dash_now_message=$(_denon_display_empty_message no-metadata)
+    dash_now_title=""
+    dash_now_artist=""
+    dash_now_album=""
+    dash_now_station=""
+    dash_now_service=""
+    dash_now_type=""
+    dash_now_available=0
+    dash_errors=""
+    dash_main_sources=$(_denon_display_empty_message no-sources)
+
+    dash_u_signal=""
+    dash_u_signal_code=""
+    dash_u_sample_rate=""
+    dash_u_sleep_main=""
+    dash_u_sleep_zone2=""
+    dash_u_bass_raw=""
+    dash_u_treble_raw=""
+    dash_u_drc=""
+    dash_u_lfe=""
+    dash_u_tone_ctrl=""
+    dash_u_eco=""
+    dash_u_dimmer=""
+    dash_u_tone_status=""
+    dash_u_dialog="Unknown"
+    dash_u_sub="Unknown"
+    dash_u_chlevels_line1=""
+    dash_u_chlevels_line2=""
+    dash_u_speaker_config=""
+    dash_u_azs="Unknown"
+    dash_u_standby="Unknown"
+    dash_u_zone2_limit=""
+    udash_tv_body=""
+
+    telnet_pid=""
+    telnet_file=$(mktemp "${TMPDIR:-/tmp}/denon-udash-telnet.XXXXXX" 2>/dev/null) || telnet_file=""
+    if [[ -n "$telnet_file" ]]; then
+      _denon_udash_telnet_pipeline >"$telnet_file" 2>/dev/null &
+      telnet_pid=$!
+    fi
+
+    tv_pid=""
+    tv_file=""
+    if [[ "${udash_tv:-0}" == "1" ]] && command -v lgtv >/dev/null 2>&1; then
+      tv_file=$(mktemp "${TMPDIR:-/tmp}/denon-udash-tv.XXXXXX" 2>/dev/null) || tv_file=""
+      if [[ -n "$tv_file" ]]; then
+        _denon_udash_tv_probe >"$tv_file" 2>/dev/null &
+        tv_pid=$!
+      fi
+    fi
+
+    # One POST per refresh cycle: the goform daemon tolerates large batches
+    # but wedges (connection-refused for ~45s) under rapid successive POSTs.
+    resp1=$(_denon_udash_appcommand_batch GetAllZonePowerStatus GetAllZoneSource \
+      GetAllZoneVolume GetAllZoneMuteStatus GetSurroundModeStatus GetAutoStandby GetZoneName \
+      GetToneControl GetDialogLevel GetSubwooferLevel GetChLevel GetAllZoneStereo)
+    if [[ "$resp1" == *"<rx>"* ]]; then
+      _denon_udash_parse_appcmd1 "$resp1"
+      resp2=$(_denon_udash_appcmd_tail "$resp1" 7)
+      _denon_udash_parse_appcmd2 "$resp2"
+    else
+      dash_errors="${dash_errors}appcommand status unavailable; "
+    fi
+
+    identity_xml=$(_denon_get_identity_xml 2>/dev/null)
+    value=$(printf '%s' "$identity_xml" | sed -n 's:.*<FriendlyName>\([^<]*\)</FriendlyName>.*:\1:p' | sed -n '1p')
+    [[ -n "$value" ]] && dash_receiver="$value"
+
+    sources_text=$(_denon_sources 1 2>/dev/null)
+    if [[ -n "$sources_text" ]]; then
+      dash_main_sources=$(_denon_dashboard_sources_body "$sources_text")
+      [[ -n "$(_denon_trim "$dash_main_sources")" ]] || dash_main_sources=$(_denon_display_empty_message no-sources)
+    else
+      dash_errors="${dash_errors}main sources unavailable; "
+    fi
+
+    now_text=$(_denon_track 2>&1)
+    now_rc=$?
+    _denon_dashboard_parse_now "$now_rc" "$now_text"
+
+    if _denon_dashboard_is_heos_source; then
+      heos_text=$(_denon_dashboard_heos_status)
+    else
+      heos_text=$(_denon_dashboard_heos_status players-only)
+    fi
+    [[ -n "$heos_text" ]] && _denon_dashboard_parse_heos_status "$heos_text"
+
+    if [[ -n "$telnet_pid" ]]; then
+      wait "$telnet_pid" 2>/dev/null || true
+      telnet_text=$(cat "$telnet_file" 2>/dev/null)
+      rm -f "$telnet_file" 2>/dev/null
+      [[ -n "$telnet_text" ]] && _denon_udash_parse_telnet "$telnet_text"
+    fi
+
+    if [[ -n "$tv_pid" ]]; then
+      wait "$tv_pid" 2>/dev/null || true
+      udash_tv_body=$(awk 'NR == 1 { printf "Power:   %s\n", $0 }
+        NR == 2 { printf "Volume:  %s\n", $0 }
+        NR == 3 { printf "Output:  %s\n", $0 }' "$tv_file" 2>/dev/null)
+      rm -f "$tv_file" 2>/dev/null
+    fi
+    if [[ "${udash_tv:-0}" == "1" && -z "$udash_tv_body" ]]; then
+      udash_tv_body="TV unreachable"
+    fi
+  }
+
+  _denon_udash_two_col() {
+    # Fold a single-column body into two columns of width $2 each.
+    local body="$1"
+    local colw="$2"
+
+    printf '%s\n' "$body" | awk -v colw="$colw" '
+      { lines[NR] = $0 }
+      END {
+        half = int((NR + 1) / 2)
+        for (i = 1; i <= half; i++) {
+          left = lines[i]
+          right = (i + half <= NR) ? lines[i + half] : ""
+          if (right == "") printf "%s\n", left
+          else printf "%-*s  %s\n", colw, left, right
+        }
+      }'
+  }
+
+  _denon_udash_build_bodies() {
+    local vol_label z2_vol_label muted_label z2_muted_label state_label
+    local signal_label tone_label now_line1 now_parts events_max sources_colw
+
+    udash_main_title=$(_denon_display_zone_label "${dash_main_zone_name:-Main Zone}")
+    [[ "$udash_main_title" != "Main Zone" ]] && udash_main_title="$udash_main_title (Main)"
+    udash_zone2_title=$(_denon_display_zone_label "${dash_zone2_name:-Zone 2}")
+    [[ "$udash_zone2_title" != "Zone 2" ]] && udash_zone2_title="$udash_zone2_title (Zone 2)"
+
+    vol_label="${dash_main_volume:-Unknown} dB"
+    [[ -n "$dash_main_max_volume_db" ]] && vol_label="$vol_label (max ${dash_main_max_volume_db} dB)"
+    muted_label=$(_denon_mute_display_name "$dash_main_muted")
+    udash_main_body=$(printf 'Power:   %s\nSource:  %s\nVolume:  %s\nMuted:   %s\nMode:    %s\nSleep:   %s' \
+      "${dash_main_power:-Unknown}" "${dash_main_source:-Unknown}" "$vol_label" "$muted_label" \
+      "${dash_sound_mode:-Unknown}" "$(_denon_udash_sleep_label "$dash_u_sleep_main")")
+
+    signal_label="$dash_u_signal"
+    [[ -n "$signal_label" ]] || signal_label=$(_denon_udash_signal_label "$dash_u_signal_code")
+    udash_audio_body=$(printf 'Signal:   %s\nSample:   %s\nMode:     %s\nSpeakers: %s\nAll-Zone: %s\nDRC:      %s\nLFE:      %s' \
+      "$signal_label" "$(_denon_udash_sample_rate_label "$dash_u_sample_rate")" \
+      "${dash_sound_mode:-Unknown}" \
+      "$(_denon_display_unknown "$dash_u_speaker_config")" \
+      "${dash_u_azs:-Unknown}" \
+      "$(_denon_udash_titlecase_onoff "$dash_u_drc")" \
+      "$(_denon_udash_lfe_label "$dash_u_lfe")")
+
+    if [[ -n "$dash_zone2_volume_db" ]]; then
+      z2_vol_label="${dash_zone2_volume_db} dB"
+      [[ -n "$dash_zone2_volume_raw" ]] && z2_vol_label="$z2_vol_label (raw ${dash_zone2_volume_raw})"
+      [[ -n "$dash_u_zone2_limit" ]] && z2_vol_label="$z2_vol_label, lim ${dash_u_zone2_limit}"
+    else
+      z2_vol_label="${dash_zone2_volume:-Unknown}"
+    fi
+    z2_muted_label=$(_denon_mute_display_name "$dash_zone2_muted")
+    udash_zone2_body=$(printf 'Power:   %s\nSource:  %s\nVolume:  %s\nMuted:   %s\nSleep:   %s' \
+      "${dash_zone2_power:-Unknown}" "${dash_zone2_source:-Unknown}" "$z2_vol_label" \
+      "$z2_muted_label" "$(_denon_udash_sleep_label "$dash_u_sleep_zone2")")
+
+    tone_label="${dash_u_tone_status:-}"
+    if [[ -z "$tone_label" && -n "$dash_u_tone_ctrl" ]]; then
+      tone_label=$(_denon_udash_titlecase_onoff "$dash_u_tone_ctrl")
+    fi
+    [[ -n "$tone_label" ]] || tone_label="Unknown"
+    udash_tone_body=$(printf 'Tone:    %s\nBass:    %s\nTreble:  %s\nDialog:  %s\nSub:     %s\nLevels:  %s\n         %s' \
+      "$tone_label" "$(_denon_udash_tone_db "$dash_u_bass_raw")" \
+      "$(_denon_udash_tone_db "$dash_u_treble_raw")" \
+      "${dash_u_dialog:-Unknown}" "${dash_u_sub:-Unknown}" \
+      "$(_denon_display_unknown "$dash_u_chlevels_line1")" "$dash_u_chlevels_line2")
+
+    local heos_label network_label
+    network_label=$(_denon_display_network_label "$dash_heos_network")
+    heos_label="${dash_heos_version:-Unknown}"
+    [[ "$network_label" != "Unknown" ]] && heos_label="$heos_label ($network_label)"
+    udash_receiver_body=$(printf 'Receiver: %s\nIP:       %s\nHEOS:     %s\nModel:    %s\nEco:      %s\nDimmer:   %s\nStandby:  %s' \
+      "$(_denon_display_unknown "$dash_receiver")" "$(_denon_display_unknown "$dash_ip")" \
+      "$heos_label" "$(_denon_display_unknown "$dash_heos_model")" \
+      "$(_denon_udash_eco_label "$dash_u_eco")" "$(_denon_udash_dimmer_label "$dash_u_dimmer")" \
+      "${dash_u_standby:-Unknown}")
+
+    state_label=$(_denon_dashboard_transport_name "${dash_transport_state:-}") || state_label="Unknown"
+    [[ -n "$state_label" ]] || state_label="Unknown"
+    now_parts=""
+    [[ -n "$(_denon_dashboard_clean_field "$dash_now_title")" ]] && now_parts="$dash_now_title"
+    if [[ -n "$(_denon_dashboard_clean_field "$dash_now_artist")" ]]; then
+      now_parts="${now_parts}${now_parts:+ — }${dash_now_artist}"
+    fi
+    if [[ -n "$(_denon_dashboard_clean_field "$dash_now_album")" ]]; then
+      now_parts="${now_parts}${now_parts:+ — }${dash_now_album}"
+    fi
+    [[ -n "$now_parts" ]] || now_parts="${dash_now_message:-Unknown}"
+    now_line1="Now:     $now_parts"
+    udash_now_body=$(printf '%s\nState:   %s | Service: %s | Station: %s' \
+      "$now_line1" "$state_label" \
+      "$(_denon_display_unknown "$dash_now_service")" "$(_denon_display_unknown "$dash_now_station")")
+
+    if [[ "$udash_mode" == "narrow" ]]; then
+      udash_sources_body="$dash_main_sources"
+    else
+      sources_colw=$(((udash_sources_w - 6) / 2))
+      (( sources_colw < 10 )) && sources_colw=10
+      udash_sources_body=$(_denon_udash_two_col "$dash_main_sources" "$sources_colw")
+    fi
+
+    events_max=$((udash_bottom_h - 4))
+    (( events_max < 5 )) && events_max=5
+    if [[ -n "$dashboard_events" ]]; then
+      udash_events_body=$(printf '%s\n' "$dashboard_events" | head -n "$events_max")
+    else
+      udash_events_body=$(_denon_display_empty_message no-state-changes)
+    fi
+  }
+
+  _denon_udash_layout() {
+    local cols="$1"
+    local rows="$2"
+    local avail used
+
+    udash_width="$cols"
+    udash_top_h=11
+    udash_now_h=6
+    udash_tv_w=0
+
+    if (( cols >= 200 )); then
+      udash_mode="ultra"
+      avail=$((cols - 8))
+      udash_w1=$((avail / 5))
+      udash_w2="$udash_w1"
+      udash_w3="$udash_w1"
+      udash_w4="$udash_w1"
+      udash_w5=$((avail - udash_w1 * 4))
+      used=$((udash_top_h + udash_now_h + 3))
+    elif (( cols >= 120 )); then
+      udash_mode="mid"
+      avail=$((cols - 4))
+      udash_w1=$((avail / 3))
+      udash_w2="$udash_w1"
+      udash_w3=$((avail - udash_w1 * 2))
+      udash_w4=$(((cols - 2) / 2))
+      udash_w5=$((cols - 2 - udash_w4))
+      used=$((udash_top_h * 2 + udash_now_h + 4))
+    else
+      udash_mode="narrow"
+      udash_w1="$cols"
+      udash_w2="$cols"
+      udash_w3="$cols"
+      udash_w4="$cols"
+      udash_w5="$cols"
+      used=0
+    fi
+
+    if [[ "$udash_mode" == "narrow" ]]; then
+      udash_sources_w="$cols"
+      udash_events_w="$cols"
+      udash_bottom_h=12
+      return 0
+    fi
+
+    if [[ "${udash_tv:-0}" == "1" ]]; then
+      udash_tv_w=$(((cols - 4) / 5))
+      (( udash_tv_w < 24 )) && udash_tv_w=24
+      udash_sources_w=$(((cols - 4 - udash_tv_w) * 45 / 100))
+      udash_events_w=$((cols - 4 - udash_tv_w - udash_sources_w))
+    else
+      udash_sources_w=$(((cols - 2) * 45 / 100))
+      udash_events_w=$((cols - 2 - udash_sources_w))
+    fi
+
+    udash_bottom_h=$((rows - used - 1))
+    udash_bottom_h=$(_denon_dashboard_clamp "$udash_bottom_h" 8 18)
+  }
+
+  _denon_udash_render_five_row() {
+    local height="$1"
+    local row
+
+    for ((row = 0; row < height; row++)); do
+      _denon_dashboard_render_card_line "$ucol1_title" "$ucol1_body" "$ucol1_width" "$height" "$row"
+      printf '  '
+      _denon_dashboard_render_card_line "$ucol2_title" "$ucol2_body" "$ucol2_width" "$height" "$row"
+      printf '  '
+      _denon_dashboard_render_card_line "$ucol3_title" "$ucol3_body" "$ucol3_width" "$height" "$row"
+      printf '  '
+      _denon_dashboard_render_card_line "$ucol4_title" "$ucol4_body" "$ucol4_width" "$height" "$row"
+      printf '  '
+      _denon_dashboard_render_card_line "$ucol5_title" "$ucol5_body" "$ucol5_width" "$height" "$row"
+      printf '\n'
+    done
+  }
+
+  _denon_udash_render_three_row() {
+    local height="$1"
+    local row
+
+    for ((row = 0; row < height; row++)); do
+      _denon_dashboard_render_card_line "$ucol1_title" "$ucol1_body" "$ucol1_width" "$height" "$row"
+      printf '  '
+      _denon_dashboard_render_card_line "$ucol2_title" "$ucol2_body" "$ucol2_width" "$height" "$row"
+      printf '  '
+      _denon_dashboard_render_card_line "$ucol3_title" "$ucol3_body" "$ucol3_width" "$height" "$row"
+      printf '\n'
+    done
+  }
+
+  _denon_udash_render_bottom() {
+    if [[ "${udash_tv:-0}" == "1" ]]; then
+      ucol1_title="Sources (Main)"
+      ucol1_body="$udash_sources_body"
+      ucol1_width="$udash_sources_w"
+      ucol2_title="Recent Events"
+      ucol2_body="$udash_events_body"
+      ucol2_width="$udash_events_w"
+      ucol3_title="TV (lgtv)"
+      ucol3_body="$udash_tv_body"
+      ucol3_width="$udash_tv_w"
+      _denon_udash_render_three_row "$udash_bottom_h"
+    else
+      _denon_dashboard_render_two_panel_row \
+        "Sources (Main)" "$udash_sources_body" "$udash_sources_w" \
+        "Recent Events" "$udash_events_body" "$udash_events_w" \
+        "$udash_bottom_h"
+    fi
+  }
+
+  _denon_udash_render_ultra() {
+    ucol1_title="$udash_main_title"
+    ucol1_body="$udash_main_body"
+    ucol1_width="$udash_w1"
+    ucol2_title="Audio Signal"
+    ucol2_body="$udash_audio_body"
+    ucol2_width="$udash_w2"
+    ucol3_title="$udash_zone2_title"
+    ucol3_body="$udash_zone2_body"
+    ucol3_width="$udash_w3"
+    ucol4_title="Tone / Levels"
+    ucol4_body="$udash_tone_body"
+    ucol4_width="$udash_w4"
+    ucol5_title="Receiver / Network"
+    ucol5_body="$udash_receiver_body"
+    ucol5_width="$udash_w5"
+    _denon_udash_render_five_row "$udash_top_h"
+    printf '\n'
+    _denon_dashboard_render_card "Now Playing" "$udash_now_body" "$udash_width" "$udash_now_h"
+    printf '\n'
+    _denon_udash_render_bottom
+  }
+
+  _denon_udash_render_mid() {
+    ucol1_title="$udash_main_title"
+    ucol1_body="$udash_main_body"
+    ucol1_width="$udash_w1"
+    ucol2_title="$udash_zone2_title"
+    ucol2_body="$udash_zone2_body"
+    ucol2_width="$udash_w2"
+    ucol3_title="Receiver / Network"
+    ucol3_body="$udash_receiver_body"
+    ucol3_width="$udash_w3"
+    _denon_udash_render_three_row "$udash_top_h"
+    printf '\n'
+    _denon_dashboard_render_two_panel_row \
+      "Audio Signal" "$udash_audio_body" "$udash_w4" \
+      "Tone / Levels" "$udash_tone_body" "$udash_w5" \
+      "$udash_top_h"
+    printf '\n'
+    _denon_dashboard_render_card "Now Playing" "$udash_now_body" "$udash_width" "$udash_now_h"
+    printf '\n'
+    _denon_udash_render_bottom
+  }
+
+  _denon_udash_render_narrow() {
+    local width="$1"
+
+    _denon_dashboard_render_card "$udash_main_title" "$udash_main_body" "$width" 10
+    _denon_dashboard_render_card "Audio Signal" "$udash_audio_body" "$width" 11
+    _denon_dashboard_render_card "$udash_zone2_title" "$udash_zone2_body" "$width" 9
+    _denon_dashboard_render_card "Tone / Levels" "$udash_tone_body" "$width" 11
+    _denon_dashboard_render_card "Receiver / Network" "$udash_receiver_body" "$width" 11
+    _denon_dashboard_render_card "Now Playing" "$udash_now_body" "$width" 6
+    if [[ "${udash_tv:-0}" == "1" ]]; then
+      _denon_dashboard_render_card "TV (lgtv)" "$udash_tv_body" "$width" 7
+    fi
+    _denon_dashboard_render_card "Sources (Main)" "$udash_sources_body" "$width" "$udash_bottom_h"
+    _denon_dashboard_render_card "Recent Events" "$udash_events_body" "$width" "$udash_bottom_h"
+  }
+
+  _denon_udash_render() {
+    local width height
+
+    width=$(_denon_dashboard_width)
+    height=$(_denon_dashboard_height)
+    _denon_dashboard_setup_color
+    _denon_dashboard_set_borders
+    _denon_udash_layout "$width" "$height"
+    _denon_udash_build_bodies
+
+    case "$udash_mode" in
+      ultra) _denon_udash_render_ultra ;;
+      mid) _denon_udash_render_mid ;;
+      *) _denon_udash_render_narrow "$width" ;;
+    esac
+    _denon_dashboard_render_footer "$width"
+  }
+
+  _denon_udash_redraw() {
+    local rendered
+
+    rendered=$(_denon_udash_render)
+    printf '\033[H\033[J%s' "$rendered"
+  }
+
+  _denon_udash_handle_key() {
+    case "$1" in
+      q|Q) dashboard_stop_pending=1 ;;
+      r|R|$'\014') dashboard_resize_pending=1 ;;
+    esac
+  }
+
+  _denon_udash_poll_key() {
+    local timeout="$1"
+    local key=""
+
+    [[ -t 0 ]] || return 1
+    if IFS= read -rsn1 -t "$timeout" key 2>/dev/null; then
+      _denon_udash_handle_key "$key"
+      return 0
+    fi
+    return 1
+  }
+
+  _denon_udash_sleep_or_resize() {
+    local remaining="$1"
+    local chunk
+
+    while [[ "${dashboard_stop_pending:-0}" != "1" ]] && awk -v r="$remaining" 'BEGIN { exit !(r > 0) }'; do
+      if [[ "${dashboard_resize_pending:-0}" == "1" ]]; then
+        dashboard_resize_pending=0
+        _denon_udash_redraw
+      fi
+      chunk=$(awk -v r="$remaining" 'BEGIN { if (r < 0.2) printf "%.3f", r; else printf "0.200" }')
+      if [[ -t 0 ]]; then
+        _denon_udash_poll_key "$chunk" || true
+        [[ "${dashboard_stop_pending:-0}" == "1" ]] && break
+      else
+        sleep "$chunk" 2>/dev/null || true
+      fi
+      remaining=$(awk -v r="$remaining" -v c="$chunk" 'BEGIN { r -= c; if (r < 0) r = 0; printf "%.3f", r }')
+    done
+  }
+
+  _denon_dashboard_ultra() {
+    local watch=0
+    local interval=5
+    local arg
+    local dashboard_initialized=0
+    # shellcheck disable=SC2034 # Retained with the event state block for dashboard state tracking.
+    local previous_dashboard_key=""
+    local dashboard_events=""
+    local last_dashboard_event=""
+    # shellcheck disable=SC2034 # Previous-state fields are used by the shared event tracker.
+    local prev_main_power="" prev_main_source="" prev_main_source_index="" prev_main_muted="" prev_main_volume=""
+    local prev_sound_mode=""
+    # shellcheck disable=SC2034 # Previous-state fields are used by the shared event tracker.
+    local prev_zone2_power="" prev_zone2_source="" prev_zone2_source_index="" prev_zone2_muted="" prev_now_title=""
+    local prev_transport_state=""
+    # shellcheck disable=SC2034 # Previous-state fields are used by the shared event tracker.
+    local prev_zone2_volume_db="" prev_now_artist="" prev_now_album="" prev_now_station="" prev_now_service=""
+    local dashboard_color_mode="auto"
+    local dashboard_use_color=0
+    local dash_c_reset="" dash_c_dim="" dash_c_green="" dash_c_yellow="" dash_c_red=""
+    local dashboard_resize_pending=0
+    local dashboard_stop_pending=0
+    local dashboard_exit_status=0
+    local dashboard_saved_stty=""
+    local dashboard_terminal_active=0
+    local dashboard_keyboard_active=0
+    local udash_tv=0
+    local usage="Usage: denon dashboard-ultra [--watch] [--interval seconds] [--tv] [--ascii|--unicode] [--color auto|always|never]"
+
+    dashboard_ascii=0
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+      *UTF-8*|*utf8*|*UTF8*) dashboard_ascii=0 ;;
+      *) dashboard_ascii=1 ;;
+    esac
+    [[ "${DENON_DASHBOARD_ASCII:-0}" == "1" ]] && dashboard_ascii=1
+
+    while [[ $# -gt 0 ]]; do
+      arg="$1"
+      case "$arg" in
+        watch|--watch|-w)
+          watch=1
+          shift
+          if [[ "${1:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            interval="$1"
+            shift
+          fi
+          ;;
+        once|--once)
+          watch=0
+          shift
+          ;;
+        --interval|-n)
+          if [[ -z "${2:-}" || ! "$2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            echo "$usage" >&2
+            return 1
+          fi
+          watch=1
+          interval="$2"
+          shift 2
+          ;;
+        --tv)
+          udash_tv=1
+          shift
+          ;;
+        --ascii)
+          dashboard_ascii=1
+          shift
+          ;;
+        --unicode)
+          dashboard_ascii=0
+          shift
+          ;;
+        --color)
+          case "$(_denon_lower "${2:-}")" in
+            auto|always|never)
+              dashboard_color_mode=$(_denon_lower "$2")
+              shift 2
+              ;;
+            *)
+              echo "$usage" >&2
+              return 1
+              ;;
+          esac
+          ;;
+        [0-9]*)
+          watch=1
+          interval="$arg"
+          shift
+          ;;
+        *)
+          echo "$usage" >&2
+          return 1
+          ;;
+      esac
+    done
+
+    if [[ "$watch" == "1" ]]; then
+      trap 'dashboard_resize_pending=1' WINCH
+      trap 'dashboard_stop_pending=1; dashboard_exit_status=130; _denon_dashboard_restore_terminal' INT TERM HUP
+      if [[ -t 0 ]]; then
+        dashboard_saved_stty=$(stty -g 2>/dev/null || printf '')
+        if [[ -n "$dashboard_saved_stty" ]]; then
+          stty -echo -icanon min 0 time 0 2>/dev/null && dashboard_terminal_active=1
+        fi
+      fi
+      printf '\033[?25l'
+      while [[ "$dashboard_stop_pending" != "1" ]]; do
+        local poll_start poll_end poll_elapsed poll_sleep
+        poll_start=$(date +%s)
+        _denon_udash_collect
+        [[ "$dashboard_stop_pending" == "1" ]] && break
+        _denon_dashboard_update_events
+        dashboard_resize_pending=0
+        _denon_udash_redraw
+        poll_end=$(date +%s)
+        poll_elapsed=$((poll_end - poll_start))
+        poll_sleep=$(awk -v interval="$interval" -v elapsed="$poll_elapsed" 'BEGIN { s = interval - elapsed; if (s < 0) s = 0; printf "%.3f", s }')
+        _denon_udash_sleep_or_resize "$poll_sleep"
+      done
+      _denon_dashboard_restore_terminal
+      trap - WINCH INT TERM HUP
+      return "$dashboard_exit_status"
+    fi
+
+    _denon_udash_collect
+    _denon_dashboard_update_events
+    _denon_udash_render
+  }
+
   # ── presets ───────────────────────────────────────────────────────────────
 
   _denon_preset_dir() {
@@ -6997,7 +7996,7 @@ _denon_complete() {
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  local top_cmds="status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono"
+  local top_cmds="status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt dashboard-ultra on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono"
   case "$prev" in
     denon) COMPREPLY=( $(compgen -W "$top_cmds" -- "$cur") ); return ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish install" -- "$cur") ); return ;;
@@ -7013,7 +8012,7 @@ EOF
 #compdef denon
 _denon() {
   local -a top_cmds completion_cmds install_opts shells
-  top_cmds=(status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono)
+  top_cmds=(status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt dashboard-ultra on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono)
   completion_cmds=(bash zsh fish install)
   install_opts=(--shell --force)
   shells=(bash zsh fish)
@@ -7033,7 +8032,7 @@ EOF
       fish)
         cat <<'EOF'
 # fish completion for denon-avr-controller
-set -l denon_commands status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono
+set -l denon_commands status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt dashboard-ultra on off vol up down mute unmute toggle source sources rename-source source-names clear-source-name zone2 heos movie game music night mode dyn-eq dyn-vol cinema-eq multeq bass treble play pause stop next prev previous track now sleep qs preset watch-event discover setip doctor config profile completion version help xbox xfinity bluray tv phono
 complete -c denon -f
 complete -c denon -n "__fish_use_subcommand" -a "$denon_commands"
 complete -c denon -n "__fish_seen_subcommand_from completion; and not __fish_seen_subcommand_from bash zsh fish install" -a "bash zsh fish install"
@@ -7271,6 +8270,8 @@ EOF
       _denon_dashboard_alt "${@:2}"
       return $?
       ;;
+    dashboard-ultra)
+      ;;
     discover)
       local cache
       cache=$(_denon_ip_cache_path) || return 1
@@ -7361,6 +8362,10 @@ EOF
 
     dashboard)
       _denon_dashboard "${@:2}"
+      ;;
+
+    dashboard-ultra)
+      _denon_dashboard_ultra "${@:2}"
       ;;
 
     sources)
