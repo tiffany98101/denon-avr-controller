@@ -4530,49 +4530,13 @@ EOF
     value=$(_denon_dashboard_summary_value "$summary_json" "firmware.heos_version.value"); [[ -n "$value" ]] && dash_diag_heos_firmware="$value"
   }
 
-  _denon_dashboard_collect() {
-    local info_json info_rc info_ok=0 info_text status_text zone2_text sources_text zone2_sources_text now_text now_rc
-    local zone_names_xml vol_xml telnet_text
-    local value
-
-    dash_receiver="Unknown"
-    dash_ip="${IP:-Unknown}"
-    dash_main_zone_name="Main Zone"
-    dash_main_power="Unknown"
-    dash_main_source="Unknown"
-    dash_main_source_index=""
-    dash_main_volume="Unknown"
-    dash_main_max_volume_db=""
-    dash_main_muted="Unknown"
-    dash_sound_mode="Unknown"
-    dash_transport_state=""
-    dash_avr_version="Unknown"
-    # shellcheck disable=SC2034 # Parsed for dashboard diagnostics/future display; not rendered today.
-    dash_heos_pid=""
-    # shellcheck disable=SC2034 # Parsed for dashboard diagnostics/future display; not rendered today.
-    dash_heos_model=""
-    dash_heos_version=""
-    dash_heos_network=""
-    dash_zone2_name="Zone 2"
-    dash_zone2_power="Unknown"
-    dash_zone2_source="Unknown"
-    dash_zone2_source_index=""
-    dash_zone2_volume="Unknown"
-    dash_zone2_volume_db=""
-    dash_zone2_volume_raw=""
-    dash_zone2_muted="Unknown"
-    dash_now_message=$(_denon_display_empty_message no-metadata)
-    dash_now_title=""
-    dash_now_artist=""
-    dash_now_album=""
-    dash_now_station=""
-    dash_now_service=""
-    # shellcheck disable=SC2034 # Parsed for dashboard diagnostics/future display; not rendered today.
-    dash_now_type=""
-    dash_now_available=0
-    dash_errors=""
-    dash_main_sources=$(_denon_display_empty_message no-sources)
-    dash_diag_body=""
+  _denon_dashboard_fetch_core_status() {
+    # Populate receiver/IP and main/zone2 power, source, volume, mute from the
+    # stable info/status endpoints. Sets info_ok=1 (caller scope) when the
+    # JSON info path answered; otherwise falls back to the pretty status
+    # parsers. Shared by the stable dashboard and the dashboard-ultra
+    # appcommand fallback.
+    local info_json info_rc info_text status_text zone2_text value
 
     info_json=$(_denon_info --json 2>/dev/null)
     info_rc=$?
@@ -4616,6 +4580,53 @@ EOF
         dash_errors="${dash_errors}zone2 status unavailable; "
       fi
     fi
+  }
+
+  _denon_dashboard_collect() {
+    local info_ok=0 sources_text zone2_sources_text now_text now_rc
+    local zone_names_xml vol_xml telnet_text
+    local value
+
+    dash_receiver="Unknown"
+    dash_ip="${IP:-Unknown}"
+    dash_main_zone_name="Main Zone"
+    dash_main_power="Unknown"
+    dash_main_source="Unknown"
+    dash_main_source_index=""
+    dash_main_volume="Unknown"
+    dash_main_max_volume_db=""
+    dash_main_muted="Unknown"
+    dash_sound_mode="Unknown"
+    dash_transport_state=""
+    dash_avr_version="Unknown"
+    # shellcheck disable=SC2034 # Parsed for dashboard diagnostics/future display; not rendered today.
+    dash_heos_pid=""
+    # shellcheck disable=SC2034 # Parsed for dashboard diagnostics/future display; not rendered today.
+    dash_heos_model=""
+    dash_heos_version=""
+    dash_heos_network=""
+    dash_zone2_name="Zone 2"
+    dash_zone2_power="Unknown"
+    dash_zone2_source="Unknown"
+    dash_zone2_source_index=""
+    dash_zone2_volume="Unknown"
+    dash_zone2_volume_db=""
+    dash_zone2_volume_raw=""
+    dash_zone2_muted="Unknown"
+    dash_now_message=$(_denon_display_empty_message no-metadata)
+    dash_now_title=""
+    dash_now_artist=""
+    dash_now_album=""
+    dash_now_station=""
+    dash_now_service=""
+    # shellcheck disable=SC2034 # Parsed for dashboard diagnostics/future display; not rendered today.
+    dash_now_type=""
+    dash_now_available=0
+    dash_errors=""
+    dash_main_sources=$(_denon_display_empty_message no-sources)
+    dash_diag_body=""
+
+    _denon_dashboard_fetch_core_status
 
     sources_text=$(_denon_sources 1 2>/dev/null)
     if [[ -n "$sources_text" ]]; then
@@ -6141,7 +6152,7 @@ EOF
         ;;
       redraw)
         dashboard_resize_pending=0
-        _denon_dashboard_redraw
+        "${dashboard_redraw_cmd:-_denon_dashboard_redraw}"
         ;;
       cycle_zone_target)
         if [[ "${dashboard_control_target:-Main}" == "Main" ]]; then
@@ -6151,7 +6162,7 @@ EOF
         fi
         _denon_dashboard_add_event "Key: Control Target: $dashboard_control_target"
         dashboard_resize_pending=0
-        _denon_dashboard_redraw
+        "${dashboard_redraw_cmd:-_denon_dashboard_redraw}"
         ;;
       digit_*)
         _denon_dashboard_handle_digit "${action#digit_}"
@@ -6224,7 +6235,7 @@ EOF
       _denon_dashboard_flush_numeric_if_expired
       if [[ "${dashboard_resize_pending:-0}" == "1" ]]; then
         dashboard_resize_pending=0
-        _denon_dashboard_redraw
+        "${dashboard_redraw_cmd:-_denon_dashboard_redraw}"
       fi
       chunk=$(awk -v remaining="$remaining" 'BEGIN { if (remaining < 0.2) printf "%.3f", remaining; else printf "0.200" }')
       if [[ -t 0 ]]; then
@@ -6744,6 +6755,23 @@ EOF
     fi
   }
 
+  _denon_udash_tv_output_label() {
+    # webOS getSoundOutput codes -> readable labels. The value is whatever
+    # the TV itself reports; unknown codes pass through raw.
+    case "$(_denon_trim "$1")" in
+      tv_speaker) echo "TV Speaker" ;;
+      tv_external_speaker) echo "TV Speaker + External" ;;
+      external_arc) echo "HDMI ARC" ;;
+      external_optical) echo "Optical" ;;
+      external_speaker) echo "External Speaker" ;;
+      bt_soundbar|soundbar) echo "Soundbar" ;;
+      lineout) echo "Line Out" ;;
+      headphone) echo "Headphone" ;;
+      "") echo "Unknown" ;;
+      *) _denon_trim "$1" ;;
+    esac
+  }
+
   _denon_udash_tv_probe() {
     # Prints three pre-parsed lines: power, volume, audio output.
     local power_line vol_line out_line
@@ -6755,13 +6783,60 @@ EOF
       "") power_line="Unreachable" ;;
     esac
     vol_line=$(timeout 4 lgtv volume status 2>/dev/null | sed -n 's/^Volume: //p' | sed -n '1p')
-    out_line=$(timeout 4 lgtv info current 2>/dev/null | sed -n "s/.*AudioOutputSource '\([^']*\)'.*/\1/p" | sed -n '1p')
-    printf '%s\n%s\n%s\n' "$power_line" "${vol_line:-Unknown}" "${out_line:-Unknown}"
+    out_line=$(timeout 4 lgtv audio status 2>/dev/null | sed -n "s/.*<AudioOutputSource '\([^']*\)'>.*/\1/p" | sed -n '1p')
+    if [[ -z "$out_line" ]]; then
+      out_line=$(timeout 4 lgtv info current 2>/dev/null | sed -n "s/.*AudioOutputSource '\([^']*\)'.*/\1/p" | sed -n '1p')
+    fi
+    out_line=$(_denon_udash_tv_output_label "$out_line")
+    printf '%s\n%s\n%s\n' "$power_line" "${vol_line:-Unknown}" "$out_line"
+  }
+
+  _denon_udash_starred_source() {
+    # Print "index<TAB>name" for the starred (active) entry of a sources
+    # listing. The renamed label here is what the stable dashboard displays
+    # (e.g. "TV Audio"), unlike the raw appcommand id ("TV").
+    local text="$1"
+    local line idx name
+
+    while IFS= read -r line; do
+      line=$(_denon_trim "$line")
+      [[ "${line:0:1}" == "*" ]] || continue
+      line=$(_denon_trim "${line:1}")
+      idx=${line%%[[:space:]]*}
+      [[ "$idx" =~ ^[0-9]+$ ]] || continue
+      name=$(_denon_clean_source_name "${line#"$idx"}")
+      [[ -n "$name" ]] || continue
+      printf '%s\t%s\n' "$idx" "$name"
+      return 0
+    done <<<"$text"
+    return 1
+  }
+
+  _denon_udash_collect_fallback() {
+    # AppCommand path failed: reuse the stable dashboard's proven fetchers
+    # (info JSON / pretty status / get_config) so the core zone fields still
+    # show the same data `denon dashboard` displays.
+    # shellcheck disable=SC2034 # info_ok is read/written by the shared fetch helper.
+    local info_ok=0
+    local zone_names_xml vol_xml raw_mute mute_from_vol
+
+    _denon_dashboard_fetch_core_status
+
+    zone_names_xml=$(_denon_get_config 6 2>/dev/null)
+    [[ -n "$zone_names_xml" ]] && _denon_dashboard_parse_zone_names "$zone_names_xml"
+
+    vol_xml=$(_denon_get_vol_xml 2>/dev/null)
+    if [[ -n "$vol_xml" ]]; then
+      _denon_dashboard_parse_volume_details "$vol_xml"
+      raw_mute=$(_denon_resolve_main_mute "$(_denon_extract_main_mute "$vol_xml")")
+      mute_from_vol=$(_denon_normalize_mute "$raw_mute")
+      [[ "$mute_from_vol" != "Unknown" ]] && dash_main_muted="$mute_from_vol"
+    fi
   }
 
   _denon_udash_collect() {
     local resp1 resp2 telnet_text telnet_file telnet_pid tv_file tv_pid
-    local identity_xml now_text now_rc sources_text heos_text value
+    local identity_xml now_text now_rc sources_text zone2_sources_text heos_text value vol_xml
 
     dash_receiver="Unknown"
     dash_ip="${IP:-Unknown}"
@@ -6792,6 +6867,7 @@ EOF
     dash_now_album=""
     dash_now_station=""
     dash_now_service=""
+    # shellcheck disable=SC2034 # Kept with the now-playing state vector for render helpers.
     dash_now_type=""
     dash_now_available=0
     dash_errors=""
@@ -6837,17 +6913,50 @@ EOF
       fi
     fi
 
-    # One POST per refresh cycle: the goform daemon tolerates large batches
-    # but wedges (connection-refused for ~45s) under rapid successive POSTs.
-    resp1=$(_denon_udash_appcommand_batch GetAllZonePowerStatus GetAllZoneSource \
-      GetAllZoneVolume GetAllZoneMuteStatus GetSurroundModeStatus GetAutoStandby GetZoneName \
-      GetToneControl GetDialogLevel GetSubwooferLevel GetChLevel GetAllZoneStereo)
-    if [[ "$resp1" == *"<rx>"* ]]; then
+    # The goform daemon accepts at most five <cmd> entries per AppCommand
+    # POST: six answer <error>1</error> and seven or more wedge the daemon
+    # (connection refused for ~50s), which is what blanked every appcommand
+    # field in watch mode. Send three small batches in the original verb
+    # order and join the responses so the positional parsers still see the
+    # 12-block layout; a failed batch is padded with one <error> line per
+    # verb to keep later block positions aligned.
+    local batch batch_resp pad verb ok_batches=0 core_ok=0
+    resp1=""
+    for batch in \
+      'GetAllZonePowerStatus GetAllZoneSource GetAllZoneVolume GetAllZoneMuteStatus' \
+      'GetSurroundModeStatus GetAutoStandby GetZoneName GetToneControl' \
+      'GetDialogLevel GetSubwooferLevel GetChLevel GetAllZoneStereo'; do
+      [[ -n "$resp1" ]] && sleep 0.2
+      # shellcheck disable=SC2086 # batch is a deliberate space-separated verb list
+      batch_resp=$(_denon_udash_appcommand_batch $batch)
+      if [[ "$batch_resp" == *"<rx>"* ]]; then
+        ok_batches=$((ok_batches + 1))
+        [[ "$batch" == GetAllZonePowerStatus* ]] && core_ok=1
+        resp1="${resp1}"$'\n'"${batch_resp}"
+      else
+        pad=""
+        for verb in $batch; do pad="${pad}<error>9</error>"$'\n'; done
+        resp1="${resp1}"$'\n'"${pad}"
+      fi
+    done
+    if (( ok_batches > 0 )); then
       _denon_udash_parse_appcmd1 "$resp1"
       resp2=$(_denon_udash_appcmd_tail "$resp1" 7)
       _denon_udash_parse_appcmd2 "$resp2"
+    fi
+    if (( ! core_ok )); then
+      if (( ok_batches > 0 )); then
+        dash_errors="${dash_errors}appcommand status partial (fallback used); "
+      else
+        dash_errors="${dash_errors}appcommand status unavailable (fallback used); "
+      fi
+      _denon_udash_collect_fallback
     else
-      dash_errors="${dash_errors}appcommand status unavailable; "
+      # Volume details (main max, zone2 raw 0-98 scale) come from the same
+      # XML the stable dashboard uses so both dashboards show identical
+      # numbers; appcommand only reports the limit and the display value.
+      vol_xml=$(_denon_get_vol_xml 2>/dev/null)
+      [[ -n "$vol_xml" ]] && _denon_dashboard_parse_volume_details "$vol_xml"
     fi
 
     identity_xml=$(_denon_get_identity_xml 2>/dev/null)
@@ -6858,8 +6967,18 @@ EOF
     if [[ -n "$sources_text" ]]; then
       dash_main_sources=$(_denon_dashboard_sources_body "$sources_text")
       [[ -n "$(_denon_trim "$dash_main_sources")" ]] || dash_main_sources=$(_denon_display_empty_message no-sources)
+      if value=$(_denon_udash_starred_source "$sources_text"); then
+        dash_main_source_index=${value%%$'\t'*}
+        dash_main_source=${value#*$'\t'}
+      fi
     else
       dash_errors="${dash_errors}main sources unavailable; "
+    fi
+
+    zone2_sources_text=$(_denon_sources 2 2>/dev/null)
+    if [[ -n "$zone2_sources_text" ]] && value=$(_denon_udash_starred_source "$zone2_sources_text"); then
+      dash_zone2_source_index=${value%%$'\t'*}
+      dash_zone2_source=${value#*$'\t'}
     fi
 
     now_text=$(_denon_track 2>&1)
@@ -7005,7 +7124,9 @@ EOF
   _denon_udash_layout() {
     local cols="$1"
     local rows="$2"
-    local avail used
+    local avail used footer_extra=0
+
+    [[ "${dashboard_keyboard_active:-0}" == "1" ]] && footer_extra=1
 
     udash_width="$cols"
     udash_top_h=11
@@ -7020,7 +7141,7 @@ EOF
       udash_w3="$udash_w1"
       udash_w4="$udash_w1"
       udash_w5=$((avail - udash_w1 * 4))
-      used=$((udash_top_h + udash_now_h + 3))
+      used=$((udash_top_h + udash_now_h + 3 + footer_extra))
     elif (( cols >= 120 )); then
       udash_mode="mid"
       avail=$((cols - 4))
@@ -7029,7 +7150,7 @@ EOF
       udash_w3=$((avail - udash_w1 * 2))
       udash_w4=$(((cols - 2) / 2))
       udash_w5=$((cols - 2 - udash_w4))
-      used=$((udash_top_h * 2 + udash_now_h + 4))
+      used=$((udash_top_h * 2 + udash_now_h + 4 + footer_extra))
     else
       udash_mode="narrow"
       udash_w1="$cols"
@@ -7199,43 +7320,21 @@ EOF
     printf '\033[H\033[J%s' "$rendered"
   }
 
+  # Keyboard handling is shared with the stable dashboard: the caller sets
+  # dashboard_redraw_cmd=_denon_udash_redraw so redraws use the ultra
+  # renderer. The shared sleep helper also polls keys when a slow collect
+  # consumed the whole interval (remaining <= 0) — without that, quit and
+  # every other binding went dead whenever collection ran long.
   _denon_udash_handle_key() {
-    case "$1" in
-      q|Q) dashboard_stop_pending=1 ;;
-      r|R|$'\014') dashboard_resize_pending=1 ;;
-    esac
+    _denon_dashboard_handle_key "$@"
   }
 
   _denon_udash_poll_key() {
-    local timeout="$1"
-    local key=""
-
-    [[ -t 0 ]] || return 1
-    if IFS= read -rsn1 -t "$timeout" key 2>/dev/null; then
-      _denon_udash_handle_key "$key"
-      return 0
-    fi
-    return 1
+    _denon_dashboard_poll_key "$@"
   }
 
   _denon_udash_sleep_or_resize() {
-    local remaining="$1"
-    local chunk
-
-    while [[ "${dashboard_stop_pending:-0}" != "1" ]] && awk -v r="$remaining" 'BEGIN { exit !(r > 0) }'; do
-      if [[ "${dashboard_resize_pending:-0}" == "1" ]]; then
-        dashboard_resize_pending=0
-        _denon_udash_redraw
-      fi
-      chunk=$(awk -v r="$remaining" 'BEGIN { if (r < 0.2) printf "%.3f", r; else printf "0.200" }')
-      if [[ -t 0 ]]; then
-        _denon_udash_poll_key "$chunk" || true
-        [[ "${dashboard_stop_pending:-0}" == "1" ]] && break
-      else
-        sleep "$chunk" 2>/dev/null || true
-      fi
-      remaining=$(awk -v r="$remaining" -v c="$chunk" 'BEGIN { r -= c; if (r < 0) r = 0; printf "%.3f", r }')
-    done
+    _denon_dashboard_sleep_or_resize "$@"
   }
 
   _denon_dashboard_ultra() {
@@ -7264,6 +7363,15 @@ EOF
     local dashboard_saved_stty=""
     local dashboard_terminal_active=0
     local dashboard_keyboard_active=0
+    local dashboard_control_target="Main"
+    local dashboard_last_command_ms=""
+    local dashboard_command_throttle_ms=200
+    local dashboard_numeric_buffer=""
+    local dashboard_numeric_deadline_ms=""
+    local dashboard_numeric_timeout_ms=750
+    # Route shared key-handler redraws through the ultra renderer.
+    # shellcheck disable=SC2034 # Read indirectly by the shared dashboard key handler.
+    local dashboard_redraw_cmd="_denon_udash_redraw"
     local udash_tv=0
     local usage="Usage: denon dashboard-ultra [--watch] [--interval seconds] [--tv] [--ascii|--unicode] [--color auto|always|never]"
 
@@ -7340,7 +7448,10 @@ EOF
       if [[ -t 0 ]]; then
         dashboard_saved_stty=$(stty -g 2>/dev/null || printf '')
         if [[ -n "$dashboard_saved_stty" ]]; then
-          stty -echo -icanon min 0 time 0 2>/dev/null && dashboard_terminal_active=1
+          if stty -echo -icanon min 0 time 0 2>/dev/null; then
+            dashboard_terminal_active=1
+            dashboard_keyboard_active=1
+          fi
         fi
       fi
       printf '\033[?25l'
