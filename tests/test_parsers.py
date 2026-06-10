@@ -1034,6 +1034,32 @@ class TestDashboardInteractiveKeys:
         assert "buffer=" in r.stdout
         assert "Key: Source 1 CBL/SAT" in r.stdout
 
+    def test_main_dashboard_slow_refresh_polls_pending_second_digit_before_numeric_flush(self):
+        code = textwrap.dedent(f"""\
+            calls=""
+            dashboard_control_target="Main"
+            dashboard_command_throttle_ms=0
+            dashboard_test_now_ms=2000
+            dashboard_numeric_timeout_ms=750
+            dashboard_numeric_buffer="1"
+            dashboard_numeric_deadline_ms=1000
+            dashboard_events=""
+            last_dashboard_event=""
+            {self.SOURCE_BODY}
+            _denon_set_source() {{ calls="${{calls}}source:$1:$2"$'\\n'; }}
+            _denon_dashboard_poll_key() {{ _denon_dashboard_handle_key 0; return 0; }}
+
+            _denon_dashboard_sleep_or_resize 0
+            printf 'calls=%s\\n' "$calls"
+            printf 'buffer=%s\\n' "$dashboard_numeric_buffer"
+            printf 'events=%s\\n' "$dashboard_events"
+        """)
+        r = _bash(code)
+        assert r.returncode == 0
+        assert "source:10:1" in r.stdout
+        assert "source:1:1" not in r.stdout
+        assert "Key: Source 10 Phono" in r.stdout
+
     def test_main_dashboard_invalid_source_number_warns_without_dispatch(self):
         code = textwrap.dedent(f"""\
             calls=""

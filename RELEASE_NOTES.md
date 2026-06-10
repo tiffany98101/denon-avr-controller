@@ -1,5 +1,47 @@
 # Release Notes
 
+## v1.2.0-beta.8
+
+Dashboard-ultra and v2 transport follow-up.
+
+### Dashboard-ultra
+
+- `dashboard-ultra` is documented as an alternate ultrawide shell dashboard:
+  five top-row panels at 200+ columns, 3+2 panels at 120-199 columns, stacked
+  output below 120 columns, and an optional `--tv` panel through the local
+  `lgtv` CLI.
+- Fixed the live AVR-X1600H AppCommand failure mode by splitting the previous
+  12-verb POST into three four-verb POSTs. Validation found that five or fewer
+  verbs per AppCommand POST are safe, six returns `<error>1</error>`, and seven
+  or more can wedge the receiver's `:8080` goform daemon for about 51 seconds.
+- Added stable-dashboard fallback for core zone fields when the first/core
+  AppCommand batch fails, using the existing `_denon_info` / `get_config` /
+  volume XML path.
+- Restored the interactive keybindings in `dashboard-ultra`: volume, previous /
+  next, play/pause, mute, source-number selection, zone toggle, and quit.
+  The ultra watch loop now uses the shared sleep/key-poll helper so `Q` is
+  still polled when collection consumes the whole interval.
+- The TV panel now uses `lgtv audio status` first and maps webOS output codes
+  such as `tv_speaker` and `external_arc` to readable labels.
+
+### v2 Runtime Layout
+
+- Added the v2 Bash library layer: `lib/config.sh`, `lib/protocol.sh`,
+  `lib/transport.sh`, and `lib/compat.sh`.
+- `denon.sh` sources those libraries from a checkout-local `lib/` directory
+  first, then from the packaged `/usr/share/denon/lib/` runtime directory.
+- The RPM release is `0.13.beta8` and installs the v2 libraries under
+  `/usr/share/denon/lib/`, while Python helpers remain under
+  `/usr/libexec/denon-avr-controller/`.
+- Added the `bin/denon` checkout wrapper and expanded `raw` completions for
+  `get`, `set`, `dump`, and `types`.
+
+### Validation
+
+- The Fable/Claude debug pass reported 354/354 tests passing after the
+  dashboard-ultra fixes, plus live AVR-X1600H one-shot/watch validation with no
+  Unknown frames and no repeated `:8080` daemon wedge.
+
 ## v1.2.0-beta.7
 
 Small follow-up to beta.6 that places the running controller version where it

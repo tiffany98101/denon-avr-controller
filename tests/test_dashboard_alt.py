@@ -845,6 +845,47 @@ def test_dashboard_single_ambiguous_digit_selects_after_timeout():
     assert calls == [[str(SCRIPT), "source", "1"]]
 
 
+def test_dashboard_wait_loop_reads_pending_second_digit_before_numeric_flush():
+    calls = []
+    now = [100.0]
+
+    def fake_clock():
+        return now[0]
+
+    def fake_runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    class PendingDigitKeyboard:
+        def __init__(self):
+            self.actions = ["digit_0"]
+
+        def read_action(self, timeout):
+            return self.actions.pop(0) if self.actions else None
+
+    controller = DashboardCommandController(
+        str(SCRIPT),
+        runner=fake_runner,
+        clock=fake_clock,
+        numeric_timeout_seconds=0.75,
+    )
+    snapshot = source_hotkey_snapshot()
+    assert controller.handle("digit_1", snapshot).events == ()
+    now[0] += 1.0
+
+    app = dashboard_alt.DashboardApp(
+        StaticProvider(),
+        DashboardRenderer(),
+        DashboardEventTracker(),
+        interval=0.05,
+    )
+    app._wait_for_refresh_or_quit(snapshot, PendingDigitKeyboard(), controller)
+
+    assert calls == [[str(SCRIPT), "source", "10"]]
+    assert any("Key: Source 10 Phono" in event for event in app.tracker.events)
+    assert not any("Key: Source 1 CBL/SAT" in event for event in app.tracker.events)
+
+
 def test_dashboard_invalid_source_number_warns_without_dispatch():
     calls = []
 

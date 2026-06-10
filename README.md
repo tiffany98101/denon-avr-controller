@@ -4,7 +4,7 @@ A practical CLI/dashboard tool for controlling and inspecting Denon AVR receiver
 
 ## Current Status
 
-Current version: `v1.2.0-beta.7`.
+Current version: `v1.2.0-beta.8`.
 
 The project currently supports a Bash shell CLI, a terminal dashboard, safe receiver diagnostics/data inventory commands, HEOS playback metadata/control where the receiver exposes it, and a native PowerShell module. It is a local-network receiver control and diagnostics tool; it does not use a cloud service.
 
@@ -18,6 +18,7 @@ The Bash CLI remains the source-of-truth implementation. The PowerShell module n
 - HEOS and Spotify now-playing metadata through receiver/HEOS read-only surfaces.
 - HEOS playback, queue, group, browse/search, play-stream, repeat, shuffle, and update commands in the Bash CLI.
 - Terminal dashboard with one-shot and watch modes, ASCII/Unicode rendering, color controls, source lists, now-playing details, receiver info, and recent events.
+- `dashboard-ultra`, an alternate ultrawide shell dashboard with five top-row panels at 200+ columns, 3+2 panels at 120-199 columns, stacked output below 120 columns, and an optional `--tv` panel backed by the local `lgtv` CLI.
 - Interactive dashboard keyboard controls (volume, mute, play/pause, previous/next, source-number selection, and zone toggle), with HEOS transport commands verified against player state before reporting success.
 - Source list display plus local source display aliases.
 - Receiver diagnostics through `doctor`, `signal-debug`, `data summary`, and `data fields`.
@@ -34,7 +35,7 @@ The Bash CLI remains the source-of-truth implementation. The PowerShell module n
 ## Requirements
 
 - Local network access to a compatible Denon AVR.
-- Bash CLI runtime: `bash`, `curl`, `awk`, `sed`, `grep`, `tr`, `mktemp`; `ip`, `arp`, and `nc` are useful for discovery and telnet queries; `avahi-tools` (`avahi-browse`) enables fast mDNS discovery on Fedora (`sudo dnf install avahi-tools`).
+- Bash CLI runtime: `bash`, `curl`, `awk`, `sed`, `grep`, `tr`, `mktemp`; `ip`, `arp`, `nc`, and `ncat` are useful for discovery and telnet queries; `jq` is required for the v2 JSON config helpers; `avahi-tools` (`avahi-browse`) enables fast mDNS discovery on Fedora (`sudo dnf install avahi-tools`).
 - Shell completions are available for bash, zsh, and fish. Completion support does not mean `denon.sh` is sourced or executed as zsh/fish; the runtime script requires bash.
 - HEOS helper workflows: `python3`.
 - Tests: `pytest`.
@@ -56,6 +57,12 @@ For local development, run commands from the repository root:
 ```text
 denon-avr-controller/
 ```
+
+The repository now includes a small executable wrapper at `bin/denon`, which
+executes the checkout's `denon.sh`. RPM installs place the main script at
+`/usr/bin/denon`, helper Python scripts under
+`/usr/libexec/denon-avr-controller/`, and the v2 Bash library layer under
+`/usr/share/denon/lib/`.
 
 Run the script directly:
 
@@ -304,6 +311,43 @@ DENON_DASHBOARD_WIDTH=120 DENON_DASHBOARD_HEIGHT=40 denon dashboard-alt --provid
 DENON_DASHBOARD_WIDTH=50 DENON_DASHBOARD_HEIGHT=20 denon dashboard-alt --provider auto --ascii --color never
 ```
 
+Ultrawide shell dashboard:
+
+`dashboard-ultra` is an alternate shell-rendered dashboard for wide terminals.
+It keeps the original `dashboard` and the experimental Python `dashboard-alt`
+intact. At 200+ columns it renders five top-row panels; at 120-199 columns it
+uses a 3+2 layout; below 120 columns it stacks panels. It adds signal/sample
+rate, speaker/channel-level detail, tone/dialog/subwoofer state,
+ECO/dimmer/auto-standby, richer Zone 2 detail, and an optional `--tv` panel.
+
+The ultra collector uses AppCommand for read-only status that is not exposed on
+the stable dashboard's normal XML/status path, plus one pipelined telnet query
+session and the existing HEOS/status helpers. On AVR-X1600H firmware, batched
+AppCommand POSTs are limited: up to five verbs per POST are safe, six returns
+`<error>1</error>`, and seven or more can leave the receiver's `:8080` goform
+daemon refusing connections for about 51 seconds. `dashboard-ultra` therefore
+sends three four-verb batches and preserves response order for the positional
+parsers.
+
+If the first/core AppCommand batch fails, `dashboard-ultra` falls back to the
+stable dashboard's `_denon_dashboard_fetch_core_status` path (`_denon_info`,
+`get_config`, and volume XML) so core fields keep showing the same receiver
+state as `denon dashboard`. Partial AppCommand failures are padded internally so
+later response blocks stay aligned.
+
+In interactive watch mode, `dashboard-ultra` uses the same restored keyboard
+controls as the stable dashboard: `↑/↓=Volume`, `←/→=Prev/Next`,
+`Space=Play/Pause`, `M=Mute`, `#=Source From List`, `Z=Zone`, and `Q=Quit`.
+The shared sleep/key-poll loop still polls when collection consumes the whole
+interval, so `Q` remains responsive during slow refreshes.
+
+```bash
+denon dashboard-ultra
+denon dashboard-ultra --watch --interval 5 --unicode --color always
+denon dashboard-ultra --watch --tv
+DENON_DASHBOARD_WIDTH=220 DENON_DASHBOARD_HEIGHT=42 denon dashboard-ultra --watch
+```
+
 Data inventory and diagnostics:
 
 ```bash
@@ -365,6 +409,8 @@ Raw and snapshot workflows:
 ./denon.sh rawstatus
 ./denon.sh raw get 3
 ./denon.sh raw get 7
+./denon.sh raw dump 3 7 12
+./denon.sh raw types
 ./denon.sh snapshot
 ./denon.sh diff snapshots/a snapshots/b
 ```

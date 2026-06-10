@@ -1,4 +1,4 @@
-.TH DENON 1 "June 2026" "denon-avr-controller 1.2.0-beta.5" "User Commands"
+.TH DENON 1 "June 2026" "denon-avr-controller 1.2.0-beta.8" "User Commands"
 .SH NAME
 denon \- command\-line controller for Denon and Marantz AVR receivers
 .SH SYNOPSIS
@@ -43,8 +43,8 @@ Live full\-screen status view.
 When
 .B dashboard \-\-watch
 runs in an interactive terminal, the following keys work without Enter:
-.BR \(ua/\(da=Volume ,
-.BR \(la/\(ra=Prev/Next ,
+.BR Up/Down=Volume ,
+.BR Left/Right=Prev/Next ,
 .BR Space=Play/Pause ,
 .BR M=Mute ,
 .BR #=Source\ From\ List ,
@@ -93,8 +93,8 @@ When
 .B dashboard\-alt \-\-watch
 runs in an interactive terminal, it supports the same keyboard controls as
 .BR dashboard :
-.BR \(ua/\(da=Volume ,
-.BR \(la/\(ra=Prev/Next ,
+.BR Up/Down=Volume ,
+.BR Left/Right=Prev/Next ,
 .BR Space=Play/Pause ,
 .BR M=Mute ,
 .BR #=Source\ From\ List ,
@@ -109,6 +109,40 @@ and
 .B 13
 are supported, and transport keypresses are shown in Recent Events with a
 HEOS sent, verified, failed, throttled, or no-change result.
+.TP
+.BR dashboard\-ultra " [\-\-watch] [\-\-interval \fIsec\fR] [\-\-tv] [\-\-color \fIauto|always|never\fR] [\-\-unicode|\-\-ascii]"
+Alternate ultrawide shell dashboard. At 200+ columns it renders five top-row
+panels; at 120-199 columns it renders a 3+2 panel layout; below 120 columns it
+stacks panels. It adds signal/sample-rate, speaker/channel-level, tone/dialog,
+subwoofer, ECO/dimmer/auto-standby, richer Zone 2, and optional
+.B \-\-tv
+status through the local
+.B lgtv
+CLI.
+.IP
+The collector uses small AppCommand batches plus Telnet/HEOS/status helpers.
+On the tested AVR-X1600H firmware, AppCommand batches of five verbs or fewer
+are safe, six returns
+.BR <error>1</error> ,
+and seven or more can leave
+.B :8080
+refusing connections for about 51 seconds. If the core AppCommand batch fails,
+.B dashboard\-ultra
+falls back to the stable dashboard's status/get_config path for core zone
+fields.
+.IP
+When
+.B dashboard\-ultra \-\-watch
+runs in an interactive terminal, it supports the same keyboard controls as
+.BR dashboard :
+.BR Up/Down=Volume ,
+.BR Left/Right=Prev/Next ,
+.BR Space=Play/Pause ,
+.BR M=Mute ,
+.BR #=Source\ From\ List ,
+.BR Z=Zone ,
+and
+.BR Q=Quit .
 .SS Power and volume
 .TP
 .BR on | off
@@ -202,6 +236,9 @@ Manage named receiver\-state profiles.
 .B data \fBfields|summary|dump|capabilities|discover\fR
 Low\-level field access.
 .TP
+.B raw \fBget|set|dump|types\fR
+Raw receiver XML/status helpers and v2 passthrough transport commands.
+.TP
 .B completion \fBbash|zsh|fish|install\fR
 Print shell completion scripts, or install completion for the current user.
 .B completion install
@@ -282,6 +319,17 @@ The directory may need to be present in
 .I ~/.config/fish/completions/denon.fish
 Per\-user fish completion target used by
 .BR "denon completion install" .
+.TP
+.I /usr/share/denon/lib/
+Packaged v2 Bash library runtime location for
+.BR config.sh ,
+.BR protocol.sh ,
+.BR transport.sh ,
+and
+.BR compat.sh .
+.TP
+.I /usr/libexec/denon-avr-controller/
+Packaged helper location for dashboard and HEOS Python helper scripts.
 .SH EXAMPLES
 .EX
 denon status
@@ -292,6 +340,8 @@ DENON_IP=192.0.2.10 denon off
 denon dashboard-alt \-\-provider auto
 denon dashboard-alt \-\-provider direct \-\-json
 denon dashboard-alt \-\-compare-providers
+denon dashboard-ultra \-\-watch \-\-interval 5
+denon dashboard-ultra \-\-watch \-\-tv
 denon completion install
 denon completion install \-\-shell bash
 denon completion bash > ~/.local/share/bash\-completion/completions/denon

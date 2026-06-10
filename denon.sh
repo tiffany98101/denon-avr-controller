@@ -6226,13 +6226,11 @@ EOF
     local chunk
 
     if ! awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'; then
-      _denon_dashboard_flush_numeric_if_expired
       _denon_dashboard_poll_key 0.200 || true
       _denon_dashboard_flush_numeric_if_expired
       return 0
     fi
     while [[ "${dashboard_stop_pending:-0}" != "1" ]] && awk -v remaining="$remaining" 'BEGIN { exit !(remaining > 0) }'; do
-      _denon_dashboard_flush_numeric_if_expired
       if [[ "${dashboard_resize_pending:-0}" == "1" ]]; then
         dashboard_resize_pending=0
         "${dashboard_redraw_cmd:-_denon_dashboard_redraw}"
@@ -6243,6 +6241,7 @@ EOF
         _denon_dashboard_flush_numeric_if_expired
         [[ "${dashboard_stop_pending:-0}" == "1" ]] && break
       else
+        _denon_dashboard_flush_numeric_if_expired
         sleep "$chunk" 2>/dev/null || true
       fi
       remaining=$(awk -v remaining="$remaining" -v chunk="$chunk" 'BEGIN { remaining -= chunk; if (remaining < 0) remaining=0; printf "%.3f", remaining }')
