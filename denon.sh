@@ -12,6 +12,21 @@ DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.8}"
 # For testing without discovery:
 #   export DENON_IP=192.0.2.10
 
+_denon_source_v2_libs() {
+  local script_dir lib_dir file
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd -P) || script_dir=""
+  for lib_dir in "$script_dir/lib" "/usr/share/denon/lib"; do
+    [[ -d "$lib_dir" ]] || continue
+    for file in config.sh protocol.sh transport.sh compat.sh; do
+      # shellcheck source=/dev/null
+      [[ -r "$lib_dir/$file" ]] && source "$lib_dir/$file"
+    done
+    return 0
+  done
+}
+
+_denon_source_v2_libs
+
 _denon_lower() {
   printf '%s' "${1,,}"
 }
@@ -86,13 +101,13 @@ denon() {
   _denon_avahi_candidates() {
     command -v avahi-browse >/dev/null 2>&1 || return 0
 
-    local svc type iface proto name service domain hostname address port txt
+    local svc type _iface proto name service _domain _hostname address _port txt
     local -a batch
 
     for svc in _heos-audio._tcp _airplay._tcp; do
       _denon_debug "avahi: browsing $svc"
       batch=()
-      while IFS=';' read -r type iface proto name service domain hostname address port txt; do
+      while IFS=';' read -r type _iface proto name service _domain _hostname address _port txt; do
         [[ "$type" == "=" ]]    || continue
         [[ "$proto" == "IPv4" ]] || continue
         [[ -n "$address" ]]     || continue
@@ -379,6 +394,8 @@ Receiver status:
   denon raw get <type>       Fetch a raw get_config type, for example 3, 4, 7, 12
   denon raw set <type> '<xml>'
                              Send a raw set_config payload
+  denon raw dump [type ...]   Fetch raw get_config XML for common or supplied types
+  denon raw types             List common get_config type numbers
   denon snapshot [dir]       Save core XML responses to a timestamped directory
   denon diff <snap-a> <snap-b>
                              Compare two snapshot directories
@@ -671,6 +688,7 @@ EOF
       return 0
     fi
     if [[ -n "${ZSH_VERSION:-}" ]]; then
+      # shellcheck disable=SC2154 # zsh populates funcfiletrace when sourced.
       for trace in "${funcfiletrace[@]}"; do
         candidate="${trace%%:*}"
         if [[ -n "$candidate" && -r "$candidate" ]]; then
@@ -1237,6 +1255,10 @@ EOF
 
   _denon_telnet() {
     local command="$1"
+    if [[ -z "${DENON_UNIT_TEST:-}" ]] && declare -F avr_send >/dev/null 2>&1; then
+      avr_send --quiet --timeout "${DENON_SEND_TIMEOUT:-1}" -- "$IP" "$command"
+      return $?
+    fi
     if command -v nc >/dev/null 2>&1; then
       _denon_debug "telnet $IP:23 $command"
       printf '%s\r' "$command" | nc -w 2 "$IP" 23 >/dev/null
@@ -1270,6 +1292,13 @@ EOF
 
   _denon_telnet_query() {
     local command="$1"
+    if [[ -z "${DENON_UNIT_TEST:-}" ]] && declare -F avr_send >/dev/null 2>&1; then
+      local expect="$command"
+      expect="${expect%\?}"
+      expect="${expect%"${expect##*[![:space:]]}"}"
+      avr_send --expect "$expect" --timeout "${DENON_SEND_TIMEOUT:-1}" -- "$IP" "$command"
+      return $?
+    fi
     command -v nc >/dev/null 2>&1 || {
       echo "Error: nc is required for this command" >&2
       return 1
@@ -2065,6 +2094,35 @@ EOF
     fi
     _denon_set_config "$type" "$data" || return 1
     echo "Sent raw set_config type=$type"
+  }
+
+  _denon_raw_types() {
+    cat <<'EOF'
+3 identity
+4 power
+6 zone names
+7 sources
+8 setup lock
+9 Bluetooth/headphones
+10 speaker preset
+11 system
+12 volume
+EOF
+  }
+
+  _denon_raw_dump() {
+    local -a types=("$@")
+    local type
+    (( ${#types[@]} )) || types=(3 4 6 7 8 9 10 11 12)
+    for type in "${types[@]}"; do
+      if ! _denon_is_unsigned_integer "$type"; then
+        echo "Usage: denon raw dump [type ...]" >&2
+        return 1
+      fi
+      printf '%s\n' "----- type $type -----"
+      _denon_get_config "$type" || return 1
+      printf '\n'
+    done
   }
 
   _denon_snapshot() {
@@ -2977,7 +3035,9 @@ EOF
     data_available_records=""
     data_source_rows_main=""
     data_source_rows_zone2=""
+    # shellcheck disable=SC2034 # Stored and read later through indirect raw XML variables.
     data_raw_type_1=""
+    # shellcheck disable=SC2034 # Stored and read later through indirect raw XML variables.
     data_raw_type_2=""
     data_raw_type_3=""
     data_raw_type_4=""
@@ -3216,7 +3276,7 @@ EOF
   }
 
   _denon_data_collect_upnp() {
-    local deviceinfo_body aios_body url field_val
+    local deviceinfo_body aios_body url
 
     data_upnp_mac="" data_upnp_model="" data_upnp_pending_upgrade_version="" data_upnp_comm_api="" data_upnp_zones=""
     data_upnp_serial="" data_upnp_aios_fw="" data_upnp_udn=""
@@ -5106,8 +5166,11 @@ EOF
     fi
 
     dash_layout_width="$cols"
+    # shellcheck disable=SC2034 # Layout globals are consumed by dashboard render helpers.
     dash_layout_height="$rows"
+    # shellcheck disable=SC2034 # Layout globals are consumed by dashboard render helpers.
     dash_layout_gap="$gap"
+    # shellcheck disable=SC2034 # Layout globals are consumed by dashboard render helpers.
     dash_layout_footer_height="$footer_height"
 
     if (( cols >= 100 )); then
@@ -5424,7 +5487,7 @@ EOF
         fi
       fi
       if [[ -r "$script_path" ]]; then
-        version=$(DENON_UNIT_TEST= bash "$script_path" --version 2>/dev/null | sed -n '1p')
+        version=$(DENON_UNIT_TEST='' bash "$script_path" --version 2>/dev/null | sed -n '1p')
         version=$(_denon_trim "$version")
         if [[ -n "$version" ]]; then
           printf '%s' "$version"
@@ -5837,6 +5900,7 @@ EOF
       dashboard_transport_result="unavailable"
       return 1
     }
+    # shellcheck disable=SC2034 # Exposed to dashboard tests/diagnostics after this helper runs.
     dashboard_transport_command="$command"
 
     output_file=$(mktemp 2>/dev/null || printf '')
@@ -5846,6 +5910,7 @@ EOF
     elif [[ -n "$output_file" ]]; then
       output=$(<"$output_file")
       rm -f "$output_file"
+      # shellcheck disable=SC2034 # Exposed to dashboard tests/diagnostics after this helper runs.
       dashboard_transport_error="$output"
       if printf '%s' "$output" | grep -qiE 'no HEOS player|invalid HEOS player|no HEOS player id'; then
         dashboard_transport_result="no-player"
@@ -8217,6 +8282,11 @@ EOF
   DENON_NO_VERIFY_ACTIVE="$_no_verify"
   set -- "${_quiet_args[@]+"${_quiet_args[@]}"}"
 
+  if declare -F denon_v2_global_flags >/dev/null 2>&1; then
+    denon_v2_global_flags "$@" || return $?
+    set -- "${DENON_V2_ARGS[@]+"${DENON_V2_ARGS[@]}"}"
+  fi
+
   local cmd
   cmd=$(_denon_lower "$1")
 
@@ -8294,6 +8364,24 @@ EOF
       ;;
   esac
 
+  if declare -F denon_v2_handles >/dev/null 2>&1 && denon_v2_handles "$cmd" "${@:2}"; then
+    denon_v2_dispatch "$cmd" "${@:2}"
+    return $?
+  fi
+
+  if [[ "$cmd" == "raw" ]]; then
+    case "$(_denon_lower "${2:-}")" in
+      types)
+        _denon_raw_types
+        return $?
+        ;;
+      help|-h|--help|"")
+        echo "Usage: denon raw {get <type>|set <type> <xml payload>|dump [type ...]|types|<protocol command> [--http]}" >&2
+        return 0
+        ;;
+    esac
+  fi
+
   local IP="" BASE=""
   if [[ "$cmd" == "data" ]] && _denon_data_requires_receiver "${@:2}"; then
     IP=$(_denon_data_target_ip) || return 1
@@ -8352,7 +8440,9 @@ EOF
       case "$raw_cmd" in
         get) _denon_raw_get "$3" ;;
         set) _denon_raw_set "$3" "${*:4}" ;;
-        *) echo "Usage: denon raw {get <type>|set <type> <xml payload>}" >&2; return 1 ;;
+        dump) _denon_raw_dump "${@:3}" ;;
+        types) _denon_raw_types ;;
+        *) echo "Usage: denon raw {get <type>|set <type> <xml payload>|dump [type ...]|types}" >&2; return 1 ;;
       esac
       ;;
 
@@ -8600,10 +8690,12 @@ EOF
       return 1
       ;;
   esac
+  local _cmd_status=$?
 
   if (( _write_lock_active )); then
     _denon_release_write_lock
   fi
+  return "$_cmd_status"
 }
 
 # shellcheck disable=SC2034,SC2153,SC2154
@@ -8618,7 +8710,7 @@ _denon_completion() {
   )
   modes=(stereo direct pure movie music game auto)
   zone2_commands=(status sources source rename-source clear-source-name on off mute unmute vol volume up down sleep)
-  raw_commands=(get set)
+  raw_commands=(get set dump types)
   json_flags=(--json)
   global_flags=(--quiet --silent --no-verify)
   zones=(1 2)

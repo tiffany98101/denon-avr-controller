@@ -160,7 +160,7 @@ _denon() {
                     compadd -- --json
                     ;;
                 raw)
-                    compadd -- get set
+                    compadd -- get set dump types
                     ;;
                 config)
                     compadd -- set unset path

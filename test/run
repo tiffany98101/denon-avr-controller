@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+BATS="$ROOT/test/vendor/bats-core/bin/bats"
+
+if [[ ! -x "$BATS" ]]; then
+  echo "test/run: missing vendored bats-core at $BATS" >&2
+  exit 127
+fi
+
+exec "$BATS" "$ROOT/test" "$@"

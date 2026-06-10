@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016,SC2329
 set -u
 
 SCRIPT="./denon.sh"

@@ -1,5 +1,6 @@
 # bash completion for denon-avr-controller
 # shellcheck shell=bash
+# shellcheck disable=SC2207
 # Install: source this file, or place it in /usr/share/bash-completion/completions/denon
 
 # shellcheck disable=SC2034
@@ -101,7 +102,7 @@ _denon_complete() {
             return
             ;;
         raw)
-            COMPREPLY=( $(compgen -W "get set" -- "$cur") )
+            COMPREPLY=( $(compgen -W "get set dump types" -- "$cur") )
             return
             ;;
         config)

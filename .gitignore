@@ -56,3 +56,4 @@ claude-handoff.md
 
 # Pester CI output
 testResults.xml
+.claude-run/
