@@ -18,7 +18,7 @@ The Bash CLI remains the source-of-truth implementation. The PowerShell module n
 - HEOS and Spotify now-playing metadata through receiver/HEOS read-only surfaces.
 - HEOS playback, queue, group, browse/search, play-stream, repeat, shuffle, and update commands in the Bash CLI.
 - Terminal dashboard with one-shot and watch modes, ASCII/Unicode rendering, color controls, source lists, now-playing details, receiver info, and recent events.
-- `dashboard-ultra`, an alternate ultrawide shell dashboard with five top-row panels at 200+ columns, 3+2 panels at 120-199 columns, stacked output below 120 columns, and an optional `--tv` panel backed by the local `lgtv` CLI.
+- `dashboard-ultra`, an alternate shell dashboard with adaptive priority-filled panels that surface more receiver data as the terminal grid grows and shed lower-priority fields as it shrinks, plus an optional `--tv` panel backed by the local `lgtv` CLI.
 - Interactive dashboard keyboard controls (volume, mute, play/pause, previous/next, source-number selection, and zone toggle), with HEOS transport commands verified against player state before reporting success.
 - Source list display plus local source display aliases.
 - Receiver diagnostics through `doctor`, `signal-debug`, `data summary`, and `data fields`.
@@ -315,9 +315,11 @@ Ultrawide shell dashboard:
 
 `dashboard-ultra` is an alternate shell-rendered dashboard for wide terminals.
 It keeps the original `dashboard` and the experimental Python `dashboard-alt`
-intact. At 200+ columns it renders five top-row panels; at 120-199 columns it
-uses a 3+2 layout; below 120 columns it stacks panels. It adds signal/sample
-rate, speaker/channel-level detail, tone/dialog/subwoofer state,
+intact. Layout is driven by the terminal cell grid: high-priority panels and
+fields render first, columns reflow from five toward two as width drops, and
+lower-priority fields/panels are omitted before they can overflow the screen.
+It adds signal/sample-rate, speaker/channel-level detail, tone/dialog/subwoofer
+state, DSP/Audyssey fields, device/firmware identity, system/lock fields,
 ECO/dimmer/auto-standby, richer Zone 2 detail, and an optional `--tv` panel.
 
 The ultra collector uses AppCommand for read-only status that is not exposed on

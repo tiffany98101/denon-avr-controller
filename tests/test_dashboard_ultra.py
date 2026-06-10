@@ -156,6 +156,18 @@ SET_RENDER_VARS = textwrap.dedent("""\
     dash_u_chlevels_line1="C 0.0  FL 0.0  FR 0.0"; dash_u_chlevels_line2="SL 0.0  SR 0.0"
     dash_u_speaker_config="5.0"; dash_u_azs="Off"; dash_u_standby="Main Off / Zone2 Off"
     dash_u_zone2_limit="-10.0"; udash_tv=0; udash_tv_body=""
+    dash_u_dynamic_eq="On"; dash_u_dynamic_volume="Light"; dash_u_multeq="Reference"
+    dash_u_cinema_eq="Off"; dash_u_loudness_management="On"; dash_u_subwoofer_level_db="-3 dB"
+    dash_u_heos_volume_level="42"; dash_u_brand_code="7"; dash_u_model_type="1"
+    dash_u_main_volume_scale="7"; dash_u_main_volume_limit_raw="99"
+    dash_u_zone2_volume_scale="1"; dash_u_zone2_volume_limit_raw="70"
+    dash_u_aios_firmware="Aios 4.025"; dash_u_serial_number="ABC1234567"
+    dash_u_upnp_mac="00:11:22:33:44:55"; dash_u_comm_api_vers="0301"
+    dash_u_device_zones="2"; dash_u_upnp_model="AVR-X1600H"; dash_u_udn="uuid:denon-test"
+    dash_u_pending_upgrade_version="01.02.03"
+    dash_u_setup_lock="2"; dash_u_menu_lock="2"; dash_u_advanced_mode="1"; dash_u_ci_mode="2"
+    dash_u_gui_type="1"; dash_u_webui_type="3"; dash_u_heos_sign_in="3"; dash_u_speaker_preset="0"
+    dash_u_product_type="219"; dash_u_bt_headphones_single_used="0"
     dashboard_events=""; dashboard_ascii=0; dashboard_color_mode=never; dashboard_use_color=0; watch=0
 """)
 
@@ -328,3 +340,41 @@ class TestUdashRenderAlignment:
     def test_multibyte_now_playing_stays_aligned(self):
         # Em-dash in title comes via SET_RENDER_VARS ("Song — Title").
         self._assert_uniform(220)
+
+    def test_priority_fill_respects_small_grid(self):
+        lines = self._render(80, 24)
+        text = "\n".join(lines)
+        assert len(lines) <= 24
+        for required in [
+            "Power:   On",
+            "Source:  TV",
+            "Volume:  -37.5 dB",
+            "Muted:   No",
+            "Power:   Off",
+            "Now:     Song",
+            "State:   Playing",
+            "Receiver: Denon AVR-X1600H",
+            "IP:      192.168.1.162",
+            "Recent Events",
+        ]:
+            assert required in text
+        for shed in ["Audio Signal", "DSP / Audyssey", "Device / Firmware", "System / Locks"]:
+            assert shed not in text
+
+    def test_priority_fill_large_grid_surfaces_low_priority_panels(self):
+        lines = self._render(320, 90)
+        text = "\n".join(lines)
+        assert len(lines) <= 90
+        for expected in [
+            "DSP / Audyssey",
+            "Dynamic EQ: On",
+            "HEOS Vol: 42",
+            "Device / Firmware",
+            "AIOS FW: Aios 4.025",
+            "Serial:  ABC1234567",
+            "System / Locks",
+            "Setup Lock: 2",
+            "Product: 219",
+            "Update:  01.02.03",
+        ]:
+            assert expected in text

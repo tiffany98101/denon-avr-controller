@@ -111,10 +111,11 @@ are supported, and transport keypresses are shown in Recent Events with a
 HEOS sent, verified, failed, throttled, or no-change result.
 .TP
 .BR dashboard\-ultra " [\-\-watch] [\-\-interval \fIsec\fR] [\-\-tv] [\-\-color \fIauto|always|never\fR] [\-\-unicode|\-\-ascii]"
-Alternate ultrawide shell dashboard. At 200+ columns it renders five top-row
-panels; at 120-199 columns it renders a 3+2 panel layout; below 120 columns it
-stacks panels. It adds signal/sample-rate, speaker/channel-level, tone/dialog,
-subwoofer, ECO/dimmer/auto-standby, richer Zone 2, and optional
+Alternate adaptive shell dashboard. It fills the terminal cell grid with
+priority-tiered panels and fields, reflows columns as width drops, and sheds
+lower-priority content before it can overflow. It adds signal/sample-rate,
+speaker/channel-level, tone/dialog, subwoofer, DSP/Audyssey, device/firmware,
+system/lock, ECO/dimmer/auto-standby, richer Zone 2, and optional
 .B \-\-tv
 status through the local
 .B lgtv

@@ -6833,6 +6833,53 @@ EOF
     fi
   }
 
+  _denon_udash_copy_data_field() {
+    local group="$1"
+    local field="$2"
+    local var="$3"
+    local value
+
+    value=$(_denon_data_record_value "$group" "$field" 2>/dev/null || printf '')
+    [[ -n "$value" ]] || return 0
+    printf -v "$var" '%s' "$value"
+  }
+
+  _denon_udash_collect_data_fields() {
+    _denon_data_collect_summary >/dev/null 2>&1 || return 1
+
+    _denon_udash_copy_data_field "tone_audyssey" "dynamic_eq" "dash_u_dynamic_eq"
+    _denon_udash_copy_data_field "tone_audyssey" "dynamic_volume" "dash_u_dynamic_volume"
+    _denon_udash_copy_data_field "tone_audyssey" "multeq" "dash_u_multeq"
+    _denon_udash_copy_data_field "tone_audyssey" "cinema_eq" "dash_u_cinema_eq"
+    _denon_udash_copy_data_field "tone_audyssey" "loudness_management" "dash_u_loudness_management"
+    _denon_udash_copy_data_field "tone_audyssey" "subwoofer_level_db" "dash_u_subwoofer_level_db"
+    _denon_udash_copy_data_field "network_heos" "heos_volume_level" "dash_u_heos_volume_level"
+    _denon_udash_copy_data_field "receiver" "brand_code" "dash_u_brand_code"
+    _denon_udash_copy_data_field "receiver" "model_type" "dash_u_model_type"
+    _denon_udash_copy_data_field "main_zone" "volume_scale" "dash_u_main_volume_scale"
+    _denon_udash_copy_data_field "main_zone" "volume_limit_raw" "dash_u_main_volume_limit_raw"
+    _denon_udash_copy_data_field "zone2" "volume_scale" "dash_u_zone2_volume_scale"
+    _denon_udash_copy_data_field "zone2" "volume_limit_raw" "dash_u_zone2_volume_limit_raw"
+    _denon_udash_copy_data_field "upnp" "aios_firmware" "dash_u_aios_firmware"
+    _denon_udash_copy_data_field "upnp" "serial_number" "dash_u_serial_number"
+    _denon_udash_copy_data_field "upnp" "upnp_mac" "dash_u_upnp_mac"
+    _denon_udash_copy_data_field "upnp" "comm_api_vers" "dash_u_comm_api_vers"
+    _denon_udash_copy_data_field "upnp" "device_zones" "dash_u_device_zones"
+    _denon_udash_copy_data_field "upnp" "upnp_model" "dash_u_upnp_model"
+    _denon_udash_copy_data_field "upnp" "udn" "dash_u_udn"
+    _denon_udash_copy_data_field "upnp" "pending_upgrade_version" "dash_u_pending_upgrade_version"
+    _denon_udash_copy_data_field "system" "setup_lock" "dash_u_setup_lock"
+    _denon_udash_copy_data_field "system" "menu_lock" "dash_u_menu_lock"
+    _denon_udash_copy_data_field "system" "advanced_mode" "dash_u_advanced_mode"
+    _denon_udash_copy_data_field "system" "ci_mode" "dash_u_ci_mode"
+    _denon_udash_copy_data_field "system" "gui_type" "dash_u_gui_type"
+    _denon_udash_copy_data_field "system" "webui_type" "dash_u_webui_type"
+    _denon_udash_copy_data_field "system" "heos_sign_in" "dash_u_heos_sign_in"
+    _denon_udash_copy_data_field "system" "speaker_preset" "dash_u_speaker_preset"
+    _denon_udash_copy_data_field "system" "product_type" "dash_u_product_type"
+    _denon_udash_copy_data_field "system" "bt_headphones_single_used" "dash_u_bt_headphones_single_used"
+  }
+
   _denon_udash_collect() {
     local resp1 resp2 telnet_text telnet_file telnet_pid tv_file tv_pid
     local identity_xml now_text now_rc sources_text zone2_sources_text heos_text value vol_xml
@@ -6893,6 +6940,37 @@ EOF
     dash_u_azs="Unknown"
     dash_u_standby="Unknown"
     dash_u_zone2_limit=""
+    dash_u_dynamic_eq=""
+    dash_u_dynamic_volume=""
+    dash_u_multeq=""
+    dash_u_cinema_eq=""
+    dash_u_loudness_management=""
+    dash_u_subwoofer_level_db=""
+    dash_u_heos_volume_level=""
+    dash_u_brand_code=""
+    dash_u_model_type=""
+    dash_u_main_volume_scale=""
+    dash_u_main_volume_limit_raw=""
+    dash_u_zone2_volume_scale=""
+    dash_u_zone2_volume_limit_raw=""
+    dash_u_aios_firmware=""
+    dash_u_serial_number=""
+    dash_u_upnp_mac=""
+    dash_u_comm_api_vers=""
+    dash_u_device_zones=""
+    dash_u_upnp_model=""
+    dash_u_udn=""
+    dash_u_pending_upgrade_version=""
+    dash_u_setup_lock=""
+    dash_u_menu_lock=""
+    dash_u_advanced_mode=""
+    dash_u_ci_mode=""
+    dash_u_gui_type=""
+    dash_u_webui_type=""
+    dash_u_heos_sign_in=""
+    dash_u_speaker_preset=""
+    dash_u_product_type=""
+    dash_u_bt_headphones_single_used=""
     udash_tv_body=""
 
     telnet_pid=""
@@ -6990,6 +7068,7 @@ EOF
       heos_text=$(_denon_dashboard_heos_status players-only)
     fi
     [[ -n "$heos_text" ]] && _denon_dashboard_parse_heos_status "$heos_text"
+    _denon_udash_collect_data_fields || dash_errors="${dash_errors}extended data unavailable; "
 
     if [[ -n "$telnet_pid" ]]; then
       wait "$telnet_pid" 2>/dev/null || true
@@ -7294,6 +7373,441 @@ EOF
     _denon_dashboard_render_card "Recent Events" "$udash_events_body" "$width" "$udash_bottom_h"
   }
 
+  _denon_udash_field_tiers() {
+    cat <<'EOF'
+main|0|Power|dash_main_power
+main|0|Source|dash_main_source
+main|0|Volume|dash_u_main_volume_label
+main|0|Muted|dash_u_main_muted_label
+main|1|Mode|dash_sound_mode
+main|1|Sleep|dash_u_sleep_main_label
+main|1|Zone|dash_main_zone_name
+zone2|0|Power|dash_zone2_power
+zone2|0|Source|dash_zone2_source
+zone2|0|Volume|dash_u_zone2_volume_label
+zone2|1|Muted|dash_u_zone2_muted_label
+zone2|1|Sleep|dash_u_sleep_zone2_label
+audio|1|Signal|dash_u_signal_label
+audio|1|Sample|dash_u_sample_rate_label
+audio|1|Mode|dash_sound_mode
+audio|1|LFE|dash_u_lfe_label
+audio|2|Speakers|dash_u_speaker_config_label
+audio|2|All-Zone|dash_u_azs
+audio|2|DRC|dash_u_drc_label
+tone|1|Bass|dash_u_bass_label
+tone|1|Treble|dash_u_treble_label
+tone|1|Sub|dash_u_sub
+tone|1|Levels|dash_u_chlevels_line1
+tone|1||dash_u_chlevels_line2
+tone|2|Tone|dash_u_tone_status_label
+tone|2|Dialog|dash_u_dialog
+receiver|0|Receiver|dash_receiver
+receiver|0|IP|dash_ip
+receiver|0|Update|dash_u_pending_upgrade_alert
+receiver|1|HEOS|dash_u_heos_label
+receiver|1|Eco|dash_u_eco_label
+receiver|1|Dimmer|dash_u_dimmer_label
+receiver|1|Standby|dash_u_standby
+receiver|3|Brand|dash_u_brand_code
+receiver|3|Model Type|dash_u_model_type
+receiver|3|Vol Scale|dash_u_main_volume_scale
+now|0|Now|dash_u_now_parts
+now|0|State|dash_u_state_label
+now|1|Service|dash_now_service
+now|1|Station|dash_now_station
+now|2|Artist|dash_now_artist
+now|2|Album|dash_now_album
+dsp|2|Dynamic EQ|dash_u_dynamic_eq
+dsp|2|Dynamic Vol|dash_u_dynamic_volume
+dsp|2|MultEQ|dash_u_multeq
+dsp|2|Cinema EQ|dash_u_cinema_eq
+dsp|2|Loudness|dash_u_loudness_management
+dsp|2|Subwoofer|dash_u_subwoofer_level_db
+dsp|2|HEOS Vol|dash_u_heos_volume_level
+firmware|3|AIOS FW|dash_u_aios_firmware
+firmware|3|Serial|dash_u_serial_number
+firmware|3|UPnP MAC|dash_u_upnp_mac
+firmware|3|API|dash_u_comm_api_vers
+firmware|3|Zones|dash_u_device_zones
+firmware|3|Model|dash_u_upnp_model
+firmware|3|UDN|dash_u_udn
+firmware|3|Upgrade|dash_u_pending_upgrade_version
+system|3|Setup Lock|dash_u_setup_lock
+system|3|Menu Lock|dash_u_menu_lock
+system|3|Advanced|dash_u_advanced_mode
+system|3|CI Mode|dash_u_ci_mode
+system|3|GUI|dash_u_gui_type
+system|3|Web UI|dash_u_webui_type
+system|3|HEOS Sign|dash_u_heos_sign_in
+system|3|Preset|dash_u_speaker_preset
+system|3|Product|dash_u_product_type
+system|3|BT Phones|dash_u_bt_headphones_single_used
+tv|1|Power|dash_u_tv_power
+tv|1|Volume|dash_u_tv_volume
+tv|1|Output|dash_u_tv_output
+EOF
+  }
+
+  _denon_udash_panel_tiers() {
+    cat <<'EOF'
+main|0|udash_main_title
+zone2|0|udash_zone2_title
+now|0|Now Playing
+receiver|0|Receiver / Network
+events|0|Recent Events
+audio|1|Audio Signal
+tone|1|Tone / Levels
+sources|1|Sources (Main)
+tv|1|TV (lgtv)
+dsp|2|DSP / Audyssey
+firmware|3|Device / Firmware
+system|3|System / Locks
+EOF
+  }
+
+  _denon_udash_label_line() {
+    local label="$1"
+    local value="$2"
+
+    value=$(_denon_display_unknown "$value")
+    if [[ -z "$label" ]]; then
+      printf '         %s\n' "$value"
+    else
+      printf '%-8s %s\n' "${label}:" "$value"
+    fi
+  }
+
+  _denon_udash_build_tier_body() {
+    local panel="$1"
+    local max_tier="$2"
+    local max_body_lines="$3"
+    local body="" line p tier label var value count=0
+
+    while IFS='|' read -r p tier label var; do
+      [[ "$p" == "$panel" ]] || continue
+      (( tier <= max_tier )) || continue
+      value="${!var:-}"
+      [[ "$var" == "dash_u_pending_upgrade_alert" && -z "$value" ]] && continue
+      line=$(_denon_udash_label_line "$label" "$value")
+      body="${body}${body:+$'\n'}${line%$'\n'}"
+      count=$((count + 1))
+      (( count >= max_body_lines )) && break
+    done < <(_denon_udash_field_tiers)
+
+    printf '%s\n' "$body"
+  }
+
+  _denon_udash_compose_sources_body() {
+    local width="$1"
+    local colw
+
+    if (( width < 100 )); then
+      printf '%s\n' "$dash_main_sources"
+    else
+      colw=$(((width - 6) / 2))
+      (( colw < 10 )) && colw=10
+      _denon_udash_two_col "$dash_main_sources" "$colw"
+    fi
+  }
+
+  _denon_udash_compose_events_body() {
+    local max_body_lines="$1"
+
+    (( max_body_lines < 5 )) && max_body_lines=5
+    if [[ -n "$dashboard_events" ]]; then
+      printf '%s\n' "$dashboard_events" | head -n "$max_body_lines"
+    else
+      printf '%s\n\n\n\n' "$(_denon_display_empty_message no-state-changes)"
+    fi
+  }
+
+  _denon_udash_column_count() {
+    local cols="$1"
+    local columns
+
+    if (( cols >= 240 )); then
+      columns=5
+    elif (( cols >= 170 )); then
+      columns=4
+    elif (( cols >= 115 )); then
+      columns=3
+    elif (( cols >= 80 )); then
+      columns=3
+    elif (( cols >= 54 )); then
+      columns=2
+    else
+      columns=1
+    fi
+    while (( columns > 1 && (cols - (columns - 1) * 2) / columns < 24 )); do
+      columns=$((columns - 1))
+    done
+    printf '%s\n' "$columns"
+  }
+
+  _denon_udash_group_widths() {
+    local cols="$1"
+    local count="$2"
+    local avail base extra i width
+
+    avail=$((cols - (count - 1) * 2))
+    base=$((avail / count))
+    extra=$((avail - base * count))
+    for ((i = 1; i <= count; i++)); do
+      width="$base"
+      (( i == count )) && width=$((width + extra))
+      printf '%s\n' "$width"
+    done
+  }
+
+  _denon_udash_prepare_values() {
+    local state_label now_parts network_label heos_label tv_lines pending_lower value
+
+    udash_main_title=$(_denon_display_zone_label "${dash_main_zone_name:-Main Zone}")
+    [[ "$udash_main_title" != "Main Zone" ]] && udash_main_title="$udash_main_title (Main)"
+    udash_zone2_title=$(_denon_display_zone_label "${dash_zone2_name:-Zone 2}")
+    [[ "$udash_zone2_title" != "Zone 2" ]] && udash_zone2_title="$udash_zone2_title (Zone 2)"
+
+    dash_u_main_volume_label="${dash_main_volume:-Unknown} dB"
+    [[ -n "$dash_main_max_volume_db" ]] && dash_u_main_volume_label="$dash_u_main_volume_label (max ${dash_main_max_volume_db} dB)"
+    dash_u_main_muted_label=$(_denon_mute_display_name "$dash_main_muted")
+    dash_u_sleep_main_label=$(_denon_udash_sleep_label "$dash_u_sleep_main")
+
+    if [[ -n "$dash_zone2_volume_db" ]]; then
+      dash_u_zone2_volume_label="${dash_zone2_volume_db} dB"
+      [[ -n "$dash_zone2_volume_raw" ]] && dash_u_zone2_volume_label="$dash_u_zone2_volume_label (raw ${dash_zone2_volume_raw})"
+      [[ -n "$dash_u_zone2_limit" ]] && dash_u_zone2_volume_label="$dash_u_zone2_volume_label, lim ${dash_u_zone2_limit}"
+    else
+      dash_u_zone2_volume_label="${dash_zone2_volume:-Unknown}"
+    fi
+    dash_u_zone2_muted_label=$(_denon_mute_display_name "$dash_zone2_muted")
+    dash_u_sleep_zone2_label=$(_denon_udash_sleep_label "$dash_u_sleep_zone2")
+
+    dash_u_signal_label="$dash_u_signal"
+    [[ -n "$dash_u_signal_label" ]] || dash_u_signal_label=$(_denon_udash_signal_label "$dash_u_signal_code")
+    dash_u_sample_rate_label=$(_denon_udash_sample_rate_label "$dash_u_sample_rate")
+    dash_u_speaker_config_label=$(_denon_display_unknown "$dash_u_speaker_config")
+    dash_u_drc_label=$(_denon_udash_titlecase_onoff "$dash_u_drc")
+    dash_u_lfe_label=$(_denon_udash_lfe_label "$dash_u_lfe")
+
+    dash_u_tone_status_label="${dash_u_tone_status:-}"
+    [[ -z "$dash_u_tone_status_label" && -n "$dash_u_tone_ctrl" ]] && dash_u_tone_status_label=$(_denon_udash_titlecase_onoff "$dash_u_tone_ctrl")
+    [[ -n "$dash_u_tone_status_label" ]] || dash_u_tone_status_label="Unknown"
+    dash_u_bass_label=$(_denon_udash_tone_db "$dash_u_bass_raw")
+    dash_u_treble_label=$(_denon_udash_tone_db "$dash_u_treble_raw")
+
+    network_label=$(_denon_display_network_label "$dash_heos_network")
+    heos_label="${dash_heos_version:-Unknown}"
+    [[ "$network_label" != "Unknown" ]] && heos_label="$heos_label ($network_label)"
+    dash_u_heos_label="$heos_label"
+    dash_u_eco_label=$(_denon_udash_eco_label "$dash_u_eco")
+    dash_u_dimmer_label=$(_denon_udash_dimmer_label "$dash_u_dimmer")
+
+    pending_lower=$(_denon_lower "$(_denon_trim "${dash_u_pending_upgrade_version:-}")")
+    dash_u_pending_upgrade_alert=""
+    case "$pending_lower" in
+      ""|00|0|unknown|null) ;;
+      *) dash_u_pending_upgrade_alert="$dash_u_pending_upgrade_version" ;;
+    esac
+
+    state_label=$(_denon_dashboard_transport_name "${dash_transport_state:-}") || state_label="Unknown"
+    [[ -n "$state_label" ]] || state_label="Unknown"
+    dash_u_state_label="$state_label"
+    now_parts=""
+    [[ -n "$(_denon_dashboard_clean_field "$dash_now_title")" ]] && now_parts="$dash_now_title"
+    [[ -n "$(_denon_dashboard_clean_field "$dash_now_artist")" ]] && now_parts="${now_parts}${now_parts:+ — }${dash_now_artist}"
+    [[ -n "$(_denon_dashboard_clean_field "$dash_now_album")" ]] && now_parts="${now_parts}${now_parts:+ — }${dash_now_album}"
+    [[ -n "$now_parts" ]] || now_parts="${dash_now_message:-Unknown}"
+    dash_u_now_parts="$now_parts"
+
+    dash_u_tv_power=""
+    dash_u_tv_volume=""
+    dash_u_tv_output=""
+    if [[ -n "${udash_tv_body:-}" ]]; then
+      tv_lines=$(printf '%s\n' "$udash_tv_body")
+      value=$(printf '%s\n' "$tv_lines" | sed -n 's/^Power:[[:space:]]*//p' | sed -n '1p'); dash_u_tv_power="$value"
+      value=$(printf '%s\n' "$tv_lines" | sed -n 's/^Volume:[[:space:]]*//p' | sed -n '1p'); dash_u_tv_volume="$value"
+      value=$(printf '%s\n' "$tv_lines" | sed -n 's/^Output:[[:space:]]*//p' | sed -n '1p'); dash_u_tv_output="$value"
+      [[ -n "$dash_u_tv_power$dash_u_tv_volume$dash_u_tv_output" ]] || dash_u_tv_power="$udash_tv_body"
+    fi
+  }
+
+  _denon_udash_build_panel_body() {
+    local key="$1"
+    local max_tier="$2"
+    local max_body_lines="$3"
+    local width="${4:-80}"
+
+    case "$key" in
+      sources) _denon_udash_compose_sources_body "$width" | head -n "$max_body_lines" ;;
+      events) _denon_udash_compose_events_body "$max_body_lines" ;;
+      *) _denon_udash_build_tier_body "$key" "$max_tier" "$max_body_lines" ;;
+    esac
+  }
+
+  _denon_udash_make_plan() {
+    local cols="$1"
+    local rows="$2"
+    local max_tier="$3"
+    local columns footer_height=1 available panel_lines="" rendered_rows=0
+    local current_count=0 current_height=0 current_lines="" key tier title_ref title title_value
+    local widths width body body_lines height group_count line row_height skipped_required=0
+
+    [[ "${dashboard_keyboard_active:-0}" == "1" ]] && footer_height=2
+    columns=$(_denon_udash_column_count "$cols")
+    available=$((rows - footer_height))
+    (( available < 1 )) && available=1
+
+    while IFS='|' read -r key tier title_ref; do
+      (( tier <= max_tier )) || continue
+      [[ "$key" == "tv" && "${udash_tv:-0}" != "1" ]] && continue
+
+      group_count=$((current_count + 1))
+      widths=$(_denon_udash_group_widths "$cols" "$group_count")
+      width=$(printf '%s\n' "$widths" | tail -n 1)
+      body=$(_denon_udash_build_panel_body "$key" "$max_tier" 20 "$width")
+      body_lines=$(_denon_dashboard_line_count "$body")
+      [[ "$key" == "events" && "$body_lines" -lt 5 ]] && body_lines=5
+      height=$((body_lines + 4))
+      (( height < 4 )) && height=4
+
+      row_height="$current_height"
+      (( height > row_height )) && row_height="$height"
+      if (( current_count > 0 && current_count >= columns )); then
+        rendered_rows=$((rendered_rows + current_height + (rendered_rows > 0 ? 1 : 0)))
+        panel_lines="${panel_lines}${current_lines}"
+        current_count=0
+        current_height=0
+        current_lines=""
+      elif (( current_count > 0 && rendered_rows + row_height + (rendered_rows > 0 ? 1 : 0) > available )); then
+        rendered_rows=$((rendered_rows + current_height + (rendered_rows > 0 ? 1 : 0)))
+        panel_lines="${panel_lines}${current_lines}"
+        current_count=0
+        current_height=0
+        current_lines=""
+      fi
+
+      group_count=$((current_count + 1))
+      widths=$(_denon_udash_group_widths "$cols" "$group_count")
+      width=$(printf '%s\n' "$widths" | tail -n 1)
+      body=$(_denon_udash_build_panel_body "$key" "$max_tier" 20 "$width")
+      body_lines=$(_denon_dashboard_line_count "$body")
+      [[ "$key" == "events" && "$body_lines" -lt 5 ]] && body_lines=5
+      height=$((body_lines + 4))
+      (( height < 4 )) && height=4
+
+      if (( current_count == 0 && rendered_rows + height + (rendered_rows > 0 ? 1 : 0) > available )); then
+        (( tier == 0 )) && skipped_required=1
+        continue
+      fi
+
+      if [[ "$title_ref" == udash_* ]]; then
+        title_value="${!title_ref:-}"
+      else
+        title_value="$title_ref"
+      fi
+      title="$title_value"
+      current_lines="${current_lines}${key}"$'\t'"${title}"$'\t'"${body//$'\n'/\\n}"$'\t'"${height}"$'\n'
+      current_count=$((current_count + 1))
+      (( height > current_height )) && current_height="$height"
+    done < <(_denon_udash_panel_tiers)
+
+    if (( current_count > 0 )); then
+      rendered_rows=$((rendered_rows + current_height + (rendered_rows > 0 ? 1 : 0)))
+      panel_lines="${panel_lines}${current_lines}"
+    fi
+
+    (( skipped_required == 0 )) || return 1
+    (( rendered_rows <= available )) || return 1
+    udash_plan="$panel_lines"
+    udash_plan_columns="$columns"
+    return 0
+  }
+
+  _denon_udash_layout() {
+    local cols="$1"
+    local rows="$2"
+    local tier
+
+    udash_width="$cols"
+    if (( cols >= 200 )); then
+      udash_mode="ultra"
+    elif (( cols >= 120 )); then
+      udash_mode="mid"
+    else
+      udash_mode="narrow"
+    fi
+
+    _denon_udash_prepare_values
+    if (( cols < 100 )); then
+      _denon_udash_make_plan "$cols" "$rows" 0
+      udash_max_tier=0
+      return 0
+    fi
+
+    for tier in 3 2 1 0; do
+      if _denon_udash_make_plan "$cols" "$rows" "$tier"; then
+        udash_max_tier="$tier"
+        return 0
+      fi
+    done
+    udash_plan=""
+    udash_max_tier=0
+  }
+
+  _denon_udash_render_plan_row() {
+    local cols="$1"
+    local row_lines="$2"
+    local height="$3"
+    local count="$4"
+    local widths
+    local -a titles bodies panel_widths
+    local idx=0 line key title body encoded panel_height width row
+
+    widths=$(_denon_udash_group_widths "$cols" "$count")
+    while IFS= read -r width; do
+      panel_widths+=("$width")
+    done <<<"$widths"
+
+    while IFS=$'\t' read -r key title encoded panel_height; do
+      [[ -n "$key" ]] || continue
+      titles+=("$title")
+      body=${encoded//\\n/$'\n'}
+      bodies+=("$body")
+    done <<<"$row_lines"
+
+    for ((row = 0; row < height; row++)); do
+      for ((idx = 0; idx < count; idx++)); do
+        (( idx > 0 )) && printf '  '
+        _denon_dashboard_render_card_line "${titles[$idx]}" "${bodies[$idx]}" "${panel_widths[$idx]}" "$height" "$row"
+      done
+      printf '\n'
+    done
+  }
+
+  _denon_udash_render_adaptive() {
+    local cols="$1"
+    local line key title body height
+    local row_lines="" row_count=0 row_height=0
+
+    while IFS=$'\t' read -r key title body height; do
+      [[ -n "$key" ]] || continue
+      if (( row_count > 0 && row_count >= udash_plan_columns )); then
+        _denon_udash_render_plan_row "$cols" "$row_lines" "$row_height" "$row_count"
+        printf '\n'
+        row_lines=""
+        row_count=0
+        row_height=0
+      fi
+      row_lines="${row_lines}${key}"$'\t'"${title}"$'\t'"${body}"$'\t'"${height}"$'\n'
+      row_count=$((row_count + 1))
+      (( height > row_height )) && row_height="$height"
+    done <<<"$udash_plan"
+
+    if (( row_count > 0 )); then
+      _denon_udash_render_plan_row "$cols" "$row_lines" "$row_height" "$row_count"
+    fi
+  }
+
   _denon_udash_render() {
     local width height
 
@@ -7302,13 +7816,7 @@ EOF
     _denon_dashboard_setup_color
     _denon_dashboard_set_borders
     _denon_udash_layout "$width" "$height"
-    _denon_udash_build_bodies
-
-    case "$udash_mode" in
-      ultra) _denon_udash_render_ultra ;;
-      mid) _denon_udash_render_mid ;;
-      *) _denon_udash_render_narrow "$width" ;;
-    esac
+    _denon_udash_render_adaptive "$width"
     _denon_dashboard_render_footer "$width"
   }
 

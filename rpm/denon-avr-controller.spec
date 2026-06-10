@@ -5,7 +5,7 @@
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
 %global pre_tag       beta.8
-%global rpm_release   0.13.beta8
+%global rpm_release   0.14.beta8
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -135,7 +135,14 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
-* Tue Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.13.beta8
+* Wed Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.14.beta8
+- Make dashboard-ultra adaptive: priority-tiered panel/field layout driven by
+  the terminal cell grid, with graceful tier shedding and column reflow.
+- Add DSP/Audyssey, Device/Firmware, and System/Locks panels; promote non-zero
+  pending firmware updates into the high-priority receiver area.
+- Add simulated-grid render coverage for 80x24, 140x40, 200x55, and 320x90.
+
+* Wed Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.13.beta8
 - Add v2 transport/protocol/config/compat library layer; wire avr_send routing
   into _denon_telnet/_denon_telnet_query with DENON_UNIT_TEST bypass
 - Add `denon raw dump [type…]` and `denon raw types` subcommands
