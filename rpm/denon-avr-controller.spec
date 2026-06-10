@@ -5,7 +5,7 @@
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
 %global pre_tag       beta.8
-%global rpm_release   0.11.beta8
+%global rpm_release   0.13.beta8
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -99,6 +99,11 @@ install -Dm644 completions/zsh/_denon \
 install -Dm644 completions/fish/denon.fish \
     %{buildroot}%{_datadir}/fish/vendor_completions.d/denon.fish
 
+# v2 transport/protocol/config/compat libs → /usr/share/denon/lib/
+for lib in lib/transport.sh lib/protocol.sh lib/config.sh lib/compat.sh; do
+    install -Dm644 "$lib" %{buildroot}%{_datadir}/denon/lib/"$(basename $lib)"
+done
+
 # Man page → /usr/share/man/man1/denon.1
 install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
@@ -116,6 +121,10 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 %{_datadir}/zsh/site-functions/_denon
 %{_datadir}/fish/vendor_completions.d/denon.fish
 %{_mandir}/man1/denon.1*
+%{_datadir}/denon/lib/transport.sh
+%{_datadir}/denon/lib/protocol.sh
+%{_datadir}/denon/lib/config.sh
+%{_datadir}/denon/lib/compat.sh
 
 
 # We intentionally omit %%post/%%preun systemd scriptlets for user units.
@@ -126,6 +135,18 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
+* Tue Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.13.beta8
+- Add v2 transport/protocol/config/compat library layer; wire avr_send routing
+  into _denon_telnet/_denon_telnet_query with DENON_UNIT_TEST bypass
+- Add `denon raw dump [type…]` and `denon raw types` subcommands
+- Fix dashboard-ultra Unknown fields: split 12-verb AppCommand batch into
+  3x4-verb batches to avoid AVR-X1600H goform daemon wedge (~51 s blackout);
+  add _denon_dashboard_fetch_core_status fallback via _denon_info / get_config
+- Fix quit key (q) in dashboard-ultra: delegate to shared sleep/poll loop
+- Port full interactive keybindings (↑/↓/←/→/Space/M/#/Z/Q) to dashboard-ultra
+- Fix dashboard-ultra TV panel: use lgtv audio status; friendly output labels
+- Install v2 lib/ scripts to /usr/share/denon/lib/ for runtime discovery
+
 * Tue Jun 09 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.11.beta8
 - Add `denon dashboard-ultra`, an alternate ultrawide multi-panel dashboard
   (5 panels at 200+ columns, 3+2 panels at 120-199, stacked below 120).
