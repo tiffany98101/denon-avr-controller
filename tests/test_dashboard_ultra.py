@@ -378,3 +378,30 @@ class TestUdashRenderAlignment:
             "Update:  01.02.03",
         ]:
             assert expected in text
+
+    def test_sources_panel_preserves_source_names_in_large_adaptive_row(self):
+        lines = self._render(320, 90)
+        source_lines = []
+        in_source_row = False
+
+        for line in lines:
+            if "Sources (Main)" in line:
+                in_source_row = True
+            elif in_source_row and line.startswith("└"):
+                break
+            if in_source_row:
+                source_lines.append(line)
+
+        text = "\n".join(source_lines)
+        for expected in [
+            "* 1  HEOS Music",
+            "2  Blu-ray",
+            "3  CBL/SAT",
+            "4  Game",
+            "5  TV Audio",
+            "6  Media Player",
+            "7  Bluetooth",
+            "8  Tuner",
+        ]:
+            assert expected in text
+        assert not re.search(r"\b\d\.\.\.", text)

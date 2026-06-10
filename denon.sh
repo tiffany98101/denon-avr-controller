@@ -7499,15 +7499,39 @@ EOF
 
   _denon_udash_compose_sources_body() {
     local width="$1"
-    local colw
+    local max_body_lines="${2:-20}"
+    local colw count=0 maxw=0 line linew keep more
+    local -a lines
 
-    if (( width < 100 )); then
-      printf '%s\n' "$dash_main_sources"
-    else
-      colw=$(((width - 6) / 2))
-      (( colw < 10 )) && colw=10
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      lines+=("$line")
+      count=$((count + 1))
+      linew=$(_denon_dashboard_display_width "$line")
+      (( linew > maxw )) && maxw="$linew"
+    done <<<"$dash_main_sources"
+
+    (( count > 0 )) || return 0
+    (( max_body_lines < 1 )) && max_body_lines=1
+
+    colw=$(((width - 6) / 2))
+    if (( width >= 100 && colw >= maxw && (count + 1) / 2 <= max_body_lines )); then
       _denon_udash_two_col "$dash_main_sources" "$colw"
+      return 0
     fi
+
+    if (( count <= max_body_lines )); then
+      printf '%s\n' "${lines[@]}"
+      return 0
+    fi
+
+    keep=$((max_body_lines - 1))
+    (( keep < 0 )) && keep=0
+    for ((linew = 0; linew < keep; linew++)); do
+      printf '%s\n' "${lines[$linew]}"
+    done
+    more=$((count - keep))
+    printf '+%s more\n' "$more"
   }
 
   _denon_udash_compose_events_body() {
@@ -7638,7 +7662,7 @@ EOF
     local width="${4:-80}"
 
     case "$key" in
-      sources) _denon_udash_compose_sources_body "$width" | head -n "$max_body_lines" ;;
+      sources) _denon_udash_compose_sources_body "$width" "$max_body_lines" ;;
       events) _denon_udash_compose_events_body "$max_body_lines" ;;
       *) _denon_udash_build_tier_body "$key" "$max_tier" "$max_body_lines" ;;
     esac
@@ -7761,7 +7785,7 @@ EOF
     local count="$4"
     local widths
     local -a titles bodies panel_widths
-    local idx=0 line key title body encoded panel_height width row
+    local idx=0 line key title body encoded panel_height width row body_budget
 
     widths=$(_denon_udash_group_widths "$cols" "$count")
     while IFS= read -r width; do
@@ -7772,7 +7796,13 @@ EOF
       [[ -n "$key" ]] || continue
       titles+=("$title")
       body=${encoded//\\n/$'\n'}
+      if [[ "$key" == "sources" ]]; then
+        body_budget=$((height - 4))
+        (( body_budget < 1 )) && body_budget=1
+        body=$(_denon_udash_compose_sources_body "${panel_widths[$idx]}" "$body_budget")
+      fi
       bodies+=("$body")
+      idx=$((idx + 1))
     done <<<"$row_lines"
 
     for ((row = 0; row < height; row++)); do

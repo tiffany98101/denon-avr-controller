@@ -5,7 +5,7 @@
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
 %global pre_tag       beta.8
-%global rpm_release   0.14.beta8
+%global rpm_release   0.15.beta8
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -135,6 +135,11 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
+* Wed Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.15.beta8
+- Fix dashboard-ultra Sources panel after adaptive layout: format source entries
+  against final panel width, preserve full source names, and use +N more when
+  space is constrained instead of truncating to orphaned fragments.
+
 * Wed Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.14.beta8
 - Make dashboard-ultra adaptive: priority-tiered panel/field layout driven by
   the terminal cell grid, with graceful tier shedding and column reflow.
