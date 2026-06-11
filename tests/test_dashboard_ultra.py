@@ -345,19 +345,23 @@ class TestUdashRenderAlignment:
         lines = self._render(80, 24)
         text = "\n".join(lines)
         assert len(lines) <= 24
-        for required in [
-            "Power:   On",
-            "Source:  TV",
-            "Volume:  -37.5 dB",
-            "Muted:   No",
-            "Power:   Off",
-            "Now:     Song",
-            "State:   Playing",
-            "Receiver: Denon AVR-X1600H",
-            "IP:      192.168.1.162",
-            "Recent Events",
+        # Labels are padded to the widest label of their panel, so match
+        # "label: value" with flexible spacing.
+        for label, value in [
+            ("Power", "On"),
+            ("Source", "TV"),
+            ("Volume", "-37.5 dB"),
+            ("Muted", "No"),
+            ("Power", "Off"),
+            ("Now", "Song"),
+            ("State", "Playing"),
+            ("Receiver", "Denon AVR-X1600H"),
+            ("IP", "192.168.1.162"),
         ]:
-            assert required in text
+            assert re.search(rf"{re.escape(label)}: +{re.escape(value)}", text), (
+                f"missing '{label}: {value}' in:\n{text}"
+            )
+        assert "Recent Events" in text
         for shed in ["Audio Signal", "DSP / Audyssey", "Device / Firmware", "System / Locks"]:
             assert shed not in text
 
@@ -367,17 +371,24 @@ class TestUdashRenderAlignment:
         assert len(lines) <= 90
         for expected in [
             "DSP / Audyssey",
-            "Dynamic EQ: On",
-            "HEOS Vol: 42",
+            # Device / Firmware now lives in the pinned bottom band.
             "Device / Firmware",
-            "AIOS FW: Aios 4.025",
-            "Serial:  ABC1234567",
-            "System / Locks",
-            "Setup Lock: 2",
-            "Product: 219",
-            "Update:  01.02.03",
+            "Recent Events",
         ]:
             assert expected in text
+        for label, value in [
+            ("Dynamic EQ", "On"),
+            ("HEOS Vol", "42"),
+            ("AIOS FW", "Aios 4.025"),
+            ("Serial", "ABC1234567"),
+            ("Update", "01.02.03"),
+        ]:
+            assert re.search(rf"{re.escape(label)}: +{re.escape(value)}", text), (
+                f"missing '{label}: {value}' in:\n{text}"
+            )
+        # System / Locks was retired from the dashboard-ultra layout.
+        assert "System / Locks" not in text
+        assert "Setup Lock" not in text
 
     def test_sources_panel_preserves_source_names_in_large_adaptive_row(self):
         lines = self._render(320, 90)
@@ -393,15 +404,265 @@ class TestUdashRenderAlignment:
                 source_lines.append(line)
 
         text = "\n".join(source_lines)
+        # Entries are normalized to "<marker> <index> <name>" with the index
+        # right-aligned, so single spacing is canonical.
         for expected in [
-            "* 1  HEOS Music",
-            "2  Blu-ray",
-            "3  CBL/SAT",
-            "4  Game",
-            "5  TV Audio",
-            "6  Media Player",
-            "7  Bluetooth",
-            "8  Tuner",
+            "* 1 HEOS Music",
+            "2 Blu-ray",
+            "3 CBL/SAT",
+            "4 Game",
+            "5 TV Audio",
+            "6 Media Player",
+            "7 Bluetooth",
+            "8 Tuner",
         ]:
             assert expected in text
         assert not re.search(r"\b\d\.\.\.", text)
+
+    def test_panel_values_share_one_column(self):
+        # Every key:value panel pads labels to the widest label of that panel,
+        # so all values start at the same column — including long labels such
+        # as "Model Type:", "Vol Scale:", "UPnP MAC:", and "Dynamic Vol:".
+        lines = self._render(200, 55)
+        # Walk bordered grid rows; group panel content by the column at which
+        # the panel's left border sits.
+        value_cols: dict[tuple[int, int], set[int]] = {}
+        panel_id = 0
+        open_panels: dict[int, int] = {}
+        for line in lines:
+            for m in re.finditer(r"[┌+](?=─|-)", line):
+                panel_id += 1
+                open_panels[m.start()] = panel_id
+            for m in re.finditer(r"[└+](?=─|-)", line):
+                open_panels.pop(m.start(), None)
+            for col, pid in open_panels.items():
+                seg = line[col:]
+                kv = re.match(r"[│|] ([A-Za-z][A-Za-z0-9 /-]*): +(?=\S)", seg)
+                if kv:
+                    value_cols.setdefault((col, pid), set()).add(kv.end())
+        for (col, pid), cols in value_cols.items():
+            assert len(cols) == 1, (
+                f"panel at col {col} has ragged value columns {sorted(cols)}:\n"
+                + "\n".join(lines)
+            )
+
+    def test_continuation_lines_indent_to_value_column(self):
+        # The "Levels:" channel-level continuation must indent to the value
+        # column of its panel, not column 0.
+        lines = self._render(220, 55)
+        text = "\n".join(lines)
+        levels = re.search(r"Levels: +(?=\S)", text)
+        assert levels, f"Levels row missing:\n{text}"
+        value_col_text = levels.group(0)
+        # _denon_trim collapses internal whitespace runs, so the rendered
+        # channel-level rows are single-spaced.
+        m1 = re.search(r"([│|] +)Levels: +C 0\.0", text)
+        m2 = re.search(r"([│|] +)SL 0\.0 SR 0\.0", text)
+        assert m1 and m2, f"Levels/continuation rows missing:\n{text}"
+        # Continuation starts where the Levels value starts.
+        assert len(m2.group(1)) == len(m1.group(1)) + len(value_col_text), (
+            f"continuation not indented to value column:\n{text}"
+        )
+
+    def test_sources_indices_right_aligned_with_fixed_marker_column(self):
+        # Mixed one- and two-digit indices must not shift names; the "*"
+        # selected marker keeps its own column.
+        mixed = (
+            "dash_main_sources=$(printf '  1  HEOS Music\\n  2  Blu-ray\\n"
+            "* 4  TV Audio\\n  9  Phono\\n  10  AUX\\n  13  Internet Radio')\n"
+        )
+        code = SET_RENDER_VARS + mixed + "_denon_udash_render\n"
+        r = _bash(code, env_extra={
+            "DENON_DASHBOARD_WIDTH": "220",
+            "DENON_DASHBOARD_HEIGHT": "55",
+        })
+        assert r.returncode == 0, f"bash error: {r.stderr}"
+        text = _strip_ansi(r.stdout)
+        # Indices right-align to the widest index and names start one space
+        # after; the marker column precedes the index field.
+        for entry in [" 1 HEOS Music", " 2 Blu-ray", "*  4 TV Audio",
+                      " 9 Phono", "10 AUX", "13 Internet Radio"]:
+            assert entry in text, f"missing normalized entry {entry!r}:\n{text}"
+        # Slice out the Sources panel by its border span, then verify all
+        # names within each rendered sources column share one offset.
+        lines = text.split("\n")
+        title_line = next(ln for ln in lines if "Sources (Main)" in ln)
+        borders = [i for i, ch in enumerate(title_line) if ch in "│|"]
+        t = title_line.index("Sources (Main)")
+        left = max(i for i in borders if i < t)
+        right = min(i for i in borders if i > t)
+        offsets: dict[int, set[int]] = {}
+        for line in lines:
+            seg = line[left:right]
+            for m in re.finditer(r"([* ]) ( ?)(\d+) (\S)", seg):
+                offsets.setdefault(m.start(1), set()).add(m.start(4) - m.start(1))
+        assert offsets, f"no source entries found in panel slice:\n{text}"
+        for col, offs in offsets.items():
+            assert len(offs) == 1, f"names misaligned at col {col}: {sorted(offs)}\n{text}"
+
+
+class TestUdashRecentEventsPriority:
+    """Recent Events is pinned to the bottom band and must always render.
+
+    The dashboard-ultra layout renders Recent Events (paired with Device /
+    Firmware at multi-column widths, full-width when narrow) as a dedicated
+    bottom band, independent of how the adaptive grid above sheds panels.
+    System / Locks was retired from the layout. These are *semantic* checks on
+    the rendered panels, not line counts or border alignment.
+    """
+
+    OPTIONAL_PANELS = [
+        "Audio Signal",
+        "Tone / Levels",
+        "TV (lgtv)",
+        "DSP / Audyssey",
+        "Device / Firmware",
+    ]
+
+    def _render(self, width: int, height: int) -> str:
+        # The screenshot showed the keyboard hint footer (interactive watch),
+        # so exercise the same footer height here.
+        pre = "udash_tv=1\ndashboard_keyboard_active=1\n"
+        code = SET_RENDER_VARS + pre + "_denon_udash_render\n"
+        r = _bash(code, env_extra={
+            "DENON_DASHBOARD_WIDTH": str(width),
+            "DENON_DASHBOARD_HEIGHT": str(height),
+        })
+        assert r.returncode == 0, f"bash error: {r.stderr}"
+        return _strip_ansi(r.stdout)
+
+    def test_recent_events_always_present(self):
+        # Recent Events is pinned, so it must render at every size, including
+        # wide-but-short panes that used to blank the entire dashboard.
+        for width, height in [
+            (320, 50), (280, 45), (240, 40), (200, 30),
+            (200, 18), (200, 16), (150, 30), (80, 24),
+        ]:
+            text = self._render(width, height)
+            assert "Recent Events" in text, (
+                f"Recent Events missing at {width}x{height}; rendered:\n{text}"
+            )
+
+    def test_now_top_band_and_recent_events_bottom_band_when_wide(self):
+        # At wide widths Now Playing is the full-width top band (above the grid)
+        # and Recent Events is the full-width bottom band (below the grid). With
+        # enough rows the fixed Device / Firmware grid panel is also present.
+        text = self._render(280, 55)
+        assert "Now Playing" in text
+        assert "Recent Events" in text
+        assert "Device / Firmware" in text
+        # Now Playing leads (top band); Recent Events trails (bottom band).
+        assert text.index("Now Playing") < text.index("LivingRoom (Main)")
+        assert text.index("Receiver / Network") < text.index("Recent Events")
+        assert text.index("Device / Firmware") < text.index("Recent Events")
+
+    def test_system_locks_panel_removed(self):
+        for width, height in [(320, 90), (280, 45), (80, 24)]:
+            text = self._render(width, height)
+            assert "System / Locks" not in text
+            assert "Setup Lock" not in text
+
+    def test_optional_panels_never_shown_without_recent_events(self):
+        # Whenever any optional/low-priority panel is visible, the Recent Events
+        # band must be visible too. Swept across wide widths and moderate
+        # heights, not just the 80x24 / 320x90 extremes.
+        for width in [220, 260, 320]:
+            for height in [28, 34, 40]:
+                text = self._render(width, height)
+                shown = [p for p in self.OPTIONAL_PANELS if p in text]
+                if shown:
+                    assert "Recent Events" in text, (
+                        f"At {width}x{height} optional panels {shown} are visible "
+                        f"but Recent Events is missing:\n{text}"
+                    )
+
+
+class TestUdashSlackFill:
+    """The grid fills the viewport (no dead band) and growable panels expand to
+    fill the slack instead of truncating while free rows sit below.
+    """
+
+    # Ten sources, so "+N more" only appears when genuinely out of rows.
+    SOURCES_ITEMS = [
+        "* 1  CBL/SAT", "  2  DVD", "  3  Blu-ray", "  4  Game",
+        "  5  Media Player", "  6  TV Audio", "  7  AUX", "  8  CD",
+        "  9  Phono", "  10 HEOS Music",
+    ]
+    EVENT_ITEMS = ["[09:01] Main power On", "[09:02] Volume -37.5", "[09:03] Source TV"]
+
+    def _printf_lines(self, var: str, items: list[str]) -> str:
+        # printf '%s\n' 'a' 'b' ... -> one real newline per item (no %b escaping
+        # pitfalls). The \n is a single backslash so bash printf expands it.
+        args = " ".join("'" + s + "'" for s in items)
+        return f"{var}=$(printf '%s\\n' {args})\n"
+
+    def _render(self, width: int, height: int) -> list[str]:
+        pre = (
+            "udash_tv=1\ndashboard_keyboard_active=1\nwatch=1\n"
+            + self._printf_lines("dash_main_sources", self.SOURCES_ITEMS)
+            + self._printf_lines("dashboard_events", self.EVENT_ITEMS)
+        )
+        code = SET_RENDER_VARS + pre + "_denon_udash_render\n"
+        r = _bash(code, env_extra={
+            "DENON_DASHBOARD_WIDTH": str(width),
+            "DENON_DASHBOARD_HEIGHT": str(height),
+        })
+        assert r.returncode == 0, f"bash error: {r.stderr}"
+        return _strip_ansi(r.stdout).split("\n")
+
+    def test_grid_reaches_footer_no_dead_band(self):
+        # Rendered output should span the full viewport height, leaving no dead
+        # band of empty rows above/below the footer.
+        for width, height in [(140, 40), (200, 55), (320, 90), (280, 60)]:
+            lines = self._render(width, height)
+            # strip a single trailing empty line artifact, if any
+            while lines and lines[-1] == "":
+                lines.pop()
+            assert len(lines) == height, (
+                f"dead band at {width}x{height}: rendered {len(lines)} of {height} rows"
+            )
+
+    def test_no_line_overflows_terminal_width(self):
+        for width, height in [(80, 24), (140, 40), (200, 55), (320, 90)]:
+            lines = self._render(width, height)
+            widest = max((_display_width(ln) for ln in lines), default=0)
+            assert widest <= width, (
+                f"overflow at {width}x{height}: widest line {widest} > {width}"
+            )
+
+    def test_sources_fills_when_slack_available(self):
+        # With ample rows, the Sources panel shows every source (no "+N more").
+        for width, height in [(200, 55), (320, 90), (280, 60)]:
+            text = "\n".join(self._render(width, height))
+            assert "10 HEOS Music" in text, f"sources truncated at {width}x{height}"
+            assert "more" not in text, f"sources still sheds at {width}x{height}:\n{text}"
+
+    def test_now_playing_is_full_width_band_when_wide(self):
+        # Now Playing is the full-width top band; a long combined title is not
+        # truncated (no ellipsis on the Now: line).
+        long_title = "A Very Long Track Title That Should Not Be Truncated At All Here"
+        pre = (
+            "udash_tv=1\ndashboard_keyboard_active=1\nwatch=1\n"
+            f"dash_now_title={long_title!r}\n"
+            "dash_now_artist='Artist'\ndash_now_album='Album'\n"
+        )
+        code = SET_RENDER_VARS + pre + "_denon_udash_render\n"
+        r = _bash(code, env_extra={
+            "DENON_DASHBOARD_WIDTH": "280", "DENON_DASHBOARD_HEIGHT": "55",
+        })
+        assert r.returncode == 0, r.stderr
+        text = _strip_ansi(r.stdout)
+        assert long_title in text, "Now Playing title was truncated"
+        # The Now Playing band leads the layout.
+        assert text.index("Now Playing") < text.index("LivingRoom (Main)")
+
+    def test_small_grid_still_sheds_without_overflow(self):
+        # Preserve tier-shedding at small (large-font) grids: no overflow, no
+        # mid-field clipping of must-keep fields.
+        lines = self._render(80, 24)
+        assert len(lines) <= 25
+        text = "\n".join(lines)
+        assert "Recent Events" in text
+        assert re.search(r"Power: +On", text)
+        widest = max((_display_width(ln) for ln in lines), default=0)
+        assert widest <= 80

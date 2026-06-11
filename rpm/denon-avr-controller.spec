@@ -4,8 +4,8 @@
 # Pre-release ordering: Release 0.<N>.<label> sorts below 1.<dist> (GA),
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
-%global pre_tag       beta.8
-%global rpm_release   0.15.beta8
+%global pre_tag       beta.9
+%global rpm_release   0.23.beta9
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -135,6 +135,46 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.23.beta9
+- dashboard-ultra: align every key:value panel to one per-panel value column.
+  Labels now pad to the widest label of their panel (no hardcoded widths), so
+  Model Type / Vol Scale (Receiver/Network), the Audyssey fields
+  (DSP/Audyssey), and UPnP MAC (Device/Firmware) no longer push values out of
+  column; multi-line continuations (Tone/Levels channel rows) indent to the
+  value column.
+- dashboard-ultra: right-align Sources indices with the selected-source "*"
+  marker in its own fixed column, so mixed one-/two-digit indices keep names
+  aligned within each column.
+- dashboard-ultra: drop the unreachable legacy fixed-breakpoint renderer that
+  shadowed the adaptive layout's _denon_udash_layout.
+
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.22.beta9
+- dashboard-ultra: cut refresh time ~28% (24s -> 17s) by scoping a shorter
+  0.3s telnet reply window to the dashboard's data-field one-shot probes
+  (override with DENON_UDASH_SEND_TIMEOUT or DENON_SEND_TIMEOUT); regular
+  CLI commands keep the 1s default.
+
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.21.beta9
+- dashboard-ultra: fill the full viewport height (no dead band above the footer)
+  with a slack-distribution pass; grow Sources to the full list and let Recent
+  Events absorb leftover rows instead of truncating while free rows sit unused.
+- dashboard-ultra: make Now Playing a full-width top band (two-column fields)
+  so long track titles are not truncated; Device/Firmware returns to the grid
+  as a fixed natural-height panel. Small-grid tier-shedding preserved.
+
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.20.beta9
+- Move Recent Events into a pinned bottom band paired with Device / Firmware
+  (full-width Recent Events on narrow terminals); retire the System / Locks
+  panel from the dashboard-ultra layout.
+
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.19.beta9
+- Fix dashboard-ultra dropping the Recent Events panel: rank Recent Events above
+  Receiver/Network and make only the core panels (Main, Zone 2, Now Playing,
+  Recent Events) mandatory, so Receiver/Network and optional panels shed first.
+- Stop the adaptive layout from blanking the whole dashboard on wide-but-short
+  terminals; fall back to a best-effort must-keep plan that always keeps Recent
+  Events instead of rendering nothing.
+
 * Wed Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.15.beta8
 - Fix dashboard-ultra Sources panel after adaptive layout: format source entries
   against final panel width, preserve full source names, and use +N more when

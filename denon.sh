@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # denon.sh — Denon AVR controller
-# Version: 1.2.0-beta.8
+# Version: 1.2.0-beta.9
 DENON_CONTROLLER_NAME="${DENON_CONTROLLER_NAME:-denon-avr-controller}"
-DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.8}"
+DENON_CONTROLLER_VERSION="${DENON_CONTROLLER_VERSION:-1.2.0-beta.9}"
 # Source this from bash, or run it directly:
 #   source ~/denon.sh
 #
@@ -6845,6 +6845,12 @@ EOF
   }
 
   _denon_udash_collect_data_fields() {
+    # The summary collector fires ~39 telnet one-shot probes, each waiting out
+    # the full avr_send reply window (default 1s). The AVR answers well under
+    # 0.3s, so scope a shorter window to these probes via dynamic scoping.
+    # An explicit DENON_UDASH_SEND_TIMEOUT or DENON_SEND_TIMEOUT still wins;
+    # other CLI commands keep the safer 1s default.
+    local DENON_SEND_TIMEOUT="${DENON_UDASH_SEND_TIMEOUT:-${DENON_SEND_TIMEOUT:-0.3}}"
     _denon_data_collect_summary >/dev/null 2>&1 || return 1
 
     _denon_udash_copy_data_field "tone_audyssey" "dynamic_eq" "dash_u_dynamic_eq"
@@ -7107,270 +7113,36 @@ EOF
       }'
   }
 
-  _denon_udash_build_bodies() {
-    local vol_label z2_vol_label muted_label z2_muted_label state_label
-    local signal_label tone_label now_line1 now_parts events_max sources_colw
+  _denon_udash_flow_columns() {
+    # Flow a single-column body into $2 columns, column-major (column 1 holds
+    # the first ceil(n/ncols) entries, column 2 the next, ...), padding every
+    # non-final column on a row to width $3 with a two-space gutter. This is the
+    # generalised form of _denon_udash_two_col: with ncols=1 the body is emitted
+    # unchanged. Used to fill a finite-list panel's width instead of stacking
+    # every entry in one tall column.
+    local body="$1"
+    local ncols="$2"
+    local colw="$3"
 
-    udash_main_title=$(_denon_display_zone_label "${dash_main_zone_name:-Main Zone}")
-    [[ "$udash_main_title" != "Main Zone" ]] && udash_main_title="$udash_main_title (Main)"
-    udash_zone2_title=$(_denon_display_zone_label "${dash_zone2_name:-Zone 2}")
-    [[ "$udash_zone2_title" != "Zone 2" ]] && udash_zone2_title="$udash_zone2_title (Zone 2)"
-
-    vol_label="${dash_main_volume:-Unknown} dB"
-    [[ -n "$dash_main_max_volume_db" ]] && vol_label="$vol_label (max ${dash_main_max_volume_db} dB)"
-    muted_label=$(_denon_mute_display_name "$dash_main_muted")
-    udash_main_body=$(printf 'Power:   %s\nSource:  %s\nVolume:  %s\nMuted:   %s\nMode:    %s\nSleep:   %s' \
-      "${dash_main_power:-Unknown}" "${dash_main_source:-Unknown}" "$vol_label" "$muted_label" \
-      "${dash_sound_mode:-Unknown}" "$(_denon_udash_sleep_label "$dash_u_sleep_main")")
-
-    signal_label="$dash_u_signal"
-    [[ -n "$signal_label" ]] || signal_label=$(_denon_udash_signal_label "$dash_u_signal_code")
-    udash_audio_body=$(printf 'Signal:   %s\nSample:   %s\nMode:     %s\nSpeakers: %s\nAll-Zone: %s\nDRC:      %s\nLFE:      %s' \
-      "$signal_label" "$(_denon_udash_sample_rate_label "$dash_u_sample_rate")" \
-      "${dash_sound_mode:-Unknown}" \
-      "$(_denon_display_unknown "$dash_u_speaker_config")" \
-      "${dash_u_azs:-Unknown}" \
-      "$(_denon_udash_titlecase_onoff "$dash_u_drc")" \
-      "$(_denon_udash_lfe_label "$dash_u_lfe")")
-
-    if [[ -n "$dash_zone2_volume_db" ]]; then
-      z2_vol_label="${dash_zone2_volume_db} dB"
-      [[ -n "$dash_zone2_volume_raw" ]] && z2_vol_label="$z2_vol_label (raw ${dash_zone2_volume_raw})"
-      [[ -n "$dash_u_zone2_limit" ]] && z2_vol_label="$z2_vol_label, lim ${dash_u_zone2_limit}"
-    else
-      z2_vol_label="${dash_zone2_volume:-Unknown}"
-    fi
-    z2_muted_label=$(_denon_mute_display_name "$dash_zone2_muted")
-    udash_zone2_body=$(printf 'Power:   %s\nSource:  %s\nVolume:  %s\nMuted:   %s\nSleep:   %s' \
-      "${dash_zone2_power:-Unknown}" "${dash_zone2_source:-Unknown}" "$z2_vol_label" \
-      "$z2_muted_label" "$(_denon_udash_sleep_label "$dash_u_sleep_zone2")")
-
-    tone_label="${dash_u_tone_status:-}"
-    if [[ -z "$tone_label" && -n "$dash_u_tone_ctrl" ]]; then
-      tone_label=$(_denon_udash_titlecase_onoff "$dash_u_tone_ctrl")
-    fi
-    [[ -n "$tone_label" ]] || tone_label="Unknown"
-    udash_tone_body=$(printf 'Tone:    %s\nBass:    %s\nTreble:  %s\nDialog:  %s\nSub:     %s\nLevels:  %s\n         %s' \
-      "$tone_label" "$(_denon_udash_tone_db "$dash_u_bass_raw")" \
-      "$(_denon_udash_tone_db "$dash_u_treble_raw")" \
-      "${dash_u_dialog:-Unknown}" "${dash_u_sub:-Unknown}" \
-      "$(_denon_display_unknown "$dash_u_chlevels_line1")" "$dash_u_chlevels_line2")
-
-    local heos_label network_label
-    network_label=$(_denon_display_network_label "$dash_heos_network")
-    heos_label="${dash_heos_version:-Unknown}"
-    [[ "$network_label" != "Unknown" ]] && heos_label="$heos_label ($network_label)"
-    udash_receiver_body=$(printf 'Receiver: %s\nIP:       %s\nHEOS:     %s\nModel:    %s\nEco:      %s\nDimmer:   %s\nStandby:  %s' \
-      "$(_denon_display_unknown "$dash_receiver")" "$(_denon_display_unknown "$dash_ip")" \
-      "$heos_label" "$(_denon_display_unknown "$dash_heos_model")" \
-      "$(_denon_udash_eco_label "$dash_u_eco")" "$(_denon_udash_dimmer_label "$dash_u_dimmer")" \
-      "${dash_u_standby:-Unknown}")
-
-    state_label=$(_denon_dashboard_transport_name "${dash_transport_state:-}") || state_label="Unknown"
-    [[ -n "$state_label" ]] || state_label="Unknown"
-    now_parts=""
-    [[ -n "$(_denon_dashboard_clean_field "$dash_now_title")" ]] && now_parts="$dash_now_title"
-    if [[ -n "$(_denon_dashboard_clean_field "$dash_now_artist")" ]]; then
-      now_parts="${now_parts}${now_parts:+ — }${dash_now_artist}"
-    fi
-    if [[ -n "$(_denon_dashboard_clean_field "$dash_now_album")" ]]; then
-      now_parts="${now_parts}${now_parts:+ — }${dash_now_album}"
-    fi
-    [[ -n "$now_parts" ]] || now_parts="${dash_now_message:-Unknown}"
-    now_line1="Now:     $now_parts"
-    udash_now_body=$(printf '%s\nState:   %s | Service: %s | Station: %s' \
-      "$now_line1" "$state_label" \
-      "$(_denon_display_unknown "$dash_now_service")" "$(_denon_display_unknown "$dash_now_station")")
-
-    if [[ "$udash_mode" == "narrow" ]]; then
-      udash_sources_body="$dash_main_sources"
-    else
-      sources_colw=$(((udash_sources_w - 6) / 2))
-      (( sources_colw < 10 )) && sources_colw=10
-      udash_sources_body=$(_denon_udash_two_col "$dash_main_sources" "$sources_colw")
-    fi
-
-    events_max=$((udash_bottom_h - 4))
-    (( events_max < 5 )) && events_max=5
-    if [[ -n "$dashboard_events" ]]; then
-      udash_events_body=$(printf '%s\n' "$dashboard_events" | head -n "$events_max")
-    else
-      udash_events_body=$(_denon_display_empty_message no-state-changes)
-    fi
-  }
-
-  _denon_udash_layout() {
-    local cols="$1"
-    local rows="$2"
-    local avail used footer_extra=0
-
-    [[ "${dashboard_keyboard_active:-0}" == "1" ]] && footer_extra=1
-
-    udash_width="$cols"
-    udash_top_h=11
-    udash_now_h=6
-    udash_tv_w=0
-
-    if (( cols >= 200 )); then
-      udash_mode="ultra"
-      avail=$((cols - 8))
-      udash_w1=$((avail / 5))
-      udash_w2="$udash_w1"
-      udash_w3="$udash_w1"
-      udash_w4="$udash_w1"
-      udash_w5=$((avail - udash_w1 * 4))
-      used=$((udash_top_h + udash_now_h + 3 + footer_extra))
-    elif (( cols >= 120 )); then
-      udash_mode="mid"
-      avail=$((cols - 4))
-      udash_w1=$((avail / 3))
-      udash_w2="$udash_w1"
-      udash_w3=$((avail - udash_w1 * 2))
-      udash_w4=$(((cols - 2) / 2))
-      udash_w5=$((cols - 2 - udash_w4))
-      used=$((udash_top_h * 2 + udash_now_h + 4 + footer_extra))
-    else
-      udash_mode="narrow"
-      udash_w1="$cols"
-      udash_w2="$cols"
-      udash_w3="$cols"
-      udash_w4="$cols"
-      udash_w5="$cols"
-      used=0
-    fi
-
-    if [[ "$udash_mode" == "narrow" ]]; then
-      udash_sources_w="$cols"
-      udash_events_w="$cols"
-      udash_bottom_h=12
-      return 0
-    fi
-
-    if [[ "${udash_tv:-0}" == "1" ]]; then
-      udash_tv_w=$(((cols - 4) / 5))
-      (( udash_tv_w < 24 )) && udash_tv_w=24
-      udash_sources_w=$(((cols - 4 - udash_tv_w) * 45 / 100))
-      udash_events_w=$((cols - 4 - udash_tv_w - udash_sources_w))
-    else
-      udash_sources_w=$(((cols - 2) * 45 / 100))
-      udash_events_w=$((cols - 2 - udash_sources_w))
-    fi
-
-    udash_bottom_h=$((rows - used - 1))
-    udash_bottom_h=$(_denon_dashboard_clamp "$udash_bottom_h" 8 18)
-  }
-
-  _denon_udash_render_five_row() {
-    local height="$1"
-    local row
-
-    for ((row = 0; row < height; row++)); do
-      _denon_dashboard_render_card_line "$ucol1_title" "$ucol1_body" "$ucol1_width" "$height" "$row"
-      printf '  '
-      _denon_dashboard_render_card_line "$ucol2_title" "$ucol2_body" "$ucol2_width" "$height" "$row"
-      printf '  '
-      _denon_dashboard_render_card_line "$ucol3_title" "$ucol3_body" "$ucol3_width" "$height" "$row"
-      printf '  '
-      _denon_dashboard_render_card_line "$ucol4_title" "$ucol4_body" "$ucol4_width" "$height" "$row"
-      printf '  '
-      _denon_dashboard_render_card_line "$ucol5_title" "$ucol5_body" "$ucol5_width" "$height" "$row"
-      printf '\n'
-    done
-  }
-
-  _denon_udash_render_three_row() {
-    local height="$1"
-    local row
-
-    for ((row = 0; row < height; row++)); do
-      _denon_dashboard_render_card_line "$ucol1_title" "$ucol1_body" "$ucol1_width" "$height" "$row"
-      printf '  '
-      _denon_dashboard_render_card_line "$ucol2_title" "$ucol2_body" "$ucol2_width" "$height" "$row"
-      printf '  '
-      _denon_dashboard_render_card_line "$ucol3_title" "$ucol3_body" "$ucol3_width" "$height" "$row"
-      printf '\n'
-    done
-  }
-
-  _denon_udash_render_bottom() {
-    if [[ "${udash_tv:-0}" == "1" ]]; then
-      ucol1_title="Sources (Main)"
-      ucol1_body="$udash_sources_body"
-      ucol1_width="$udash_sources_w"
-      ucol2_title="Recent Events"
-      ucol2_body="$udash_events_body"
-      ucol2_width="$udash_events_w"
-      ucol3_title="TV (lgtv)"
-      ucol3_body="$udash_tv_body"
-      ucol3_width="$udash_tv_w"
-      _denon_udash_render_three_row "$udash_bottom_h"
-    else
-      _denon_dashboard_render_two_panel_row \
-        "Sources (Main)" "$udash_sources_body" "$udash_sources_w" \
-        "Recent Events" "$udash_events_body" "$udash_events_w" \
-        "$udash_bottom_h"
-    fi
-  }
-
-  _denon_udash_render_ultra() {
-    ucol1_title="$udash_main_title"
-    ucol1_body="$udash_main_body"
-    ucol1_width="$udash_w1"
-    ucol2_title="Audio Signal"
-    ucol2_body="$udash_audio_body"
-    ucol2_width="$udash_w2"
-    ucol3_title="$udash_zone2_title"
-    ucol3_body="$udash_zone2_body"
-    ucol3_width="$udash_w3"
-    ucol4_title="Tone / Levels"
-    ucol4_body="$udash_tone_body"
-    ucol4_width="$udash_w4"
-    ucol5_title="Receiver / Network"
-    ucol5_body="$udash_receiver_body"
-    ucol5_width="$udash_w5"
-    _denon_udash_render_five_row "$udash_top_h"
-    printf '\n'
-    _denon_dashboard_render_card "Now Playing" "$udash_now_body" "$udash_width" "$udash_now_h"
-    printf '\n'
-    _denon_udash_render_bottom
-  }
-
-  _denon_udash_render_mid() {
-    ucol1_title="$udash_main_title"
-    ucol1_body="$udash_main_body"
-    ucol1_width="$udash_w1"
-    ucol2_title="$udash_zone2_title"
-    ucol2_body="$udash_zone2_body"
-    ucol2_width="$udash_w2"
-    ucol3_title="Receiver / Network"
-    ucol3_body="$udash_receiver_body"
-    ucol3_width="$udash_w3"
-    _denon_udash_render_three_row "$udash_top_h"
-    printf '\n'
-    _denon_dashboard_render_two_panel_row \
-      "Audio Signal" "$udash_audio_body" "$udash_w4" \
-      "Tone / Levels" "$udash_tone_body" "$udash_w5" \
-      "$udash_top_h"
-    printf '\n'
-    _denon_dashboard_render_card "Now Playing" "$udash_now_body" "$udash_width" "$udash_now_h"
-    printf '\n'
-    _denon_udash_render_bottom
-  }
-
-  _denon_udash_render_narrow() {
-    local width="$1"
-
-    _denon_dashboard_render_card "$udash_main_title" "$udash_main_body" "$width" 10
-    _denon_dashboard_render_card "Audio Signal" "$udash_audio_body" "$width" 11
-    _denon_dashboard_render_card "$udash_zone2_title" "$udash_zone2_body" "$width" 9
-    _denon_dashboard_render_card "Tone / Levels" "$udash_tone_body" "$width" 11
-    _denon_dashboard_render_card "Receiver / Network" "$udash_receiver_body" "$width" 11
-    _denon_dashboard_render_card "Now Playing" "$udash_now_body" "$width" 6
-    if [[ "${udash_tv:-0}" == "1" ]]; then
-      _denon_dashboard_render_card "TV (lgtv)" "$udash_tv_body" "$width" 7
-    fi
-    _denon_dashboard_render_card "Sources (Main)" "$udash_sources_body" "$width" "$udash_bottom_h"
-    _denon_dashboard_render_card "Recent Events" "$udash_events_body" "$width" "$udash_bottom_h"
+    printf '%s\n' "$body" | awk -v ncols="$ncols" -v colw="$colw" '
+      { lines[NR] = $0 }
+      END {
+        if (ncols < 1) ncols = 1
+        rows = int((NR + ncols - 1) / ncols)
+        if (rows < 1) rows = 1
+        for (r = 1; r <= rows; r++) {
+          lastc = -1
+          for (c = 0; c < ncols; c++) if (c * rows + r <= NR) lastc = c
+          out = ""
+          for (c = 0; c <= lastc; c++) {
+            idx = c * rows + r
+            cell = (idx <= NR) ? lines[idx] : ""
+            if (c < lastc) out = out sprintf("%-*s  ", colw, cell)
+            else out = out cell
+          }
+          print out
+        }
+      }'
   }
 
   _denon_udash_field_tiers() {
@@ -7448,32 +7220,39 @@ tv|1|Output|dash_u_tv_output
 EOF
   }
 
+  # System/Locks was retired from the layout. Recent Events is the full-width
+  # growable bottom band at wide widths (cols >= 100) and is skipped from the
+  # grid there (see _denon_udash_build_band); on narrow terminals there is no
+  # band, so it stays a must-keep grid panel. Device/Firmware is an ordinary
+  # fixed grid panel and keeps its natural height.
   _denon_udash_panel_tiers() {
     cat <<'EOF'
 main|0|udash_main_title
 zone2|0|udash_zone2_title
 now|0|Now Playing
-receiver|0|Receiver / Network
 events|0|Recent Events
+receiver|0|Receiver / Network
 audio|1|Audio Signal
 tone|1|Tone / Levels
 sources|1|Sources (Main)
 tv|1|TV (lgtv)
 dsp|2|DSP / Audyssey
 firmware|3|Device / Firmware
-system|3|System / Locks
 EOF
   }
 
   _denon_udash_label_line() {
-    local label="$1"
-    local value="$2"
+    # Pad "label:" to $1 so every value in the panel starts at the same
+    # column; an empty label is a continuation row and indents to that column.
+    local width="$1"
+    local label="$2"
+    local value="$3"
 
     value=$(_denon_display_unknown "$value")
     if [[ -z "$label" ]]; then
-      printf '         %s\n' "$value"
+      printf '%*s %s\n' "$width" '' "$value"
     else
-      printf '%-8s %s\n' "${label}:" "$value"
+      printf '%-*s %s\n' "$width" "${label}:" "$value"
     fi
   }
 
@@ -7481,18 +7260,27 @@ EOF
     local panel="$1"
     local max_tier="$2"
     local max_body_lines="$3"
-    local body="" line p tier label var value count=0
+    local body="" line p tier label var value count=0 labelw=0 i
+    local -a row_labels=() row_values=()
 
+    # Pass 1: select the rows this panel will show and find the widest label,
+    # so pass 2 can align every value to one per-panel column.
     while IFS='|' read -r p tier label var; do
       [[ "$p" == "$panel" ]] || continue
       (( tier <= max_tier )) || continue
       value="${!var:-}"
       [[ "$var" == "dash_u_pending_upgrade_alert" && -z "$value" ]] && continue
-      line=$(_denon_udash_label_line "$label" "$value")
-      body="${body}${body:+$'\n'}${line%$'\n'}"
+      row_labels+=("$label")
+      row_values+=("$value")
+      (( ${#label} + 1 > labelw )) && labelw=$(( ${#label} + 1 ))
       count=$((count + 1))
       (( count >= max_body_lines )) && break
     done < <(_denon_udash_field_tiers)
+
+    for ((i = 0; i < count; i++)); do
+      line=$(_denon_udash_label_line "$labelw" "${row_labels[$i]}" "${row_values[$i]}")
+      body="${body}${body:+$'\n'}${line%$'\n'}"
+    done
 
     printf '%s\n' "$body"
   }
@@ -7500,38 +7288,71 @@ EOF
   _denon_udash_compose_sources_body() {
     local width="$1"
     local max_body_lines="${2:-20}"
-    local colw count=0 maxw=0 line linew keep more
-    local -a lines
+    local gutter=2
+    local colw count=0 maxw=0 line linew content_w ncols rows_needed keep more i trunc
+    local idxw=0 body=""
+    local entry_re='^([* ])[[:space:]]*([0-9]+)[[:space:]]+(.*)$'
+    local -a lines raw
 
+    # Normalize "marker index name" entries so the marker keeps its own fixed
+    # column and indices right-align: single- and double-digit indices must not
+    # shift the names within a column.
     while IFS= read -r line; do
       [[ -n "$line" ]] || continue
+      raw+=("$line")
+      if [[ "$line" =~ $entry_re ]]; then
+        (( ${#BASH_REMATCH[2]} > idxw )) && idxw=${#BASH_REMATCH[2]}
+      fi
+    done <<<"$dash_main_sources"
+
+    for line in "${raw[@]}"; do
+      if [[ "$line" =~ $entry_re ]]; then
+        line=$(printf '%s %*s %s' "${BASH_REMATCH[1]}" "$idxw" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+      fi
       lines+=("$line")
+      body="${body}${body:+$'\n'}${line}"
       count=$((count + 1))
       linew=$(_denon_dashboard_display_width "$line")
       (( linew > maxw )) && maxw="$linew"
-    done <<<"$dash_main_sources"
+    done
 
     (( count > 0 )) || return 0
     (( max_body_lines < 1 )) && max_body_lines=1
+    (( maxw < 1 )) && maxw=1
 
-    colw=$(((width - 6) / 2))
-    if (( width >= 100 && colw >= maxw && (count + 1) / 2 <= max_body_lines )); then
-      _denon_udash_two_col "$dash_main_sources" "$colw"
+    # Sources is a FINITE list: never stack it in one tall column that wastes the
+    # panel width and forces "+N more". Pick as many columns as the panel width
+    # admits (longest entry + gutter), then flow column-major so the whole list
+    # is shown in the fewest rows. This drives the panel's content-based minimum
+    # height; the planner sizes the row to it before any slack is distributed.
+    content_w=$((width - 4))
+    (( content_w < maxw )) && content_w="$maxw"
+    ncols=$(( (content_w + gutter) / (maxw + gutter) ))
+    (( ncols < 1 )) && ncols=1
+    (( ncols > count )) && ncols="$count"
+    colw=$(( (content_w - gutter * (ncols - 1)) / ncols ))
+    (( colw < maxw )) && colw="$maxw"
+
+    rows_needed=$(( (count + ncols - 1) / ncols ))
+    if (( rows_needed <= max_body_lines )); then
+      _denon_udash_flow_columns "$body" "$ncols" "$colw"
       return 0
     fi
 
-    if (( count <= max_body_lines )); then
-      printf '%s\n' "${lines[@]}"
-      return 0
-    fi
-
-    keep=$((max_body_lines - 1))
+    # Genuinely forced (smallest grid): even at full column count the list does
+    # not fit the available rows. Show as many entries as the grid holds,
+    # reserving the final cell for the "+N more" marker, still multi-column.
+    keep=$(( max_body_lines * ncols - 1 ))
     (( keep < 0 )) && keep=0
-    for ((linew = 0; linew < keep; linew++)); do
-      printf '%s\n' "${lines[$linew]}"
+    (( keep > count )) && keep="$count"
+    more=$(( count - keep ))
+    trunc=""
+    for ((i = 0; i < keep; i++)); do
+      trunc="${trunc}${lines[$i]}"$'\n'
     done
-    more=$((count - keep))
-    printf '+%s more\n' "$more"
+    (( more > 0 )) && trunc="${trunc}+${more} more"
+    trunc="${trunc%$'\n'}"
+    _denon_udash_flow_columns "$trunc" "$ncols" "$colw"
   }
 
   _denon_udash_compose_events_body() {
@@ -7668,10 +7489,26 @@ EOF
     esac
   }
 
+  # The must-keep panels are the only ones whose loss should fail a layout: the
+  # user-facing core plus Recent Events. Receiver/Network and every optional
+  # panel are allowed to shed first so Recent Events never disappears while a
+  # lower-priority panel still occupies space.
+  _denon_udash_required_panel() {
+    case "$1" in
+      main|zone2|now|events) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+
+  # required_only=1 builds a degraded best-effort plan containing just the
+  # must-keep panels (Receiver/Network and optional panels are excluded) and
+  # publishes whatever fits, so a terminal too small for the full tier-0 set
+  # still renders the core panels (incl. Recent Events) instead of blanking.
   _denon_udash_make_plan() {
     local cols="$1"
     local rows="$2"
     local max_tier="$3"
+    local required_only="${4:-0}"
     local columns footer_height=1 available panel_lines="" rendered_rows=0
     local current_count=0 current_height=0 current_lines="" key tier title_ref title title_value
     local widths width body body_lines height group_count line row_height skipped_required=0
@@ -7684,6 +7521,12 @@ EOF
     while IFS='|' read -r key tier title_ref; do
       (( tier <= max_tier )) || continue
       [[ "$key" == "tv" && "${udash_tv:-0}" != "1" ]] && continue
+      # At wide widths Recent Events is the bottom band and Now Playing is the
+      # full-width top band, so keep both out of the grid; on narrow terminals
+      # they stay grid panels.
+      [[ "$key" == "events" ]] && (( cols >= 100 )) && continue
+      [[ "$key" == "now" ]] && (( cols >= 100 )) && continue
+      (( required_only )) && ! _denon_udash_required_panel "$key" && continue
 
       group_count=$((current_count + 1))
       widths=$(_denon_udash_group_widths "$cols" "$group_count")
@@ -7720,7 +7563,7 @@ EOF
       (( height < 4 )) && height=4
 
       if (( current_count == 0 && rendered_rows + height + (rendered_rows > 0 ? 1 : 0) > available )); then
-        (( tier == 0 )) && skipped_required=1
+        _denon_udash_required_panel "$key" && skipped_required=1
         continue
       fi
 
@@ -7740,6 +7583,14 @@ EOF
       panel_lines="${panel_lines}${current_lines}"
     fi
 
+    # Best-effort degraded mode always publishes what fit so the dashboard
+    # never blanks; callers use it only after every full tier failed.
+    if (( required_only )); then
+      udash_plan="$panel_lines"
+      udash_plan_columns="$columns"
+      return 0
+    fi
+
     (( skipped_required == 0 )) || return 1
     (( rendered_rows <= available )) || return 1
     udash_plan="$panel_lines"
@@ -7750,7 +7601,7 @@ EOF
   _denon_udash_layout() {
     local cols="$1"
     local rows="$2"
-    local tier
+    local tier grid_rows
 
     udash_width="$cols"
     if (( cols >= 200 )); then
@@ -7762,19 +7613,35 @@ EOF
     fi
 
     _denon_udash_prepare_values
+
+    # Reserve vertical space for the full-width Now Playing top band and the
+    # Recent Events bottom band (each plus one separator row) so the adaptive
+    # grid between them never overruns. On narrow terminals there are no bands
+    # and the grid uses every row.
+    _denon_udash_build_now_band "$cols"
+    _denon_udash_build_band "$cols"
+    grid_rows="$rows"
+    (( udash_nowband_height > 0 )) && grid_rows=$(( grid_rows - udash_nowband_height - 1 ))
+    (( udash_band_height > 0 )) && grid_rows=$(( grid_rows - udash_band_height - 1 ))
+    (( grid_rows < 1 )) && grid_rows=1
+
     if (( cols < 100 )); then
-      _denon_udash_make_plan "$cols" "$rows" 0
+      _denon_udash_make_plan "$cols" "$grid_rows" 0 \
+        || _denon_udash_make_plan "$cols" "$grid_rows" 0 1
       udash_max_tier=0
       return 0
     fi
 
     for tier in 3 2 1 0; do
-      if _denon_udash_make_plan "$cols" "$rows" "$tier"; then
+      if _denon_udash_make_plan "$cols" "$grid_rows" "$tier"; then
         udash_max_tier="$tier"
         return 0
       fi
     done
-    udash_plan=""
+    # No tier could fit every required panel. Rather than blanking the whole
+    # grid, fall back to a degraded plan that keeps the must-keep panels,
+    # shedding Receiver/Network and the optional panels first.
+    _denon_udash_make_plan "$cols" "$grid_rows" 0 1
     udash_max_tier=0
   }
 
@@ -7796,10 +7663,16 @@ EOF
       [[ -n "$key" ]] || continue
       titles+=("$title")
       body=${encoded//\\n/$'\n'}
+      # Growable panels re-render their body against the (possibly slack-grown)
+      # row height so they fill the box with real content instead of truncating.
       if [[ "$key" == "sources" ]]; then
         body_budget=$((height - 4))
         (( body_budget < 1 )) && body_budget=1
         body=$(_denon_udash_compose_sources_body "${panel_widths[$idx]}" "$body_budget")
+      elif [[ "$key" == "events" ]]; then
+        body_budget=$((height - 4))
+        (( body_budget < 1 )) && body_budget=1
+        body=$(_denon_udash_compose_events_body "$body_budget")
       fi
       bodies+=("$body")
       idx=$((idx + 1))
@@ -7814,16 +7687,94 @@ EOF
     done
   }
 
+  # Slack-distribution pass: after placement, the grid + band sit at their
+  # natural (minimum) heights, often leaving a dead band above the footer.
+  # Finite-list panels (Sources) are already placed at their multi-column
+  # full-content minimum, so the only growable elastic is the unbounded Recent
+  # Events box, which absorbs whatever rows are left so the layout reaches the
+  # footer with no dead band. When there is no slack (small grids), it is a
+  # no-op and the tier-shedding placement stands.
+  _denon_udash_distribute_slack() {
+    local cols="$1"
+    local rows="$2"
+    local footer_height=1 key title body height
+    local rc=0 colc=0 cur_h=0 cur_ev=0 i
+    local grid_total=0 band_total=0 band_sep=0 now_total=0 now_sep=0 target used slack
+    local -a rh has_ev
+
+    udash_row_heights=""
+    [[ "${dashboard_keyboard_active:-0}" == "1" ]] && footer_height=2
+
+    # Group the plan into rows exactly as _denon_udash_render_adaptive does.
+    while IFS=$'\t' read -r key title body height; do
+      [[ -n "$key" ]] || continue
+      if (( colc > 0 && colc >= udash_plan_columns )); then
+        rh[rc]="$cur_h"; has_ev[rc]="$cur_ev"
+        rc=$((rc + 1)); colc=0; cur_h=0; cur_ev=0
+      fi
+      (( height > cur_h )) && cur_h="$height"
+      [[ "$key" == "events" ]] && cur_ev=1
+      colc=$((colc + 1))
+    done <<<"$udash_plan"
+    if (( colc > 0 )); then
+      rh[rc]="$cur_h"; has_ev[rc]="$cur_ev"
+      rc=$((rc + 1))
+    fi
+    (( rc == 0 )) && return 0
+
+    for ((i = 0; i < rc; i++)); do grid_total=$((grid_total + rh[i])); done
+    grid_total=$((grid_total + rc - 1))            # inter-row separators
+    if (( udash_band_height > 0 )); then
+      band_total="$udash_band_height"; band_sep=1
+    fi
+    if (( udash_nowband_height > 0 )); then
+      now_total="$udash_nowband_height"; now_sep=1
+    fi
+
+    target=$((rows - footer_height))
+    used=$((now_total + now_sep + grid_total + band_total + band_sep))
+    slack=$((target - used))
+
+    if (( slack > 0 )); then
+      # Finite-list panels (Sources) are already placed at their multi-column
+      # full-content minimum height by the planner — every entry is visible, so
+      # they need no extra rows. Growing them here would only pad blank rows and
+      # re-introduce the wasted band the column layout removed. Hand all slack to
+      # the unbounded Recent Events panel so the grid still reaches the footer
+      # with no dead band.
+      if (( udash_band_height > 0 )); then
+        udash_band_height=$((udash_band_height + slack)); slack=0
+      else
+        for ((i = rc - 1; i >= 0 && slack > 0; i--)); do
+          if (( has_ev[i] == 1 )); then
+            rh[i]=$((rh[i] + slack)); slack=0
+          fi
+        done
+        (( slack > 0 )) && { rh[rc-1]=$((rh[rc-1] + slack)); slack=0; }
+      fi
+    fi
+
+    for ((i = 0; i < rc; i++)); do
+      udash_row_heights="${udash_row_heights}${rh[i]}"$'\n'
+    done
+  }
+
   _denon_udash_render_adaptive() {
     local cols="$1"
-    local line key title body height
-    local row_lines="" row_count=0 row_height=0
+    local line key title body height h
+    local row_lines="" row_count=0 row_height=0 ri=0
+    local -a rowh
+
+    while IFS= read -r h; do
+      [[ -n "$h" ]] && rowh+=("$h")
+    done <<<"$udash_row_heights"
 
     while IFS=$'\t' read -r key title body height; do
       [[ -n "$key" ]] || continue
       if (( row_count > 0 && row_count >= udash_plan_columns )); then
-        _denon_udash_render_plan_row "$cols" "$row_lines" "$row_height" "$row_count"
+        _denon_udash_render_plan_row "$cols" "$row_lines" "${rowh[ri]:-$row_height}" "$row_count"
         printf '\n'
+        ri=$((ri + 1))
         row_lines=""
         row_count=0
         row_height=0
@@ -7834,8 +7785,89 @@ EOF
     done <<<"$udash_plan"
 
     if (( row_count > 0 )); then
-      _denon_udash_render_plan_row "$cols" "$row_lines" "$row_height" "$row_count"
+      _denon_udash_render_plan_row "$cols" "$row_lines" "${rowh[ri]:-$row_height}" "$row_count"
     fi
+  }
+
+  # Build the pinned bottom band: a single full-width Recent Events panel. It
+  # is the growable elastic that absorbs leftover vertical slack (see
+  # _denon_udash_distribute_slack) so the layout reaches the footer. Only used
+  # at wide widths; on narrow terminals Recent Events stays a grid panel.
+  _denon_udash_build_band() {
+    local cols="$1"
+    local ev_body ev_h
+
+    udash_band_lines=""
+    udash_band_count=0
+    udash_band_height=0
+
+    (( cols >= 100 )) || return 0
+
+    ev_body=$(_denon_udash_compose_events_body 20)
+    ev_h=$(( $(_denon_dashboard_line_count "$ev_body") + 4 ))
+    (( ev_h < 9 )) && ev_h=9
+
+    udash_band_lines="events"$'\t'"Recent Events"$'\t'"${ev_body//$'\n'/\\n}"$'\t'"${ev_h}"$'\n'
+    udash_band_count=1
+    udash_band_height="$ev_h"
+  }
+
+  _denon_udash_render_band() {
+    local cols="$1"
+
+    [[ -n "$udash_band_lines" ]] || return 0
+    printf '\n'
+    _denon_udash_render_plan_row "$cols" "$udash_band_lines" "$udash_band_height" "$udash_band_count"
+  }
+
+  # Compose the Now Playing body for the full-width top band: keep the (often
+  # long) "Now:" line on its own full-width row, then fold the remaining fields
+  # into two columns so the band uses the horizontal space and stays compact.
+  _denon_udash_compose_now_band_body() {
+    local cols="$1"
+    local full now_line rest colw
+
+    full=$(_denon_udash_build_panel_body now 2 20 "$cols")
+    now_line=$(printf '%s\n' "$full" | sed -n '1p')
+    rest=$(printf '%s\n' "$full" | sed -n '2,$p')
+    colw=$(( (cols - 6) / 2 ))
+
+    if (( cols >= 100 && colw >= 24 )) && [[ -n "$rest" ]]; then
+      printf '%s\n' "$now_line"
+      _denon_udash_two_col "$rest" "$colw"
+    else
+      printf '%s\n' "$full"
+    fi
+  }
+
+  # Build the full-width Now Playing top band so long track titles (and the
+  # Service / Station / Artist / Album fields) get the whole viewport width
+  # instead of a cramped grid column. Fixed height; only used at wide widths.
+  _denon_udash_build_now_band() {
+    local cols="$1"
+    local now_body now_h
+
+    udash_nowband_lines=""
+    udash_nowband_count=0
+    udash_nowband_height=0
+
+    (( cols >= 100 )) || return 0
+
+    now_body=$(_denon_udash_compose_now_band_body "$cols")
+    now_h=$(( $(_denon_dashboard_line_count "$now_body") + 4 ))
+    (( now_h < 4 )) && now_h=4
+
+    udash_nowband_lines="now"$'\t'"Now Playing"$'\t'"${now_body//$'\n'/\\n}"$'\t'"${now_h}"$'\n'
+    udash_nowband_count=1
+    udash_nowband_height="$now_h"
+  }
+
+  _denon_udash_render_now_band() {
+    local cols="$1"
+
+    [[ -n "$udash_nowband_lines" ]] || return 0
+    _denon_udash_render_plan_row "$cols" "$udash_nowband_lines" "$udash_nowband_height" "$udash_nowband_count"
+    printf '\n'
   }
 
   _denon_udash_render() {
@@ -7846,7 +7878,10 @@ EOF
     _denon_dashboard_setup_color
     _denon_dashboard_set_borders
     _denon_udash_layout "$width" "$height"
+    _denon_udash_distribute_slack "$width" "$height"
+    _denon_udash_render_now_band "$width"
     _denon_udash_render_adaptive "$width"
+    _denon_udash_render_band "$width"
     _denon_dashboard_render_footer "$width"
   }
 
@@ -7872,6 +7907,58 @@ EOF
 
   _denon_udash_sleep_or_resize() {
     _denon_dashboard_sleep_or_resize "$@"
+  }
+
+  # Responsive refresh: keys (notably q/Q quit and [r] redraw) must stay live
+  # while a tick gathers data. _denon_udash_collect can take several seconds
+  # (AppCommand batches, telnet, HEOS, HTTP), and it is synchronous, so polling
+  # only after it returns makes quit feel dead for the whole refresh. Here the
+  # *unchanged* collect runs in a background subshell while we poll the keyboard;
+  # when it finishes we import the gathered dash_*/udash_tv_body state so the
+  # rendered values are byte-identical to a synchronous collect. Non-interactive
+  # callers (tests, pipes) fall back to a plain synchronous collect.
+  _denon_udash_collect_responsive() {
+    if [[ "${dashboard_keyboard_active:-0}" != "1" ]] || [[ ! -t 0 ]]; then
+      _denon_udash_collect
+      return 0
+    fi
+
+    local state_file collect_pid
+    state_file=$(mktemp "${TMPDIR:-/tmp}/denon-udash-state.XXXXXX" 2>/dev/null) || {
+      _denon_udash_collect
+      return 0
+    }
+
+    (
+      _denon_udash_collect
+      # Serialize only the collected display state. ^dash_ excludes dashboard_*
+      # (loop/flow flags like dashboard_stop_pending stay owned by the foreground
+      # so a key pressed mid-collect is never clobbered). Rewrite the `declare --`
+      # prefix to `declare -g --` so sourcing the file back *inside this function*
+      # restores the values as globals (plain `declare` in a function = locals,
+      # which would vanish on return and blank every field).
+      declare -p $(compgen -v | grep -E '^(dash_|udash_tv_body$)') 2>/dev/null \
+        | sed 's/^declare -/declare -g -/'
+    ) >"$state_file" 2>/dev/null &
+    collect_pid=$!
+
+    while kill -0 "$collect_pid" 2>/dev/null; do
+      _denon_dashboard_poll_key 0.1 || true
+      if [[ "${dashboard_stop_pending:-0}" == "1" ]]; then
+        kill "$collect_pid" 2>/dev/null || true
+        wait "$collect_pid" 2>/dev/null || true
+        rm -f "$state_file" 2>/dev/null
+        return 0
+      fi
+      if [[ "${dashboard_resize_pending:-0}" == "1" ]]; then
+        dashboard_resize_pending=0
+        _denon_udash_redraw
+      fi
+    done
+    wait "$collect_pid" 2>/dev/null || true
+
+    [[ -s "$state_file" ]] && source "$state_file" 2>/dev/null
+    rm -f "$state_file" 2>/dev/null
   }
 
   _denon_dashboard_ultra() {
@@ -7995,7 +8082,7 @@ EOF
       while [[ "$dashboard_stop_pending" != "1" ]]; do
         local poll_start poll_end poll_elapsed poll_sleep
         poll_start=$(date +%s)
-        _denon_udash_collect
+        _denon_udash_collect_responsive
         [[ "$dashboard_stop_pending" == "1" ]] && break
         _denon_dashboard_update_events
         dashboard_resize_pending=0
