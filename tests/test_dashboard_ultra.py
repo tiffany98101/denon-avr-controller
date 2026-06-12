@@ -293,6 +293,84 @@ class TestLabelHelpers:
         assert r.stdout.strip() == "60 min|Off|+2 dB|-5 dB|Bright|48 kHz"
 
 
+class TestUdashConfiguration:
+    def test_config_file_loads_dashboard_ultra_defaults(self, tmp_path):
+        config = tmp_path / "denon.conf"
+        config.write_text(
+            "\n".join(
+                [
+                    "DENON_DASHBOARD_ULTRA_WATCH=1",
+                    "DENON_DASHBOARD_ULTRA_INTERVAL=7",
+                    "DENON_DASHBOARD_ULTRA_TV=1",
+                    "DENON_DASHBOARD_ULTRA_COLOR=never",
+                    "DENON_DASHBOARD_ULTRA_ASCII=1",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        code = textwrap.dedent("""\
+            _denon_load_config "$DENON_CONFIG"
+            printf '%s|%s|%s|%s|%s\\n' \\
+              "$DENON_DASHBOARD_ULTRA_WATCH" "$DENON_DASHBOARD_ULTRA_INTERVAL" \\
+              "$DENON_DASHBOARD_ULTRA_TV" "$DENON_DASHBOARD_ULTRA_COLOR" \\
+              "$DENON_DASHBOARD_ULTRA_ASCII"
+        """)
+        r = _bash(code, env_extra={"DENON_CONFIG": str(config)})
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == "1|7|1|never|1"
+
+    def test_dashboard_ultra_uses_configured_defaults(self):
+        code = textwrap.dedent("""\
+            _denon_udash_collect_responsive() { :; }
+            _denon_dashboard_update_events() { :; }
+            _denon_dashboard_restore_terminal() { :; }
+            _denon_udash_redraw() {
+              printf 'watch=%s interval=%s tv=%s color=%s ascii=%s\\n' \
+                "$watch" "$interval" "$udash_tv" "$dashboard_color_mode" "$dashboard_ascii"
+              dashboard_stop_pending=1
+            }
+            _denon_dashboard_ultra
+        """)
+        r = _bash(
+            code,
+            env_extra={
+                "DENON_DASHBOARD_ULTRA_WATCH": "1",
+                "DENON_DASHBOARD_ULTRA_INTERVAL": "7",
+                "DENON_DASHBOARD_ULTRA_TV": "1",
+                "DENON_DASHBOARD_ULTRA_COLOR": "never",
+                "DENON_DASHBOARD_ULTRA_ASCII": "1",
+            },
+        )
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == "\x1b[?25lwatch=1 interval=7 tv=1 color=never ascii=1"
+
+    def test_dashboard_ultra_cli_options_override_configured_defaults(self):
+        code = textwrap.dedent("""\
+            _denon_udash_collect_responsive() { :; }
+            _denon_dashboard_update_events() { :; }
+            _denon_dashboard_restore_terminal() { :; }
+            _denon_udash_redraw() {
+              printf 'watch=%s interval=%s tv=%s color=%s ascii=%s\\n' \
+                "$watch" "$interval" "$udash_tv" "$dashboard_color_mode" "$dashboard_ascii"
+              dashboard_stop_pending=1
+            }
+            _denon_dashboard_ultra --watch 2 --tv --color always --unicode
+        """)
+        r = _bash(
+            code,
+            env_extra={
+                "DENON_DASHBOARD_ULTRA_WATCH": "0",
+                "DENON_DASHBOARD_ULTRA_INTERVAL": "7",
+                "DENON_DASHBOARD_ULTRA_TV": "0",
+                "DENON_DASHBOARD_ULTRA_COLOR": "never",
+                "DENON_DASHBOARD_ULTRA_ASCII": "1",
+            },
+        )
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == "\x1b[?25lwatch=1 interval=2 tv=1 color=always ascii=0"
+
+
 class TestUdashRenderAlignment:
     """Every rendered line must have identical display width at each breakpoint."""
 

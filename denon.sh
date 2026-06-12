@@ -8006,6 +8006,48 @@ EOF
     esac
     [[ "${DENON_DASHBOARD_ASCII:-0}" == "1" ]] && dashboard_ascii=1
 
+    case "$(_denon_lower "${DENON_DASHBOARD_ULTRA_WATCH:-}")" in
+      1|true|yes|on|watch) watch=1 ;;
+      0|false|no|off|once|"") watch=0 ;;
+      *)
+        echo "Error: DENON_DASHBOARD_ULTRA_WATCH must be 1/0, true/false, on/off, watch, or once" >&2
+        return 1
+        ;;
+    esac
+    if [[ -n "${DENON_DASHBOARD_ULTRA_INTERVAL:-}" ]]; then
+      if [[ "$DENON_DASHBOARD_ULTRA_INTERVAL" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        interval="$DENON_DASHBOARD_ULTRA_INTERVAL"
+      else
+        echo "Error: DENON_DASHBOARD_ULTRA_INTERVAL must be a positive number" >&2
+        return 1
+      fi
+    fi
+    case "$(_denon_lower "${DENON_DASHBOARD_ULTRA_TV:-}")" in
+      1|true|yes|on) udash_tv=1 ;;
+      0|false|no|off|"") udash_tv=0 ;;
+      *)
+        echo "Error: DENON_DASHBOARD_ULTRA_TV must be 1/0, true/false, or on/off" >&2
+        return 1
+        ;;
+    esac
+    if [[ -n "${DENON_DASHBOARD_ULTRA_COLOR:-}" ]]; then
+      case "$(_denon_lower "$DENON_DASHBOARD_ULTRA_COLOR")" in
+        auto|always|never) dashboard_color_mode=$(_denon_lower "$DENON_DASHBOARD_ULTRA_COLOR") ;;
+        *)
+          echo "Error: DENON_DASHBOARD_ULTRA_COLOR must be auto, always, or never" >&2
+          return 1
+          ;;
+      esac
+    fi
+    case "$(_denon_lower "${DENON_DASHBOARD_ULTRA_ASCII:-}")" in
+      1|true|yes|on) dashboard_ascii=1 ;;
+      0|false|no|off|"") ;;
+      *)
+        echo "Error: DENON_DASHBOARD_ULTRA_ASCII must be 1/0, true/false, or on/off" >&2
+        return 1
+        ;;
+    esac
+
     while [[ $# -gt 0 ]]; do
       arg="$1"
       case "$arg" in
@@ -8502,7 +8544,9 @@ EOF
         DENON_CURL_MAX_TIME|DENON_CURL_INSECURE|DENON_CURL_CACERT|\
         DENON_CURL_PINNEDPUBKEY|DENON_SSDP_TIMEOUT|DENON_SSDP_MX|DENON_HEOS_PID|\
         DENON_HEOS_GID|DENON_HEOS_HELPER|DENON_DASHBOARD_ALT_HELPER|DENON_HEOS_TIMEOUT|DENON_DEBUG|\
-        DENON_CACHE_TTL_SECONDS|NO_COLOR)
+        DENON_CACHE_TTL_SECONDS|DENON_DASHBOARD_ULTRA_WATCH|\
+        DENON_DASHBOARD_ULTRA_INTERVAL|DENON_DASHBOARD_ULTRA_TV|\
+        DENON_DASHBOARD_ULTRA_COLOR|DENON_DASHBOARD_ULTRA_ASCII|NO_COLOR)
           if [[ -z "${!key+set}" ]]; then
             export "$key"="$val"
           fi
@@ -8520,7 +8564,8 @@ DENON_VOLUME_STEP_DB DENON_SOURCE_ALIASES DENON_CURL_CONNECT_TIMEOUT \
 DENON_CURL_MAX_TIME DENON_CURL_INSECURE DENON_CURL_CACERT \
 DENON_CURL_PINNEDPUBKEY DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
 DENON_HEOS_GID DENON_HEOS_HELPER DENON_DASHBOARD_ALT_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
-DENON_CACHE_TTL_SECONDS NO_COLOR"
+DENON_CACHE_TTL_SECONDS DENON_DASHBOARD_ULTRA_WATCH DENON_DASHBOARD_ULTRA_INTERVAL \
+DENON_DASHBOARD_ULTRA_TV DENON_DASHBOARD_ULTRA_COLOR DENON_DASHBOARD_ULTRA_ASCII NO_COLOR"
 
     case "$subcmd" in
       list)
@@ -8649,7 +8694,8 @@ DENON_VOLUME_STEP_DB DENON_SOURCE_ALIASES DENON_CURL_CONNECT_TIMEOUT \
 DENON_CURL_MAX_TIME DENON_CURL_INSECURE DENON_CURL_CACERT \
 DENON_CURL_PINNEDPUBKEY DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
 DENON_HEOS_GID DENON_HEOS_HELPER DENON_DASHBOARD_ALT_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
-DENON_CACHE_TTL_SECONDS NO_COLOR"
+DENON_CACHE_TTL_SECONDS DENON_DASHBOARD_ULTRA_WATCH DENON_DASHBOARD_ULTRA_INTERVAL \
+DENON_DASHBOARD_ULTRA_TV DENON_DASHBOARD_ULTRA_COLOR DENON_DASHBOARD_ULTRA_ASCII NO_COLOR"
 
     case "$subcmd" in
       path)

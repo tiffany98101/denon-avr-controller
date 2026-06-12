@@ -1,0 +1,6 @@
+2026-06-12T13:34:45-07:00 supervisor restart approved: using branch feat-dashboard-config instead of feat/dashboard-config; self-contained Codex task; ARCHITECTURE.md must not be edited.
+2026-06-12T13:34:58-07:00 codex wrapper starting on branch feat-dashboard-config
+2026-06-12T13:36:52-0700 discovery complete: read ARCHITECTURE.md section 6.6; inspected dashboard-ultra in denon.sh, tests/test_dashboard_ultra.py, config/profile allowlists, completions, packaging, and prior blocked artifacts; wrote implementation plan to .agent-run/STATE.md.
+2026-06-12T13:37:40-0700 RED: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_dashboard_ultra.py::TestUdashConfiguration -> failed as expected: config keys ignored and dashboard-ultra defaults not applied.
+2026-06-12T13:38:17-0700 GREEN: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_dashboard_ultra.py::TestUdashConfiguration -> 3 passed.
+2026-06-12T13:41:26-0700 GATE: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/test_dashboard_ultra.py -> 30 passed in 176.57s.
