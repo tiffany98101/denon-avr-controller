@@ -7515,7 +7515,7 @@ EOF
     local required_only="${4:-0}"
     local columns footer_height=1 available panel_lines="" rendered_rows=0
     local current_count=0 current_height=0 current_lines="" key tier title_ref title title_value
-    local widths width body body_lines height group_count line row_height skipped_required=0
+    local widths width prev_width body body_lines height group_count line row_height skipped_required=0
 
     [[ "${dashboard_keyboard_active:-0}" == "1" ]] && footer_height=2
     columns=$(_denon_udash_column_count "$cols")
@@ -7532,9 +7532,16 @@ EOF
       [[ "$key" == "now" ]] && (( cols >= 100 )) && continue
       (( required_only )) && ! _denon_udash_required_panel "$key" && continue
 
+      # Build the panel body once at its provisional column width to decide row
+      # breaks. The width depends on group_count, so a row break (which resets
+      # current_count) can change it; only then is a rebuild needed below. This
+      # avoids a redundant second build — and its subshell churn — for every
+      # panel that does not trigger a break, which is the common case and the
+      # bulk of per-frame render cost across the tier-3..0 placement attempts.
       group_count=$((current_count + 1))
       widths=$(_denon_udash_group_widths "$cols" "$group_count")
       width=$(printf '%s\n' "$widths" | tail -n 1)
+      prev_width="$width"
       body=$(_denon_udash_build_panel_body "$key" "$max_tier" 20 "$width")
       body_lines=$(_denon_dashboard_line_count "$body")
       [[ "$key" == "events" && "$body_lines" -lt 5 ]] && body_lines=5
@@ -7560,11 +7567,13 @@ EOF
       group_count=$((current_count + 1))
       widths=$(_denon_udash_group_widths "$cols" "$group_count")
       width=$(printf '%s\n' "$widths" | tail -n 1)
-      body=$(_denon_udash_build_panel_body "$key" "$max_tier" 20 "$width")
-      body_lines=$(_denon_dashboard_line_count "$body")
-      [[ "$key" == "events" && "$body_lines" -lt 5 ]] && body_lines=5
-      height=$((body_lines + 4))
-      (( height < 4 )) && height=4
+      if [[ "$width" != "$prev_width" ]]; then
+        body=$(_denon_udash_build_panel_body "$key" "$max_tier" 20 "$width")
+        body_lines=$(_denon_dashboard_line_count "$body")
+        [[ "$key" == "events" && "$body_lines" -lt 5 ]] && body_lines=5
+        height=$((body_lines + 4))
+        (( height < 4 )) && height=4
+      fi
 
       if (( current_count == 0 && rendered_rows + height + (rendered_rows > 0 ? 1 : 0) > available )); then
         _denon_udash_required_panel "$key" && skipped_required=1
