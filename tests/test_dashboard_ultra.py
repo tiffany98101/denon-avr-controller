@@ -175,6 +175,14 @@ SET_RENDER_VARS = textwrap.dedent("""\
 def _bash(code: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["DENON_UNIT_TEST"] = "1"
+    # Keep render/layout tests independent of the developer's real saved Denon
+    # config/profile. Source-time config loading can otherwise make tests pass or
+    # fail based on ~/.config/denon/config values such as panel selections.
+    env.pop("DENON_PROFILE", None)
+    for key in list(env):
+        if key.startswith("DENON_DASHBOARD_ULTRA_"):
+            env.pop(key, None)
+    env.setdefault("DENON_CONFIG", os.devnull)
     if env_extra:
         env.update(env_extra)
     full = f"source {SCRIPT_STR}\n{code}"
@@ -304,6 +312,7 @@ class TestUdashConfiguration:
                     "DENON_DASHBOARD_ULTRA_TV=1",
                     "DENON_DASHBOARD_ULTRA_COLOR=never",
                     "DENON_DASHBOARD_ULTRA_ASCII=1",
+                    "DENON_DASHBOARD_ULTRA_PANELS=main,zone2,events",
                 ]
             )
             + "\n",
@@ -311,14 +320,14 @@ class TestUdashConfiguration:
         )
         code = textwrap.dedent("""\
             _denon_load_config "$DENON_CONFIG"
-            printf '%s|%s|%s|%s|%s\\n' \\
+            printf '%s|%s|%s|%s|%s|%s\\n' \\
               "$DENON_DASHBOARD_ULTRA_WATCH" "$DENON_DASHBOARD_ULTRA_INTERVAL" \\
               "$DENON_DASHBOARD_ULTRA_TV" "$DENON_DASHBOARD_ULTRA_COLOR" \\
-              "$DENON_DASHBOARD_ULTRA_ASCII"
+              "$DENON_DASHBOARD_ULTRA_ASCII" "$DENON_DASHBOARD_ULTRA_PANELS"
         """)
         r = _bash(code, env_extra={"DENON_CONFIG": str(config)})
         assert r.returncode == 0, r.stderr
-        assert r.stdout.strip() == "1|7|1|never|1"
+        assert r.stdout.strip() == "1|7|1|never|1|main,zone2,events"
 
     def test_dashboard_ultra_uses_configured_defaults(self):
         code = textwrap.dedent("""\
@@ -370,6 +379,41 @@ class TestUdashConfiguration:
         assert r.returncode == 0, r.stderr
         assert r.stdout.strip() == "\x1b[?25lwatch=1 interval=2 tv=1 color=always ascii=0"
 
+    def test_dashboard_ultra_setup_prints_setup_options(self, tmp_path):
+        r = _bash("_denon_dashboard_ultra setup", env_extra={"DENON_CONFIG": str(tmp_path / "missing.conf")})
+        assert r.returncode == 0, r.stderr
+        out = r.stdout
+        assert "Dashboard Ultra setup options" in out
+        assert "panels:   all" in out
+        assert "denon config set DENON_DASHBOARD_ULTRA_PANELS" in out
+        assert "Panel keys:" in out
+        assert "main, zone2, now, events, receiver, audio, tone, sources, tv, dsp, firmware" in out
+        assert "denon config set DENON_DASHBOARD_ULTRA_WATCH 1" in out
+        assert "denon config set DENON_DASHBOARD_ULTRA_INTERVAL 5" in out
+        assert "denon profile set livingroom DENON_DASHBOARD_ULTRA_WATCH 1" in out
+        assert "denon setip <receiver-ip>" in out
+
+    def test_dashboard_ultra_setup_reflects_configured_defaults(self):
+        r = _bash(
+            "_denon_dashboard_ultra --setup",
+            env_extra={
+                "DENON_DASHBOARD_ULTRA_WATCH": "1",
+                "DENON_DASHBOARD_ULTRA_INTERVAL": "7",
+                "DENON_DASHBOARD_ULTRA_TV": "1",
+                "DENON_DASHBOARD_ULTRA_COLOR": "never",
+                "DENON_DASHBOARD_ULTRA_ASCII": "1",
+                "DENON_DASHBOARD_ULTRA_PANELS": "main,zone2,sources",
+            },
+        )
+        assert r.returncode == 0, r.stderr
+        out = r.stdout
+        assert "watch:    1" in out
+        assert "interval: 7" in out
+        assert "tv:       1" in out
+        assert "color:    never" in out
+        assert "ascii:    1" in out
+        assert "panels:   main,zone2,sources" in out
+
 
 class TestUdashRenderAlignment:
     """Every rendered line must have identical display width at each breakpoint."""
@@ -403,6 +447,44 @@ class TestUdashRenderAlignment:
 
     def test_narrow_100(self):
         self._assert_uniform(100)
+
+    def test_panel_selection_filters_dashboard_cards(self):
+        code = SET_RENDER_VARS + "\n_denon_udash_render\n"
+        r = _bash(
+            code,
+            env_extra={
+                "DENON_DASHBOARD_WIDTH": "150",
+                "DENON_DASHBOARD_HEIGHT": "35",
+                "DENON_DASHBOARD_ULTRA_PANELS": "main,zone2,sources",
+            },
+        )
+        assert r.returncode == 0, r.stderr
+        output = _strip_ansi(r.stdout)
+        assert "Main" in output
+        assert "Zone 2" in output
+        assert "Sources (Main)" in output
+        assert "Now Playing" not in output
+        assert "Recent Events" not in output
+        assert "Receiver / Network" not in output
+        assert "DSP / Audyssey" not in output
+
+    def test_panel_selection_none_falls_back_to_all_panels(self):
+        code = SET_RENDER_VARS + "\n_denon_udash_render\n"
+        r = _bash(
+            code,
+            env_extra={
+                "DENON_DASHBOARD_WIDTH": "150",
+                "DENON_DASHBOARD_HEIGHT": "35",
+                "DENON_DASHBOARD_ULTRA_PANELS": "none",
+            },
+        )
+        assert r.returncode == 0, r.stderr
+        output = _strip_ansi(r.stdout)
+        assert "Main" in output
+        assert "Zone 2" in output
+        assert "Now Playing" in output
+        assert "Recent Events" in output
+        assert "Receiver / Network" in output
 
     def test_mode_selection(self):
         code = textwrap.dedent("""\

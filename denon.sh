@@ -408,6 +408,7 @@ Receiver status:
                              Examples: denon dashboard-alt --provider auto
                                        denon dashboard-alt --provider direct --json
                                        denon dashboard-alt --compare-providers
+  denon dashboard-ultra [setup|--setup]
   denon dashboard-ultra [--watch] [--interval seconds] [--tv] [--ascii|--unicode] [--color auto|always|never]
                              Show the ultrawide multi-panel dashboard (alternate to denon dashboard;
                              5-panel layout at 200+ columns, reduced at 120-199, stacked below 120)
@@ -5603,6 +5604,10 @@ EOF
     local width="$1"
     local full="Keys: ↑/↓=Volume  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Source From List  Z=Zone  Q=Quit"
     local compact="Keys: ↑/↓=Vol  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Src From List  Z=Zone  Q=Quit"
+    if [[ -n "${dashboard_setup_cmd:-}" ]]; then
+      full="Keys: ↑/↓=Volume  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Source From List  Z=Zone  S=Setup  Q=Quit"
+      compact="Keys: ↑/↓=Vol  ←/→=Prev/Next  Space=Play/Pause  M=Mute  #=Src  Z=Zone  S=Setup  Q=Quit"
+    fi
 
     if (( $(_denon_dashboard_visible_width "$full") <= width )); then
       printf '%s' "$full"
@@ -5733,6 +5738,7 @@ EOF
       [0-9]) echo "digit_$sequence" ;;
       m|M) echo "mute_toggle" ;;
       z|Z) echo "cycle_zone_target" ;;
+      s|S) echo "setup_dashboard" ;;
       q|Q) echo "quit" ;;
       r|R) echo "redraw" ;;
       *) return 1 ;;
@@ -6153,6 +6159,16 @@ EOF
       redraw)
         dashboard_resize_pending=0
         "${dashboard_redraw_cmd:-_denon_dashboard_redraw}"
+        ;;
+      setup_dashboard)
+        _denon_dashboard_reset_numeric_buffer
+        if [[ -n "${dashboard_setup_cmd:-}" ]]; then
+          "$dashboard_setup_cmd" || _denon_dashboard_add_event "Setup cancelled or failed"
+          dashboard_resize_pending=0
+          "${dashboard_redraw_cmd:-_denon_dashboard_redraw}"
+        else
+          _denon_dashboard_add_event "Setup unavailable"
+        fi
         ;;
       cycle_zone_target)
         if [[ "${dashboard_control_target:-Main}" == "Main" ]]; then
@@ -7228,8 +7244,47 @@ EOF
   # _denon_udash_build_band); on narrow terminals there is no band, so it stays a
   # must-keep grid panel. Device/Firmware is an ordinary fixed grid panel and
   # keeps its natural height.
+  _denon_udash_panel_enabled() {
+    local key="$1"
+    local spec="${DENON_DASHBOARD_ULTRA_PANELS:-}"
+    local item norm
+
+    spec=$(_denon_trim "$spec")
+    [[ -n "$spec" ]] || return 0
+
+    spec=${spec//;/,}
+    spec=${spec// /,}
+    while IFS= read -r item; do
+      item=$(_denon_lower "$(_denon_trim "$item")")
+      [[ -n "$item" ]] || continue
+      case "$item" in
+        all|none) return 0 ;;
+        main|main-zone|main_zone) norm="main" ;;
+        zone2|zone-2|zone_2) norm="zone2" ;;
+        now|now-playing|now_playing|playing) norm="now" ;;
+        events|recent-events|recent_events) norm="events" ;;
+        receiver|network|receiver-network|receiver_network) norm="receiver" ;;
+        audio|signal|audio-signal|audio_signal) norm="audio" ;;
+        tone|levels|tone-levels|tone_levels) norm="tone" ;;
+        sources|source|main-sources|main_sources) norm="sources" ;;
+        tv|lgtv) norm="tv" ;;
+        dsp|audyssey|dsp-audyssey|dsp_audyssey) norm="dsp" ;;
+        firmware|device|device-firmware|device_firmware) norm="firmware" ;;
+        system|locks|system-locks|system_locks) norm="system" ;;
+        *) norm="$item" ;;
+      esac
+      [[ "$norm" == "$key" ]] && return 0
+    done < <(printf '%s\n' "$spec" | tr ',' '\n')
+
+    return 1
+  }
+
   _denon_udash_panel_tiers() {
-    cat <<'EOF'
+    local line key
+    while IFS= read -r line; do
+      key=${line%%|*}
+      _denon_udash_panel_enabled "$key" && printf '%s\n' "$line"
+    done <<'EOF'
 main|0|udash_main_title
 zone2|0|udash_zone2_title
 now|0|Now Playing
@@ -7815,6 +7870,7 @@ EOF
     udash_band_height=0
 
     (( cols >= 100 )) || return 0
+    _denon_udash_panel_enabled events || return 0
 
     ev_body=$(_denon_udash_compose_events_body 20)
     ev_h=$(( $(_denon_dashboard_line_count "$ev_body") + 4 ))
@@ -7865,6 +7921,7 @@ EOF
     udash_nowband_height=0
 
     (( cols >= 100 )) || return 0
+    _denon_udash_panel_enabled now || return 0
 
     now_body=$(_denon_udash_compose_now_band_body "$cols")
     now_h=$(( $(_denon_dashboard_line_count "$now_body") + 4 ))
@@ -7974,6 +8031,192 @@ EOF
     rm -f "$state_file" 2>/dev/null
   }
 
+  _denon_udash_setup_bool_prompt() {
+    local label="$1"
+    local current="$2"
+    local answer default
+    if [[ "$current" == "1" ]]; then default="Y"; else default="n"; fi
+    printf '%s [%s]? ' "$label" "$default" >&2
+    IFS= read -r answer || answer=""
+    answer=$(_denon_lower "$(_denon_trim "$answer")")
+    [[ -z "$answer" ]] && answer=$(_denon_lower "$default")
+    case "$answer" in
+      y|yes|1|true|on) printf '1' ;;
+      *) printf '0' ;;
+    esac
+  }
+
+  _denon_udash_setup_options() {
+    local panel_spec="${DENON_DASHBOARD_ULTRA_PANELS:-all}"
+    local -a keys=(main zone2 now events receiver audio tone sources tv dsp firmware system)
+    local -a labels=("Main Zone" "Zone 2" "Now Playing" "Recent Events" "Receiver / Network" "Audio Signal" "Tone / Levels" "Sources (Main)" "TV (lgtv)" "DSP / Audyssey" "Device / Firmware" "System / Locks")
+    local selected="" answer key label i default save_answer
+    local new_watch="$watch" new_interval="$interval" new_tv="$udash_tv" new_color="$dashboard_color_mode" new_ascii="$dashboard_ascii"
+
+    cat <<EOF
+Dashboard Ultra setup options
+
+Current effective defaults:
+  watch:    $watch
+  interval: $interval
+  tv:       $udash_tv
+  color:    $dashboard_color_mode
+  unicode:  $(( dashboard_ascii == 0 ? 1 : 0 ))
+  ascii:    $dashboard_ascii
+  panels:   $panel_spec
+EOF
+
+    if [[ -t 0 ]]; then
+      printf '\nChoose dashboard behavior. Press Enter to keep the shown default.\n'
+      new_watch=$(_denon_udash_setup_bool_prompt 'Watch / auto-refresh by default' "$watch")
+      printf 'Refresh interval in seconds [%s]? ' "$interval"
+      IFS= read -r answer || answer=""
+      answer=$(_denon_trim "$answer")
+      if [[ -n "$answer" ]]; then
+        if [[ "$answer" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+          new_interval="$answer"
+        else
+          printf 'Invalid interval; keeping %s\n' "$interval"
+        fi
+      fi
+      new_tv=$(_denon_udash_setup_bool_prompt 'Include LG TV panel data when available' "$udash_tv")
+      printf 'Color mode: auto, always, never [%s]? ' "$dashboard_color_mode"
+      IFS= read -r answer || answer=""
+      answer=$(_denon_lower "$(_denon_trim "$answer")")
+      case "$answer" in
+        auto|always|never) new_color="$answer" ;;
+        "") ;;
+        *) printf 'Invalid color mode; keeping %s\n' "$dashboard_color_mode" ;;
+      esac
+      if [[ "$dashboard_ascii" == "1" ]]; then default="n"; else default="Y"; fi
+      printf 'Use Unicode borders/icons [%s]? ' "$default"
+      IFS= read -r answer || answer=""
+      answer=$(_denon_lower "$(_denon_trim "$answer")")
+      [[ -z "$answer" ]] && answer=$(_denon_lower "$default")
+      case "$answer" in
+        y|yes|1|true|on) new_ascii=0 ;;
+        *) new_ascii=1 ;;
+      esac
+
+      printf '\nChoose panels to include. Press Enter to keep the shown default.\n'
+      selected=""
+      for ((i = 0; i < ${#keys[@]}; i++)); do
+        key="${keys[$i]}"
+        label="${labels[$i]}"
+        if _denon_udash_panel_enabled "$key"; then
+          default="Y"
+        else
+          default="n"
+        fi
+        printf 'Include %-20s [%s]? ' "$label" "$default"
+        IFS= read -r answer || answer=""
+        answer=$(_denon_lower "$(_denon_trim "$answer")")
+        [[ -z "$answer" ]] && answer=$(_denon_lower "$default")
+        case "$answer" in
+          y|yes|1|true|on) selected="${selected}${selected:+,}${key}" ;;
+          *) ;;
+        esac
+      done
+      if [[ -z "$selected" ]]; then
+        selected="all"
+        printf 'No panels selected; using all panels so the dashboard is not blank.\n'
+      fi
+
+      printf '\nSelected setup:\n'
+      printf '  watch=%s interval=%s tv=%s color=%s ascii=%s panels=%s\n' "$new_watch" "$new_interval" "$new_tv" "$new_color" "$new_ascii" "$selected"
+      printf 'Save these dashboard-ultra defaults to denon config [Y/n]? '
+      IFS= read -r save_answer || save_answer=""
+      save_answer=$(_denon_lower "$(_denon_trim "$save_answer")")
+      case "$save_answer" in
+        n|no|0|false|off)
+          printf 'Not saved. Run once with:\n  DENON_DASHBOARD_ULTRA_WATCH=%q DENON_DASHBOARD_ULTRA_INTERVAL=%q DENON_DASHBOARD_ULTRA_TV=%q DENON_DASHBOARD_ULTRA_COLOR=%q DENON_DASHBOARD_ULTRA_ASCII=%q DENON_DASHBOARD_ULTRA_PANELS=%q denon dashboard-ultra\n' "$new_watch" "$new_interval" "$new_tv" "$new_color" "$new_ascii" "$selected"
+          ;;
+        *)
+          _denon_config_cmd set DENON_DASHBOARD_ULTRA_WATCH "$new_watch" || return 1
+          _denon_config_cmd set DENON_DASHBOARD_ULTRA_INTERVAL "$new_interval" || return 1
+          _denon_config_cmd set DENON_DASHBOARD_ULTRA_TV "$new_tv" || return 1
+          _denon_config_cmd set DENON_DASHBOARD_ULTRA_COLOR "$new_color" || return 1
+          _denon_config_cmd set DENON_DASHBOARD_ULTRA_ASCII "$new_ascii" || return 1
+          _denon_config_cmd set DENON_DASHBOARD_ULTRA_PANELS "$selected" || return 1
+          _denon_config_cmd set DENON_DASHBOARD_ULTRA_SETUP_DONE 1 || return 1
+          export DENON_DASHBOARD_ULTRA_WATCH="$new_watch"
+          export DENON_DASHBOARD_ULTRA_INTERVAL="$new_interval"
+          export DENON_DASHBOARD_ULTRA_TV="$new_tv"
+          export DENON_DASHBOARD_ULTRA_COLOR="$new_color"
+          export DENON_DASHBOARD_ULTRA_ASCII="$new_ascii"
+          export DENON_DASHBOARD_ULTRA_PANELS="$selected"
+          export DENON_DASHBOARD_ULTRA_SETUP_DONE=1
+          watch="$new_watch"
+          interval="$new_interval"
+          udash_tv="$new_tv"
+          dashboard_color_mode="$new_color"
+          dashboard_ascii="$new_ascii"
+          ;;
+      esac
+    fi
+
+    cat <<EOF
+
+Save defaults with:
+  denon config set DENON_DASHBOARD_ULTRA_PANELS main,zone2,now,events,receiver,audio,tone,sources,tv,dsp,firmware,system
+  denon config set DENON_DASHBOARD_ULTRA_WATCH 1        # auto-refresh by default (0 for one-shot)
+  denon config set DENON_DASHBOARD_ULTRA_INTERVAL 5     # refresh interval in seconds
+  denon config set DENON_DASHBOARD_ULTRA_TV 1           # enable LG TV collection when lgtv is available
+  denon config set DENON_DASHBOARD_ULTRA_COLOR auto     # auto, always, or never
+  denon config set DENON_DASHBOARD_ULTRA_ASCII 0        # 0 for Unicode, 1 for ASCII
+  denon config set DENON_DASHBOARD_ULTRA_SETUP_DONE 1   # skip first-run setup prompt
+
+Panel keys:
+  main, zone2, now, events, receiver, audio, tone, sources, tv, dsp, firmware
+
+Per-profile defaults:
+  denon profile set livingroom DENON_DASHBOARD_ULTRA_PANELS main,zone2,now,events,sources
+  denon profile set livingroom DENON_DASHBOARD_ULTRA_WATCH 1
+  DENON_PROFILE=livingroom denon dashboard-ultra
+
+Run without saving:
+  DENON_DASHBOARD_ULTRA_PANELS=main,zone2,now,events,sources denon dashboard-ultra --watch 5
+  denon dashboard-ultra --watch 5 --tv --color always
+  denon dashboard-ultra --once --unicode
+
+In watch mode:
+  Press S to rerun this setup screen.
+
+Receiver setup:
+  denon discover
+  denon setip <receiver-ip>
+  denon doctor
+EOF
+  }
+
+  _denon_udash_first_run_setup_needed() {
+    [[ -t 0 ]] || return 1
+    [[ "${DENON_UNIT_TEST:-0}" == "1" ]] && return 1
+    [[ "${DENON_DASHBOARD_ULTRA_SETUP_DONE:-}" == "1" ]] && return 1
+    grep -q '^DENON_DASHBOARD_ULTRA_SETUP_DONE=1$' "$(_denon_config_path)" 2>/dev/null && return 1
+    return 0
+  }
+
+  _denon_udash_setup_from_dashboard() {
+    local restore_raw=0 answer
+    if [[ "${dashboard_terminal_active:-0}" == "1" ]]; then
+      _denon_dashboard_restore_terminal
+      restore_raw=1
+    fi
+    printf '\033[H\033[J'
+    _denon_udash_setup_options || return 1
+    printf '\nPress Enter to return to dashboard... '
+    IFS= read -r answer || true
+    if (( restore_raw )) && [[ -n "${dashboard_saved_stty:-}" ]]; then
+      if stty -echo -icanon min 0 time 0 2>/dev/null; then
+        dashboard_terminal_active=1
+        printf '\033[?25l'
+      fi
+    fi
+    dashboard_resize_pending=1
+    return 0
+  }
+
   _denon_dashboard_ultra() {
     local watch=0
     local interval=5
@@ -8009,8 +8252,10 @@ EOF
     # Route shared key-handler redraws through the ultra renderer.
     # shellcheck disable=SC2034 # Read indirectly by the shared dashboard key handler.
     local dashboard_redraw_cmd="_denon_udash_redraw"
+    # shellcheck disable=SC2034 # Read indirectly by the shared dashboard key handler.
+    local dashboard_setup_cmd="_denon_udash_setup_from_dashboard"
     local udash_tv=0
-    local usage="Usage: denon dashboard-ultra [--watch] [--interval seconds] [--tv] [--ascii|--unicode] [--color auto|always|never]"
+    local usage="Usage: denon dashboard-ultra [setup|--setup] [--watch] [--interval seconds] [--tv] [--ascii|--unicode] [--color auto|always|never]"
 
     dashboard_ascii=0
     case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
@@ -8060,6 +8305,11 @@ EOF
         return 1
         ;;
     esac
+
+    if [[ "$(_denon_lower "${1:-}")" == "setup" || "${1:-}" == "--setup" ]]; then
+      _denon_udash_setup_options
+      return $?
+    fi
 
     while [[ $# -gt 0 ]]; do
       arg="$1"
@@ -8120,6 +8370,10 @@ EOF
           ;;
       esac
     done
+
+    if _denon_udash_first_run_setup_needed; then
+      _denon_udash_setup_options || return 1
+    fi
 
     if [[ "$watch" == "1" ]]; then
       trap 'dashboard_resize_pending=1' WINCH
@@ -8559,7 +8813,8 @@ EOF
         DENON_HEOS_GID|DENON_HEOS_HELPER|DENON_DASHBOARD_ALT_HELPER|DENON_HEOS_TIMEOUT|DENON_DEBUG|\
         DENON_CACHE_TTL_SECONDS|DENON_DASHBOARD_ULTRA_WATCH|\
         DENON_DASHBOARD_ULTRA_INTERVAL|DENON_DASHBOARD_ULTRA_TV|\
-        DENON_DASHBOARD_ULTRA_COLOR|DENON_DASHBOARD_ULTRA_ASCII|NO_COLOR)
+        DENON_DASHBOARD_ULTRA_COLOR|DENON_DASHBOARD_ULTRA_ASCII|\
+        DENON_DASHBOARD_ULTRA_PANELS|DENON_DASHBOARD_ULTRA_SETUP_DONE|NO_COLOR)
           if [[ -z "${!key+set}" ]]; then
             export "$key"="$val"
           fi
@@ -8578,7 +8833,8 @@ DENON_CURL_MAX_TIME DENON_CURL_INSECURE DENON_CURL_CACERT \
 DENON_CURL_PINNEDPUBKEY DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
 DENON_HEOS_GID DENON_HEOS_HELPER DENON_DASHBOARD_ALT_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
 DENON_CACHE_TTL_SECONDS DENON_DASHBOARD_ULTRA_WATCH DENON_DASHBOARD_ULTRA_INTERVAL \
-DENON_DASHBOARD_ULTRA_TV DENON_DASHBOARD_ULTRA_COLOR DENON_DASHBOARD_ULTRA_ASCII NO_COLOR"
+DENON_DASHBOARD_ULTRA_TV DENON_DASHBOARD_ULTRA_COLOR DENON_DASHBOARD_ULTRA_ASCII \
+DENON_DASHBOARD_ULTRA_PANELS DENON_DASHBOARD_ULTRA_SETUP_DONE NO_COLOR"
 
     case "$subcmd" in
       list)
@@ -8708,7 +8964,8 @@ DENON_CURL_MAX_TIME DENON_CURL_INSECURE DENON_CURL_CACERT \
 DENON_CURL_PINNEDPUBKEY DENON_SSDP_TIMEOUT DENON_SSDP_MX DENON_HEOS_PID \
 DENON_HEOS_GID DENON_HEOS_HELPER DENON_DASHBOARD_ALT_HELPER DENON_HEOS_TIMEOUT DENON_DEBUG \
 DENON_CACHE_TTL_SECONDS DENON_DASHBOARD_ULTRA_WATCH DENON_DASHBOARD_ULTRA_INTERVAL \
-DENON_DASHBOARD_ULTRA_TV DENON_DASHBOARD_ULTRA_COLOR DENON_DASHBOARD_ULTRA_ASCII NO_COLOR"
+DENON_DASHBOARD_ULTRA_TV DENON_DASHBOARD_ULTRA_COLOR DENON_DASHBOARD_ULTRA_ASCII \
+DENON_DASHBOARD_ULTRA_PANELS DENON_DASHBOARD_ULTRA_SETUP_DONE NO_COLOR"
 
     case "$subcmd" in
       path)
