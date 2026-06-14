@@ -1315,8 +1315,6 @@ class DashboardApp:
                 for event in commands.flush_numeric_if_expired(snapshot).events:
                     self.tracker.record(event)
                 return False
-            for event in commands.flush_numeric_if_expired(snapshot).events:
-                self.tracker.record(event)
             action = keyboard.read_action(timeout)
             if action is None:
                 for event in commands.flush_numeric_if_expired(snapshot).events:

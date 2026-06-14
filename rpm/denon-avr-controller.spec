@@ -4,8 +4,8 @@
 # Pre-release ordering: Release 0.<N>.<label> sorts below 1.<dist> (GA),
 # which is what we want so `dnf upgrade` moves cleanly from beta to final.
 %global version_base  1.2.0
-%global pre_tag       beta.7
-%global rpm_release   0.10.beta7
+%global pre_tag       beta.9
+%global rpm_release   0.23.beta9
 
 # GitHub archive for tag v<version_base>-<pre_tag> unpacks as:
 #   denon-avr-controller-<version_base>-<pre_tag>/
@@ -99,6 +99,11 @@ install -Dm644 completions/zsh/_denon \
 install -Dm644 completions/fish/denon.fish \
     %{buildroot}%{_datadir}/fish/vendor_completions.d/denon.fish
 
+# v2 transport/protocol/config/compat libs → /usr/share/denon/lib/
+for lib in lib/transport.sh lib/protocol.sh lib/config.sh lib/compat.sh; do
+    install -Dm644 "$lib" %{buildroot}%{_datadir}/denon/lib/"$(basename $lib)"
+done
+
 # Man page → /usr/share/man/man1/denon.1
 install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
@@ -116,6 +121,10 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 %{_datadir}/zsh/site-functions/_denon
 %{_datadir}/fish/vendor_completions.d/denon.fish
 %{_mandir}/man1/denon.1*
+%{_datadir}/denon/lib/transport.sh
+%{_datadir}/denon/lib/protocol.sh
+%{_datadir}/denon/lib/config.sh
+%{_datadir}/denon/lib/compat.sh
 
 
 # We intentionally omit %%post/%%preun systemd scriptlets for user units.
@@ -126,6 +135,82 @@ install -Dm644 man/denon.1 %{buildroot}%{_mandir}/man1/denon.1
 
 
 %changelog
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.23.beta9
+- dashboard-ultra: align every key:value panel to one per-panel value column.
+  Labels now pad to the widest label of their panel (no hardcoded widths), so
+  Model Type / Vol Scale (Receiver/Network), the Audyssey fields
+  (DSP/Audyssey), and UPnP MAC (Device/Firmware) no longer push values out of
+  column; multi-line continuations (Tone/Levels channel rows) indent to the
+  value column.
+- dashboard-ultra: right-align Sources indices with the selected-source "*"
+  marker in its own fixed column, so mixed one-/two-digit indices keep names
+  aligned within each column.
+- dashboard-ultra: drop the unreachable legacy fixed-breakpoint renderer that
+  shadowed the adaptive layout's _denon_udash_layout.
+
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.22.beta9
+- dashboard-ultra: cut refresh time ~28% (24s -> 17s) by scoping a shorter
+  0.3s telnet reply window to the dashboard's data-field one-shot probes
+  (override with DENON_UDASH_SEND_TIMEOUT or DENON_SEND_TIMEOUT); regular
+  CLI commands keep the 1s default.
+
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.21.beta9
+- dashboard-ultra: fill the full viewport height (no dead band above the footer)
+  with a slack-distribution pass; grow Sources to the full list and let Recent
+  Events absorb leftover rows instead of truncating while free rows sit unused.
+- dashboard-ultra: make Now Playing a full-width top band (two-column fields)
+  so long track titles are not truncated; Device/Firmware returns to the grid
+  as a fixed natural-height panel. Small-grid tier-shedding preserved.
+
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.20.beta9
+- Move Recent Events into a pinned bottom band paired with Device / Firmware
+  (full-width Recent Events on narrow terminals); retire the System / Locks
+  panel from the dashboard-ultra layout.
+
+* Thu Jun 11 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.19.beta9
+- Fix dashboard-ultra dropping the Recent Events panel: rank Recent Events above
+  Receiver/Network and make only the core panels (Main, Zone 2, Now Playing,
+  Recent Events) mandatory, so Receiver/Network and optional panels shed first.
+- Stop the adaptive layout from blanking the whole dashboard on wide-but-short
+  terminals; fall back to a best-effort must-keep plan that always keeps Recent
+  Events instead of rendering nothing.
+
+* Wed Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.15.beta8
+- Fix dashboard-ultra Sources panel after adaptive layout: format source entries
+  against final panel width, preserve full source names, and use +N more when
+  space is constrained instead of truncating to orphaned fragments.
+
+* Wed Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.14.beta8
+- Make dashboard-ultra adaptive: priority-tiered panel/field layout driven by
+  the terminal cell grid, with graceful tier shedding and column reflow.
+- Add DSP/Audyssey, Device/Firmware, and System/Locks panels; promote non-zero
+  pending firmware updates into the high-priority receiver area.
+- Add simulated-grid render coverage for 80x24, 140x40, 200x55, and 320x90.
+
+* Wed Jun 10 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.13.beta8
+- Add v2 transport/protocol/config/compat library layer; wire avr_send routing
+  into _denon_telnet/_denon_telnet_query with DENON_UNIT_TEST bypass
+- Add `denon raw dump [type…]` and `denon raw types` subcommands
+- Fix dashboard-ultra Unknown fields: split 12-verb AppCommand batch into
+  3x4-verb batches to avoid AVR-X1600H goform daemon wedge (~51 s blackout);
+  add _denon_dashboard_fetch_core_status fallback via _denon_info / get_config
+- Fix quit key (q) in dashboard-ultra: delegate to shared sleep/poll loop
+- Port full interactive keybindings (↑/↓/←/→/Space/M/#/Z/Q) to dashboard-ultra
+- Fix dashboard-ultra TV panel: use lgtv audio status; friendly output labels
+- Install v2 lib/ scripts to /usr/share/denon/lib/ for runtime discovery
+
+* Tue Jun 09 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.11.beta8
+- Add `denon dashboard-ultra`, an alternate ultrawide multi-panel dashboard
+  (5 panels at 200+ columns, 3+2 panels at 120-199, stacked below 120).
+  Surfaces audio signal/sample rate, speaker config and per-channel levels,
+  tone/dialog/subwoofer, ECO/dimmer/auto-standby, and Zone 2 detail via a
+  single batched AppCommand POST plus one pipelined telnet session per refresh.
+  Optional `--tv` panel via the lgtv CLI when present. The original
+  `denon dashboard` is unchanged.
+- Fix the AppCommand probe request in `denon data capabilities --probe-safe`
+  to include the XML declaration and trailing newline the firmware requires;
+  read-only Get* verbs now report real results instead of "malformed".
+
 * Mon Jun 01 2026 Tiffany Von Arnim <tiffany.vonarnim@gmail.com> - 1.2.0-0.10.beta7
 - Show the running controller version in the dashboard footer (interactive and
   non-interactive watch modes); remove the Tool: line from the Receiver Info card

@@ -1,5 +1,6 @@
 # bash completion for denon-avr-controller
 # shellcheck shell=bash
+# shellcheck disable=SC2207
 # Install: source this file, or place it in /usr/share/bash-completion/completions/denon
 
 # shellcheck disable=SC2034
@@ -14,7 +15,7 @@ _denon_complete() {
     fi
 
     local top_cmds=(
-        status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt
+        status info data rawstatus raw signal-debug snapshot diff dashboard dashboard-alt dashboard-ultra
         on off vol up down mute unmute toggle
         source sources rename-source source-names clear-source-name
         zone2
@@ -101,7 +102,7 @@ _denon_complete() {
             return
             ;;
         raw)
-            COMPREPLY=( $(compgen -W "get set" -- "$cur") )
+            COMPREPLY=( $(compgen -W "get set dump types" -- "$cur") )
             return
             ;;
         config)
@@ -130,6 +131,10 @@ _denon_complete() {
             ;;
         dashboard-alt)
             COMPREPLY=( $(compgen -W "--compare-providers --json --provider --color --unicode --ascii --interval --watch --help" -- "$cur") )
+            return
+            ;;
+        dashboard-ultra)
+            COMPREPLY=( $(compgen -W "--color --unicode --ascii --interval --watch --tv" -- "$cur") )
             return
             ;;
         --provider)

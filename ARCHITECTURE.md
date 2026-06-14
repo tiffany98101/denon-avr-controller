@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — `denon-avr-controller`
 
-> **Status:** Living document. Reflects the codebase as of `denon.sh` v1.2.0-beta.5 (~6,473 lines), `denon_heos_helper.py`, `denon_mpris.py`, the systemd user unit, and the Makefile-driven packaging workflow.
+> **Status:** Living document. Reflects the codebase as of `denon.sh` v1.2.0-beta.8, the v2 Bash library layer under `lib/`, `denon_heos_helper.py`, `denon_mpris.py`, the systemd user unit, and the Makefile/RPM packaging workflow.
 > **Audience:** Maintainer (you) and any future contributor or AI agent proposing changes. Every PR must be evaluated against this document. If a change conflicts with the rules here, *this document must be updated first* — never silently violated.
 > **Revision note:** This is v2. The v1 baseline (committed `6dcc504`) was written against the GitHub public state, which lagged the working tree substantially. v2 reconciles the doc to the local truth. Sections that were wrong or obsolete in v1 are marked **[v1 superseded]** with the corrected understanding.
 
@@ -8,7 +8,7 @@
 
 ## 1. What this project is (and what it is not)
 
-`denon-avr-controller` is an **operator's CLI plus a sanctioned optional desktop bridge** for a Denon AVR sitting on a trusted home LAN. It wraps the receiver's three native control surfaces — the HTTPS XML config API, the legacy Telnet ASCII protocol, and the HEOS JSON-over-TCP protocol — behind a bash runtime script and a single sourced Bash function called `denon`. A native PowerShell 7+ module mirrors that command surface where practical for cross-platform scripting. A separate Python MPRIS2 daemon (`denon-mpris`) optionally bridges the receiver to the user's desktop session over D-Bus.
+`denon-avr-controller` is an **operator's CLI plus a sanctioned optional desktop bridge** for a Denon AVR sitting on a trusted home LAN. It wraps the receiver's native control surfaces — the HTTPS XML config API, the plain-HTTP goform/AppCommand endpoints, the legacy Telnet ASCII protocol, and the HEOS JSON-over-TCP protocol — behind a bash runtime script and a single sourced Bash function called `denon`. A small v2 Bash library layer supplies JSON config, protocol mapping, transport routing, and compatibility helpers. A native PowerShell 7+ module mirrors that command surface where practical for cross-platform scripting. A separate Python MPRIS2 daemon (`denon-mpris`) optionally bridges the receiver to the user's desktop session over D-Bus.
 
 It is **not**:
 - A daemon for the AVR's full state machine. The MPRIS bridge is narrow (media-key control + Now Playing surface), not a general control daemon.
@@ -24,12 +24,15 @@ It is a **terminal-native primitive** with a **packaged Fedora distribution path
 
 ```
 denon_main/
-├── denon.sh                     # Primary CLI, ~6,473 lines, sourceable
+├── denon.sh                     # Primary CLI, sourceable Bash runtime
+├── bin/denon                    # Checkout wrapper that execs denon.sh
+├── lib/                         # v2 Bash config/protocol/transport/compat layer
 ├── denon_heos_helper.py         # Python sidecar for HEOS JSON protocol
 ├── denon_mpris.py               # MPRIS2 D-Bus bridge (installed as denon-mpris)
 ├── denon-mpris.service          # User-scope systemd unit
 ├── denon_automated_test.sh      # Bash-level integration tests
 ├── tests/                       # pytest-based unit tests (use DENON_UNIT_TEST=1)
+├── test/                        # bats-based v2 library tests and vendored bats-core
 ├── completions/                 # Shell completions (bash + zsh + fish)
 ├── man/                         # Man pages
 ├── docs/                        # Long-form documentation
@@ -99,10 +102,28 @@ The codebase uses three protocols, picked by capability and cost in this strict 
 | Protocol | Port | Purpose | When to use |
 |---|---|---|---|
 | **HTTPS XML config API** | 10443 | Durable, queryable state | Always preferred for read/write of `Power`, `Volume`, `Mute`, `Source`, identity. |
+| **HTTP goform/AppCommand** | 8080/80 | Legacy direct commands and richer read-only AppCommand status | Transport fallback when Telnet is unavailable; dashboard-ultra read-only fields not exposed by the stable dashboard's XML/status path. |
 | **Telnet ASCII** | 23 | Ephemeral, fire-and-forget | Sleep timer, sound mode (`MSSTEREO`), Audyssey (`PSDYNVOL`), tone control (`PSBAS`/`PSTRE`), Quick Select (`QUICK1 MEMORY`), HEOS transport (`NS9A`/`B`/`C`/`D`/`E`). |
 | **HEOS JSON-over-TCP** | 1255 (via Python helper) | Stateful HEOS queries | Queue, groups, browse, search, play-stream. Anything that requires a session or returns structured data. |
 
 **Rule for new commands:** if the XML config API can express it, use the XML API. Fall back to Telnet only when no `type=N` endpoint exposes the field. Fall back to the HEOS helper only when neither does.
+
+The v2 `avr_send` path lives in `lib/transport.sh`. It resolves a configured
+device name to a host, tries a future monitor route when present, then direct
+one-shot Telnet through `ncat`, and finally the plain-HTTP
+`formiPhoneAppDirect.xml` route. Telnet return codes `0` and `2` do not fall
+through to HTTP, which avoids duplicate command dispatch; refused/unreachable
+Telnet gets exactly one HTTP fallback attempt. The HTTP query synthesis path is
+intended only for query shapes with a known StatusLite equivalent.
+
+### 4.1.1 AppCommand batching limit
+
+AVR-X1600H firmware has a real per-request AppCommand batch limit. In the live
+2026-06-10 debug pass, batches of five or fewer `<cmd>` verbs were safe, a
+six-verb batch returned `<error>1</error>`, and batches of seven or more could
+leave the receiver's `:8080` goform daemon refusing connections for about
+51 seconds. Any AppCommand caller must keep batches at five verbs or fewer; the
+current `dashboard-ultra` collector uses three four-verb batches.
 
 ### 4.2 Set-then-Verify Sync
 
@@ -237,7 +258,7 @@ These are hard constraints. A change that violates one is, by definition, not in
 
 1. **Single-file, sourceable from bash.** The script must work as both `./denon.sh status` and `source ./denon.sh && denon status` under bash. No multi-file Bash packaging. No build step for the script itself.
 2. **Bash runtime, not POSIX `sh` or native zsh/fish.** Bash 4+ idioms (`[[ ]]`, `${var,,}`, arrays, dynamic file descriptors) are allowed and used. The project ships bash, zsh, and fish completion files, but completion support does not make `denon.sh` a zsh/fish runtime script.
-3. **No heavy dependencies for the script.** Required: `bash`, `curl`, `awk`, `sed`, `grep`, `ip`, `nc`. Optional: `jq`, `shellcheck`, `avahi-utils` (for the mDNS tier of discovery), `python3` (for HEOS helper and MPRIS bridge). Adding any other required dependency to the script requires explicit justification in this document.
+3. **No heavy dependencies for the script.** Required: `bash`, `curl`, `awk`, `sed`, `grep`, `ip`, `nc`; `jq` is required for v2 JSON config helpers and `ncat` is used by the v2 one-shot Telnet transport. Optional: `shellcheck`, `avahi-utils` (for the mDNS tier of discovery), `python3` (for HEOS helper and MPRIS bridge). Adding any other required dependency to the script requires explicit justification in this document.
 4. **Pipeable.** stdout is parseable. The default human output is line-oriented. `--json` produces a single JSON document. No prompts, no spinners, no curses TUIs on the primary commands. `dashboard --watch` is the sanctioned exception, and it must remain optional.
 5. **Bounded timeouts on every network call.** No command can hang. All `curl` and `nc` calls go through `_denon_curl` or `_denon_telnet`/`_denon_telnet_query`, which apply timeouts from environment variables with safe defaults.
 6. **Stateless script invocations.** No PID files. No long-lived sockets *inside `denon.sh`*. The script must be safe to invoke 100 times in a row from a scene script. `watch-event` is the bounded foreground exception (§4.10); the MPRIS daemon is the separate-process exception (§6.1); and `DENON_LOCK=1` is the narrow opt-in lock-file exception for serializing writes via `flock` on the active IP cache path.
@@ -313,6 +334,33 @@ The discovery sweep remains sequential and throttled after valid type responses,
 `VERSION` is the single source of truth for release versioning. `DENON_CONTROLLER_VERSION` env var overrides it at runtime (useful for testing). The `version` / `--version` / `-V` command prints this.
 
 The packaging story is **Fedora-first**. RPM via COPR is the supported distribution path. Other distros are not currently in scope — see §7.10.
+
+RPM installs the source-of-truth CLI as `/usr/bin/denon`, the MPRIS bridge as
+`/usr/bin/denon-mpris`, the Python dashboard/HEOS helpers under
+`/usr/libexec/denon-avr-controller/`, the version file under
+`/usr/share/denon-avr-controller/VERSION`, and the v2 Bash library layer under
+`/usr/share/denon/lib/`. `denon.sh` sources `lib/config.sh`,
+`lib/protocol.sh`, `lib/transport.sh`, and `lib/compat.sh` from the checkout
+first and from `/usr/share/denon/lib/` in packaged runtime.
+
+### 6.6 Dashboard Surfaces
+
+There are three dashboard surfaces:
+
+- `dashboard`: the stable shell dashboard and default UI.
+- `dashboard-alt`: the experimental Python snapshot/rendering preview. It
+  remains opt-in and must not become the default without an explicit design
+  decision.
+- `dashboard-ultra`: an alternate shell-rendered ultrawide dashboard. It owns a
+  separate collector and layout but reuses shared dashboard rendering,
+  event-tracking, key-handling, and fallback helpers.
+
+`dashboard-ultra` uses AppCommand for richer read-only receiver fields, but must
+respect the AppCommand batching limit in §4.1.1. If its first/core AppCommand
+batch fails, it falls back to the stable dashboard's core status path so Main
+Zone and Zone 2 basics remain populated. Interactive watch mode uses the shared
+dashboard key handler and shared sleep/key-poll helper, including polling when
+collection consumes the configured interval.
 
 ---
 
@@ -406,6 +454,7 @@ When making a change that touches any of the patterns or guardrails above, appen
 | 2026-05-21 | v2 reconciliation | Local working tree had diverged: MPRIS daemon, layered config + profiles, Avahi discovery, cache TTL, `data` family, `watch-event`, fade volume, snapshot diff, pytest harness via promotion trick, RPM packaging. v2 captures actual reality. | All sections superseded; §4.4, §4.9, §4.10, §4.11, §6 new; v1 §5.1, §5.3, §5.4, §5.8 explicitly superseded |
 | 2026-05-21 | Per-profile IP cache | `DENON_PROFILE=<name>` now scopes the discovery cache to `~/.cache/denon_ip.<name>` while unprofiled users continue to use `~/.cache/denon_ip`; the TTL gate, `setip`, `discover`, doctor, and data live target selection all use the active cache path. | §4.3, §4.4, §7.1 |
 | 2026-05-21 | Write race mitigations | Added global `--no-verify` for batch writes and opt-in `DENON_LOCK=1` flock serialization for write commands; defaults remain unchanged, reads stay lock-free, and missing `flock` warns then proceeds unserialized. | §4.2, §4.7, §5.6, §5.8, §7.6 |
+| 2026-06-10 | v2 libraries and dashboard-ultra fixes | Added checkout/package discovery for `lib/config.sh`, `lib/protocol.sh`, `lib/transport.sh`, and `lib/compat.sh`; documented `avr_send` routing, AppCommand batch limits, dashboard-ultra fallback, restored keybindings, and RPM runtime layout. | §1, §2, §4.1, §4.1.1, §5.3, §6.5, §6.6 |
 
 ---
 
