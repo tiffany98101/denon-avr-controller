@@ -7220,11 +7220,14 @@ tv|1|Output|dash_u_tv_output
 EOF
   }
 
-  # System/Locks was retired from the layout. Recent Events is the full-width
-  # growable bottom band at wide widths (cols >= 100) and is skipped from the
-  # grid there (see _denon_udash_build_band); on narrow terminals there is no
-  # band, so it stays a must-keep grid panel. Device/Firmware is an ordinary
-  # fixed grid panel and keeps its natural height.
+  # System/Locks is a tier-3 panel: its fields are collected every cycle
+  # (see _denon_udash_collect_data_fields) and defined in _denon_udash_field_tiers,
+  # so it renders at wide widths and sheds with the other tier-3 content when the
+  # terminal is too small. Recent Events is the full-width growable bottom band at
+  # wide widths (cols >= 100) and is skipped from the grid there (see
+  # _denon_udash_build_band); on narrow terminals there is no band, so it stays a
+  # must-keep grid panel. Device/Firmware is an ordinary fixed grid panel and
+  # keeps its natural height.
   _denon_udash_panel_tiers() {
     cat <<'EOF'
 main|0|udash_main_title
@@ -7238,6 +7241,7 @@ sources|1|Sources (Main)
 tv|1|TV (lgtv)
 dsp|2|DSP / Audyssey
 firmware|3|Device / Firmware
+system|3|System / Locks
 EOF
   }
 

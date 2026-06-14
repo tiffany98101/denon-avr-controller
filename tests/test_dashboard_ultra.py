@@ -464,9 +464,13 @@ class TestUdashRenderAlignment:
             assert re.search(rf"{re.escape(label)}: +{re.escape(value)}", text), (
                 f"missing '{label}: {value}' in:\n{text}"
             )
-        # System / Locks was retired from the dashboard-ultra layout.
-        assert "System / Locks" not in text
-        assert "Setup Lock" not in text
+        # System / Locks is a tier-3 panel and surfaces at this large size; its
+        # fields are collected every cycle and must render, not just be gathered.
+        assert "System / Locks" in text
+        for label, value in [("Setup Lock", "2"), ("Menu Lock", "2"), ("CI Mode", "2")]:
+            assert re.search(rf"{re.escape(label)}: +{re.escape(value)}", text), (
+                f"missing '{label}: {value}' in:\n{text}"
+            )
 
     def test_sources_panel_preserves_source_names_in_large_adaptive_row(self):
         lines = self._render(320, 90)
@@ -585,8 +589,8 @@ class TestUdashRecentEventsPriority:
     The dashboard-ultra layout renders Recent Events (paired with Device /
     Firmware at multi-column widths, full-width when narrow) as a dedicated
     bottom band, independent of how the adaptive grid above sheds panels.
-    System / Locks was retired from the layout. These are *semantic* checks on
-    the rendered panels, not line counts or border alignment.
+    System / Locks renders as a tier-3 panel when there is room. These are
+    *semantic* checks on the rendered panels, not line counts or border alignment.
     """
 
     OPTIONAL_PANELS = [
@@ -634,11 +638,16 @@ class TestUdashRecentEventsPriority:
         assert text.index("Receiver / Network") < text.index("Recent Events")
         assert text.index("Device / Firmware") < text.index("Recent Events")
 
-    def test_system_locks_panel_removed(self):
-        for width, height in [(320, 90), (280, 45), (80, 24)]:
-            text = self._render(width, height)
-            assert "System / Locks" not in text
-            assert "Setup Lock" not in text
+    def test_system_locks_panel_restored_when_room(self):
+        # System / Locks is a tier-3 panel: it renders when there is room and
+        # sheds with the other tier-3 content on small panes (it is never a
+        # must-keep panel, so Recent Events still wins the bottom band).
+        text = self._render(320, 90)
+        assert "System / Locks" in text
+        assert re.search(r"Setup Lock: +2", text)
+        # On an 80x24 pane every tier-3 panel sheds, System / Locks included.
+        text_small = self._render(80, 24)
+        assert "System / Locks" not in text_small
 
     def test_optional_panels_never_shown_without_recent_events(self):
         # Whenever any optional/low-priority panel is visible, the Recent Events
